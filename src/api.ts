@@ -1,0 +1,74 @@
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+
+type ApiError = {
+  code: string;
+  message: string;
+  details?: string;
+};
+
+type ApiResponse<T> = {
+  ok: boolean;
+  data?: T;
+  error?: ApiError;
+};
+
+const runningInTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
+
+async function command<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+  if (!runningInTauri()) {
+    throw new Error("Tauri backend is not available in browser preview.");
+  }
+  const response = await invoke<ApiResponse<T>>(name, args);
+  if (!response.ok) {
+    const error = new Error(response.error?.message || "Command failed");
+    Object.assign(error, { code: response.error?.code, details: response.error?.details });
+    throw error;
+  }
+  return response.data as T;
+}
+
+export const isDesktopRuntime = runningInTauri;
+
+export const api = {
+  listRepositories: () => command<any[]>("list_repositories"),
+  listSkills: () => command<any[]>("list_skills"),
+  getSkillDetail: (skillId: string) => command<any>("get_skill_detail", { request: { skillId } }),
+  getRepositoryReadme: (repoId: string) =>
+    command<any>("get_repository_readme", { request: { repoId } }),
+  getGithubPreview: (url: string) => command<any>("get_github_preview", { request: { url } }),
+  listTasks: () => command<any[]>("list_tasks"),
+  getSettings: () => command<any>("get_settings"),
+  pickDirectory: () => open({ directory: true, multiple: false }),
+  validateDirectory: (kind: string, path: string) =>
+    command<any>("validate_directory", { request: { kind, path } }),
+  updateSettings: (request: Record<string, unknown>) => command<any>("update_settings", { request }),
+  addRepository: (request: { url: string; refName: string }) =>
+    command<any[]>("add_repository", { request }),
+  addLocalRepository: (path: string) => command<any[]>("add_local_repository", { request: { path } }),
+  checkRepositories: (repoIds?: string[]) =>
+    command<any[]>("check_repositories", { request: { repoIds } }),
+  backupRepositories: (mode: string, repoIds?: string[]) =>
+    command<any[]>("backup_repositories", { request: { mode, repoIds } }),
+  scanLocalSkills: (root?: string) => command<any[]>("scan_local_skills", { request: { root } }),
+  installSkill: (skillId: string) => command<any[]>("install_skill", { request: { skillId } }),
+  updateSkill: (skillId: string) => command<any[]>("update_skill", { request: { skillId } }),
+  deleteSkill: (skillId: string) =>
+    command<any[]>("delete_skill", { request: { skillId, mode: "backup_then_remove" } }),
+  restoreSkill: (skillId: string) => command<any[]>("restore_skill", { request: { skillId } }),
+  resolveSkillLocalConflict: (skillId: string, choice: string) =>
+    command<any[]>("resolve_skill_local_conflict", { request: { skillId, choice } }),
+  retryTask: (taskId: string) => command<any[]>("retry_task", { request: { taskId } }),
+  cancelTask: (taskId: string) => command<any[]>("cancel_task", { request: { taskId } }),
+  copyTaskSummary: (taskId: string) => command<string>("copy_task_summary", { request: { taskId } }),
+  setGithubToken: (token: string) => command<any>("set_github_token", { request: { token } }),
+  clearGithubToken: () => command<any>("clear_github_token"),
+  validateGithubToken: () => command<any>("validate_github_token"),
+  listBackupHistory: () => command<any[]>("list_backup_history"),
+  openBackupFolder: (path?: string) => command<string>("open_backup_folder", { path }),
+  openUrl: (url: string, mode = "embedded", browserId?: string) =>
+    command<string>("open_url", { request: { url, mode, browserId } }),
+  listSystemBrowsers: () => command<any[]>("list_system_browsers"),
+  configureSchedule: (kind: string, enabled: boolean, intervalMinutes: number) =>
+    command<any>("configure_schedule", { request: { kind, enabled, intervalMinutes } }),
+};

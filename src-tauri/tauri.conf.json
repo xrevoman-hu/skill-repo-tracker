@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Skill Repo Tracker",
+  "version": "1.0.0",
+  "identifier": "com.skillrepotracker.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Skill Repo Tracker",
+        "width": 1440,
+        "height": 1024,
+        "minWidth": 1120,
+        "minHeight": 720,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self' asset: customprotocol:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost https://api.github.com https://github.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "category": "DeveloperTool",
+    "icon": ["icons/icon.png", "icons/icon.icns"],
+    "shortDescription": "Track GitHub repositories, backups, and local Skills.",
+    "longDescription": "A local-first GitHub repository and Skills update manager.",
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}
