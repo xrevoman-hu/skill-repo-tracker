@@ -8,36 +8,62 @@
 ![Rust](https://img.shields.io/badge/Rust-backend-orange)
 ![macOS](https://img.shields.io/badge/macOS-12%2B-lightgrey)
 
+![Skill Repo Tracker 界面截图](docs/images/skill-repo-tracker-v1.1.1.png)
+
 ## 中文
 
-Skill Repo Tracker 是一个本地优先的 macOS 桌面应用，用来追踪 GitHub 仓库、备份指定 ref 的源码 ZIP、识别仓库中的 `SKILL.md`，并把远端 Skill 安装或更新到独立 Skill 主库，再按需同步到各工具目录。
+Skill Repo Tracker 是一个给 AI Skill 使用者准备的本地桌面工具。它解决的不是“再做一个仓库列表”，而是把散落在 GitHub、Claude Code、Codex 和本机目录里的 Skills 收回来，变成一个能看清来源、能安全更新、能随时回退的本地工作台。
 
-它适合维护一组公开或私有 GitHub 仓库，尤其是需要持续关注 Skill 仓库更新、保留源码快照、审计备份 manifest 的个人和小团队。
+如果你经常从多个仓库安装 Skills，最容易遇到三类麻烦：
 
-当前版本：`v1.1.0`
+- 不知道哪个 Skill 来自哪个仓库、哪个路径、哪个版本。
+- 手动复制到不同工具目录后，更新和删除都容易乱。
+- 覆盖前没有备份，出了问题才发现没有可追溯记录。
 
-### 功能
+Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再按你的选择发布到工具目录。主库默认在 `~/SkillRepoTracker/skills`，当前默认发布到 Claude Code 和 Codex。Gemini、OpenCode、OpenClaw、Hermes 可以手动勾选，但不会默认打开。
 
-- **仓库追踪**：支持 `owner/repo`、GitHub URL、branch、tag 和 commit ref。
-- **源码 ZIP 备份**：根据远端 SHA 与最近备份 SHA 判断是否需要备份，下载到 `.partial` 后原子化落盘。
-- **Skill 识别与管理**：扫描仓库内多个 `SKILL.md`，支持安装、更新、跳过、备份后覆盖和强制覆盖。
-- **独立 Skill 主库**：默认使用 `~/SkillRepoTracker/skills` 作为唯一安装、更新、删除和扫描来源。
-- **可选同步目标**：可将主库 Skill 复制发布到 Claude Code、Codex、Gemini、OpenCode、OpenClaw 和 Hermes 的 Skills 目录。
-- **任务与日志**：统一记录检测、备份、Skill 更新、失败重试和中断状态，默认保留最近 100 个任务。
-- **本地数据**：仓库、Skill、任务、manifest、设置和计划任务写入 SQLite。
-- **隐私友好**：GitHub token 存入 macOS Keychain；SQLite 只保存 token 是否已配置和最后验证时间。
-- **设置页**：支持浅色/黑色主题、中文/英文、备份目录、Skill 主库目录、默认同步目标、并发数、重试次数、定时检测/备份和备份保留数量。
+当前版本：`v1.1.1`
 
-### 技术栈
+### 它帮你完成什么
 
-- Tauri v2
-- React 19 + TypeScript + Vite
-- Rust backend commands
-- SQLite via `rusqlite`
-- GitHub API via `reqwest`
-- macOS Keychain via `keyring`
+- **统一看见来源**：添加 GitHub 仓库后，应用会识别其中的 `SKILL.md`，显示仓库、路径、版本和安装状态。
+- **安全安装和更新**：更新 Skill 前会检查本地内容是否被改过，避免静默覆盖你的修改。
+- **一份主库，多处发布**：Skill 永远先写入独立主库，再复制到 Claude Code、Codex 等目标目录。
+- **取消同步可追溯**：取消某个目标后，应用只会处理自己发布过的副本；执行取消同步时会先备份，再从目标工具目录移除。
+- **源码快照备份**：仓库更新可以保存 ZIP、manifest 和任务日志，方便以后审计或回滚。
+- **隐私友好**：GitHub token 存在 macOS Keychain，不写入 SQLite、manifest 或任务日志。
 
-### 快速开始
+### 同步到底是什么意思
+
+同步不是把你的工具目录当成主库。真正的主库只有一份：`~/SkillRepoTracker/skills`。
+
+- 安装、更新、恢复：先写入主库，再复制到已勾选的同步目标。
+- 取消勾选默认目标：保存后只改变后续策略，不会立刻删除文件。
+- 点击“应用同步设置到已安装 Skills”：把新的默认目标应用到已安装 Skills；被取消的已发布副本会先备份到 `~/SkillRepoTracker/sync-backups/...`，再从对应工具目录移除。
+- 单个 Skill 选择“自定义目标”：保存后立即对这个 Skill 生效。
+- 自定义目标为空：这个 Skill 只保留在主库，不发布到任何工具。
+
+应用只会删除 `skill_sync_records` 中记录为“本应用发布过”的目标副本，不会清理你手动维护的其他目录。
+
+### 推荐工作流
+
+1. 添加一个包含 `SKILL.md` 的 GitHub 仓库。
+2. 在“技能”页检查识别出的 Skill、来源路径和版本。
+3. 安装 Skill，让它进入 `~/SkillRepoTracker/skills`。
+4. 默认发布到 Claude Code 和 Codex；如果需要其他工具，在设置里勾选目标。
+5. 更新或取消同步前，先看任务日志和备份路径，确认动作可追溯。
+
+### 数据位置
+
+- 默认 Skill 主库：`~/SkillRepoTracker/skills`
+- 默认同步备份：`~/SkillRepoTracker/sync-backups`
+- 默认源码备份：`~/SkillRepoBackups`
+- 默认同步目标：`~/.claude/skills`、`~/.codex/skills`
+- 可选同步目标：`~/.gemini/skills`、`~/.config/opencode/skills`、`~/.openclaw/skills`、`~/.hermes/skills`
+- SQLite 数据库：macOS 应用数据目录下的 `skill-repo-tracker.sqlite`
+- GitHub token：macOS Keychain
+
+### 本地运行
 
 环境要求：
 
@@ -64,34 +90,9 @@ npm run dev
 npm run tauri dev
 ```
 
-Web 预览会使用 mock state；Tauri 桌面版会调用真实 Rust commands、SQLite、文件系统和 GitHub API。
+Web 预览使用 mock state；Tauri 桌面版会调用真实 Rust commands、SQLite、文件系统和 GitHub API。
 
-如果系统找不到 `cargo`，请确认 Rust 已安装并位于 `PATH`。macOS 上通常可以临时使用：
-
-```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-```
-
-### 数据位置
-
-- SQLite 数据库：macOS AppData/AppConfig 下的 `skill-repo-tracker.sqlite`
-- 默认备份根目录：`~/SkillRepoBackups`
-- 默认 Skill 主库目录：`~/SkillRepoTracker/skills`
-- 默认同步备份目录：`~/SkillRepoTracker/sync-backups`
-- 可选同步目标：`~/.claude/skills`、`~/.codex/skills`、`~/.gemini/skills`、`~/.config/opencode/skills`、`~/.openclaw/skills`、`~/.hermes/skills`
-- GitHub token：macOS Keychain
-
-Token 不会写入 SQLite、manifest 或任务日志。删除 token 后，私有仓库检测会返回权限相关错误。
-
-### 备份语义
-
-- “远端有更新”：`remote_head_sha != last_seen_sha`
-- “有更新未备份”：`remote_head_sha != last_backup_sha`
-- 时间字段只用于展示、排序和辅助理解，不作为备份判断主依据。
-- 备份成功必须完成 ZIP 下载、最终文件 rename、sha256 计算、`manifest.json` 写入和 `task-log.jsonl` 写入。
-- manifest 写入失败时不会更新 `last_backup_sha`。
-
-### 构建桌面 App
+### 构建和验证
 
 生成 unsigned macOS `.app` 和 `.dmg`：
 
@@ -102,78 +103,36 @@ npm run tauri build -- --bundles app,dmg
 常见产物位置：
 
 - `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
-- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.0_*.dmg`
+- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.1_*.dmg`
 
-当前构建适合本地使用和开发验证。公开分发前，请使用 Apple Developer ID 完成签名和 notarization。
-
-### 测试
-
-前端构建：
+发布前建议运行：
 
 ```bash
 npm run build
-```
-
-Rust 单元测试：
-
-```bash
+./node_modules/.bin/tsc --noEmit
+cargo fmt --check --manifest-path src-tauri/Cargo.toml
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-打包检查：
+如果系统找不到 `cargo`，macOS 上通常可以临时使用：
 
 ```bash
-npm run tauri build -- --bundles app,dmg
+export PATH="$HOME/.cargo/bin:$PATH"
 ```
 
-手动验收建议：
+### 手动验收建议
 
-1. 添加普通仓库，仓库列表出现记录，Skill 页不新增 Skill。
-2. 添加包含 `SKILL.md` 的仓库，检测后 Skill 页出现来源路径。
-3. 点击“备份有更新”，生成备份任务、ZIP、`manifest.json` 和 `task-log.jsonl`。
-4. 在设置页确认 Skill 主库目录可手动粘贴隐藏路径，也可通过原生目录选择器选择。
-5. 设置默认同步目标，点击“同步已安装 Skills”，确认任务日志记录主库路径、目标工具、成功/失败状态和备份路径。
-6. 在 Skill 详情中切换继承/自定义同步目标，自定义为空时确认仅保留在主库。
-7. 对已安装 Skill 制造本地修改，点击更新时出现冲突处理弹窗。
-8. 切换中文/英文、浅色/黑色主题，确认表格、Inspector、弹窗和设置页无明显溢出。
+1. 添加普通仓库，确认可以检测远端 SHA 和创建源码 ZIP 备份。
+2. 添加包含 `SKILL.md` 的仓库，确认 Skill 页出现来源路径和版本。
+3. 安装 Skill，确认主库写入 `~/SkillRepoTracker/skills`。
+4. 确认默认同步目标只有 Claude Code 和 Codex。
+5. 取消某个默认目标并保存，确认不会立刻删除文件。
+6. 点击“应用同步设置到已安装 Skills”，确认任务日志记录备份、移除或跳过的目标。
+7. 对单个 Skill 切到自定义目标，确认保存后立即同步当前 Skill。
 
-### 项目结构
+### 为什么不是完整 Git mirror？
 
-```text
-src/                  React + TypeScript frontend
-src-tauri/            Tauri v2 Rust backend
-assets/               Brand and app assets
-LICENSE               MIT license
-```
-
-### FAQ
-
-#### 为什么不是完整 Git mirror？
-
-`v1.1.0` 仍只备份 GitHub 当前 ref 的源码 ZIP 快照。这让本地备份闭环更简单，也避免引入 Git mirror、LFS、submodule 和增量 fetch 的复杂度。
-
-#### 普通仓库为什么会保留？
-
-普通仓库是一等公民。即使 `skill_count = 0`，仍然可以检测远端 SHA、创建 ZIP 备份和查看备份历史。
-
-#### Skill 更新会自动备份仓库吗？
-
-不会。仓库备份和 Skill 更新是两个独立动作。Skill 更新先写入独立 Skill 主库，再按设置复制发布到工具目录；仓库 ZIP 备份必须在仓库页显式触发。
-
-#### 私有仓库失败怎么办？
-
-先在设置页保存并验证 GitHub token。如果仍失败，查看任务页日志中的 `github_not_found`、`github_rate_limited`、`ref_not_found` 或权限错误。
-
-### 贡献
-
-欢迎提交 Issue 和 Pull Request。建议先运行：
-
-```bash
-npm run build
-cargo test --manifest-path src-tauri/Cargo.toml
-```
-
-请不要提交本地数据库、token、备份 ZIP、`dist/`、`node_modules/` 或 `src-tauri/target/`。
+Skill Repo Tracker 备份的是当前 GitHub ref 的源码 ZIP 快照。这样更适合“我要留住这次可用状态”的本地工作流，也避免把 Git mirror、LFS、submodule 和增量 fetch 的复杂度带进一个桌面工具。
 
 ### License
 
@@ -183,170 +142,49 @@ MIT © 2026 xrevoman-hu
 
 ## English
 
-Skill Repo Tracker is a local-first macOS desktop app for tracking GitHub repositories, backing up source ZIP snapshots for a selected ref, detecting `SKILL.md` files, and installing or updating remote Skills into an independent Skill library before optionally syncing them to tool-specific directories.
+Skill Repo Tracker is a local-first macOS app for people who install, update, and publish AI Skills across multiple tools.
 
-It is designed for individuals and small teams who maintain a set of public or private GitHub repositories and want a simple workflow for Skill updates, source snapshots, and auditable backup manifests.
+Instead of treating Claude Code, Codex, Gemini, OpenCode, OpenClaw, or Hermes folders as the source of truth, the app keeps one independent Skill library at `~/SkillRepoTracker/skills`. Skills are installed there first, then copied to selected tool directories.
 
-Current version: `v1.1.0`
+Current version: `v1.1.1`
 
-### Features
+### What It Helps With
 
-- **Repository tracking**: supports `owner/repo`, GitHub URLs, branches, tags, and commit refs.
-- **Source ZIP backups**: compares the remote SHA with the last backup SHA, downloads to `.partial`, then atomically moves the final file into place.
-- **Skill discovery and management**: scans multiple `SKILL.md` files per repository and supports install, update, skip, backup-then-overwrite, and force overwrite flows.
-- **Independent Skill library**: uses `~/SkillRepoTracker/skills` as the single source of truth for installs, updates, deletes, and scans.
-- **Optional sync targets**: can copy Skills from the library into Claude Code, Codex, Gemini, OpenCode, OpenClaw, and Hermes Skills directories.
-- **Task and log history**: records checks, backups, Skill updates, retries, and interrupted states. The app keeps the latest 100 tasks by default.
-- **Local data**: repositories, Skills, tasks, manifests, settings, and schedules are stored in SQLite.
-- **Privacy-minded token storage**: GitHub tokens are stored in macOS Keychain. SQLite only stores whether a token is configured and the last verification time.
-- **Settings**: light/dark theme, Chinese/English UI, backup root, Skill library root, default sync targets, concurrency, retry count, schedules, and backup retention.
+- Track which GitHub repository, path, and version each Skill came from.
+- Install and update Skills without silently overwriting local edits.
+- Publish the same Skill library to Claude Code and Codex by default.
+- Optionally publish to Gemini, OpenCode, OpenClaw, and Hermes.
+- Back up published copies before replacing or removing them.
+- Store GitHub tokens in macOS Keychain instead of SQLite or logs.
 
-### Stack
+### Sync Semantics
 
-- Tauri v2
-- React 19 + TypeScript + Vite
-- Rust backend commands
-- SQLite via `rusqlite`
-- GitHub API via `reqwest`
-- macOS Keychain via `keyring`
+The Skill library is the source of truth. Tool folders are publish targets.
 
-### Quick Start
+Unchecking a default target and saving changes future installs, updates, and restores, but it does not immediately remove files. To apply the new defaults to installed Skills, use “Apply sync settings to installed Skills”. Removed published copies are backed up first, then removed from tool folders. Copies not created by this app are left alone.
 
-Requirements:
-
-- macOS 12+
-- Node.js 20+
-- npm 10+
-- Rust / Cargo 1.77+
-
-Install dependencies:
+### Development
 
 ```bash
 npm install
-```
-
-Start the Web preview:
-
-```bash
 npm run dev
-```
-
-Start the Tauri desktop app in development mode:
-
-```bash
 npm run tauri dev
 ```
 
-The Web preview uses mock state. The Tauri desktop app calls the real Rust commands, SQLite database, filesystem, and GitHub API.
-
-If `cargo` is not found, make sure Rust is installed and available in `PATH`. On macOS, you can often use:
+Build and verify:
 
 ```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-```
-
-### Data Locations
-
-- SQLite database: macOS AppData/AppConfig directory, under `skill-repo-tracker.sqlite`
-- Default backup root: `~/SkillRepoBackups`
-- Default Skill library root: `~/SkillRepoTracker/skills`
-- Default sync backup root: `~/SkillRepoTracker/sync-backups`
-- Optional sync targets: `~/.claude/skills`, `~/.codex/skills`, `~/.gemini/skills`, `~/.config/opencode/skills`, `~/.openclaw/skills`, `~/.hermes/skills`
-- GitHub token: macOS Keychain
-
-Tokens are not written to SQLite, manifests, or task logs. If the token is removed, private repository checks will fail with permission-related errors.
-
-### Backup Semantics
-
-- “Remote has updates”: `remote_head_sha != last_seen_sha`
-- “Updated but not backed up”: `remote_head_sha != last_backup_sha`
-- Time fields are for display, sorting, and context only. They are not the primary backup decision input.
-- A successful backup requires ZIP download, final file rename, sha256 calculation, `manifest.json`, and `task-log.jsonl`.
-- If manifest writing fails, `last_backup_sha` is not updated.
-
-### Build The Desktop App
-
-Build unsigned macOS `.app` and `.dmg` artifacts:
-
-```bash
+npm run build
+./node_modules/.bin/tsc --noEmit
+cargo fmt --check --manifest-path src-tauri/Cargo.toml
+cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri build -- --bundles app,dmg
 ```
 
-Typical output paths:
+Generated artifacts:
 
 - `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
-- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.0_*.dmg`
-
-The local build is suitable for development and local verification. Public distribution should use Apple Developer ID signing and notarization.
-
-### Tests
-
-Frontend build:
-
-```bash
-npm run build
-```
-
-Rust unit tests:
-
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml
-```
-
-Packaging check:
-
-```bash
-npm run tauri build -- --bundles app,dmg
-```
-
-Suggested manual checks:
-
-1. Add a normal repository and confirm it appears in the repository list without adding a Skill.
-2. Add a repository with `SKILL.md` and confirm the Skill page shows the source path.
-3. Click “backup updated repositories” and confirm the task, ZIP, `manifest.json`, and `task-log.jsonl` are created.
-4. In Settings, confirm the Skill library root accepts pasted hidden paths and can also be selected through the native folder picker.
-5. Set default sync targets, click “Sync installed Skills”, and confirm task logs include the library path, tool targets, success/failure state, and backup paths.
-6. In Skill detail, switch between inherited and custom sync targets; custom with no targets should keep the Skill in the library only.
-7. Modify an installed Skill locally and confirm the update conflict dialog appears.
-8. Toggle Chinese/English and light/dark themes and check that tables, inspectors, dialogs, and settings remain readable.
-
-### Project Structure
-
-```text
-src/                  React + TypeScript frontend
-src-tauri/            Tauri v2 Rust backend
-assets/               Brand and app assets
-LICENSE               MIT license
-```
-
-### FAQ
-
-#### Why not a full Git mirror?
-
-`v1.1.0` still backs up source ZIP snapshots for the current GitHub ref. This keeps the local backup workflow simpler and avoids the complexity of Git mirrors, LFS, submodules, and incremental fetches.
-
-#### Why keep normal repositories?
-
-Normal repositories are first-class entries. Even when `skill_count = 0`, they can still be checked for remote SHA changes, backed up as ZIP snapshots, and inspected through backup history.
-
-#### Does a Skill update automatically back up the repository?
-
-No. Repository backups and Skill updates are separate actions. Skill updates first write to the independent Skill library, then copy-publish to configured tool directories. Repository ZIP backups must be triggered from the repository view.
-
-#### What if a private repository fails?
-
-Save and validate a GitHub token in Settings first. If it still fails, inspect task logs for `github_not_found`, `github_rate_limited`, `ref_not_found`, or permission errors.
-
-### Contributing
-
-Issues and pull requests are welcome. Before opening a PR, please run:
-
-```bash
-npm run build
-cargo test --manifest-path src-tauri/Cargo.toml
-```
-
-Please do not commit local databases, tokens, backup ZIP files, `dist/`, `node_modules/`, or `src-tauri/target/`.
+- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.1_*.dmg`
 
 ### License
 

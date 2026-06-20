@@ -17,7 +17,7 @@ use tauri_plugin_dialog::DialogExt;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.0";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.1";
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
 const LOCAL_SKILLS_LIBRARY_NAME: &str = "本地 Skills 库";
@@ -27,6 +27,7 @@ const DEFAULT_SYNC_BACKUP_KEEP: i64 = 5;
 const SYNC_TARGET_IDS: [&str; 6] = [
     "claude", "codex", "gemini", "opencode", "openclaw", "hermes",
 ];
+const DEFAULT_SYNC_TARGET_IDS: [&str; 2] = ["claude", "codex"];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,6 +140,7 @@ impl AppState {
         let had_library_setting = get_setting(&conn, "skill_library_root")?.is_some();
 
         seed_settings(&conn, &home, &default_backup_root, &default_library_root)?;
+        migrate_default_sync_targets(&conn, &home)?;
         migrate_independent_skill_library(
             &conn,
             &home,
@@ -733,11 +735,11 @@ fn add_column_if_missing(
 
 fn seed_settings(
     conn: &Connection,
-    home: &Path,
+    _home: &Path,
     default_backup_root: &Path,
     default_library_root: &Path,
 ) -> Result<(), AppError> {
-    let default_targets = serialize_sync_targets(&existing_sync_target_ids(home));
+    let default_targets = serialize_sync_targets(&default_sync_target_ids());
     let defaults = [
         ("backup_root", path_string(default_backup_root)),
         ("skills_root", path_string(default_library_root)),
@@ -769,6 +771,33 @@ fn seed_settings(
         "INSERT OR IGNORE INTO schedules (kind, enabled, interval_minutes, updated_at) VALUES ('backup', 0, 1440, ?1)",
         params![utc_now()],
     )?;
+    Ok(())
+}
+
+fn migrate_default_sync_targets(conn: &Connection, home: &Path) -> Result<(), AppError> {
+    let Some(raw_targets) = get_setting(conn, "default_sync_targets")? else {
+        set_setting(
+            conn,
+            "default_sync_targets",
+            serialize_sync_targets(&default_sync_target_ids()),
+        )?;
+        set_setting(conn, "default_sync_targets_v111", "true")?;
+        return Ok(());
+    };
+    if get_setting(conn, "default_sync_targets_v111")?.is_some() {
+        return Ok(());
+    }
+
+    let current_targets = parse_sync_targets(Some(&raw_targets));
+    let legacy_auto_targets = existing_sync_target_ids(home);
+    if current_targets == legacy_auto_targets {
+        set_setting(
+            conn,
+            "default_sync_targets",
+            serialize_sync_targets(&default_sync_target_ids()),
+        )?;
+    }
+    set_setting(conn, "default_sync_targets_v111", "true")?;
     Ok(())
 }
 
@@ -956,6 +985,13 @@ fn existing_sync_target_ids(home: &Path) -> Vec<String> {
         .into_iter()
         .filter(|target| target.path.exists())
         .map(|target| target.id.to_string())
+        .collect()
+}
+
+fn default_sync_target_ids() -> Vec<String> {
+    DEFAULT_SYNC_TARGET_IDS
+        .iter()
+        .map(|target| (*target).to_string())
         .collect()
 }
 
@@ -4290,7 +4326,7 @@ fn sync_installed_skills(state: State<'_, AppState>) -> ApiResponse<Vec<UiSkill>
         insert_task(
             &db,
             &format!("sync-skills-{}", Local::now().format("%Y%m%d%H%M%S")),
-            "Sync installed Skills",
+            "Apply Skill sync settings",
             "Installed Skills",
             &format!(
                 "{} / {}",
@@ -4803,13 +4839,13 @@ mod tests {
     }
 
     #[test]
-    fn seeds_library_and_existing_sync_targets() {
+    fn seeds_library_and_default_sync_targets() {
         let home = tempfile::tempdir().unwrap();
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let backup_root = home.path().join("SkillRepoBackups");
         let library_root = home.path().join("SkillRepoTracker").join("skills");
-        fs::create_dir_all(home.path().join(".codex").join("skills")).unwrap();
+        fs::create_dir_all(home.path().join(".gemini").join("skills")).unwrap();
 
         seed_settings(&conn, home.path(), &backup_root, &library_root).unwrap();
 
@@ -4819,7 +4855,54 @@ mod tests {
         );
         assert_eq!(
             sync_targets_from_db(&conn).unwrap(),
-            vec!["codex".to_string()]
+            vec!["claude".to_string(), "codex".to_string()]
+        );
+    }
+
+    #[test]
+    fn migrates_legacy_auto_sync_targets_to_claude_and_codex() {
+        let home = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        fs::create_dir_all(home.path().join(".gemini").join("skills")).unwrap();
+        fs::create_dir_all(home.path().join(".hermes").join("skills")).unwrap();
+        set_setting(
+            &conn,
+            "default_sync_targets",
+            serialize_sync_targets(&vec!["gemini".to_string(), "hermes".to_string()]),
+        )
+        .unwrap();
+
+        migrate_default_sync_targets(&conn, home.path()).unwrap();
+
+        assert_eq!(
+            sync_targets_from_db(&conn).unwrap(),
+            vec!["claude".to_string(), "codex".to_string()]
+        );
+        assert_eq!(
+            get_setting(&conn, "default_sync_targets_v111").unwrap(),
+            Some("true".to_string())
+        );
+    }
+
+    #[test]
+    fn preserves_explicit_sync_targets_during_v111_migration() {
+        let home = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        fs::create_dir_all(home.path().join(".gemini").join("skills")).unwrap();
+        set_setting(
+            &conn,
+            "default_sync_targets",
+            serialize_sync_targets(&vec!["claude".to_string(), "gemini".to_string()]),
+        )
+        .unwrap();
+
+        migrate_default_sync_targets(&conn, home.path()).unwrap();
+
+        assert_eq!(
+            sync_targets_from_db(&conn).unwrap(),
+            vec!["claude".to_string(), "gemini".to_string()]
         );
     }
 

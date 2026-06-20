@@ -456,7 +456,7 @@ const navItems = [
 
 const APP_METADATA = {
   name: "Skill Repo Tracker",
-  version: "1.1.0",
+  version: "1.1.1",
   projectGithubUrl: "https://github.com/xrevoman-hu/skill-repo-tracker",
   openSource: true,
 };
@@ -634,19 +634,21 @@ const COPY = {
     skillsRoot: "Skill 主库目录",
     skillLibraryRoot: "Skill 主库目录",
     defaultSyncTargets: "默认同步到",
-    defaultSyncTargetsHelp: "安装、更新和恢复后，将主库中的 Skill 复制发布到选中的工具目录。",
+    defaultSyncTargetsHelp: "默认只发布到 Claude Code 和 Codex。取消勾选并保存后，不会立刻删除文件；后续安装、更新和恢复会按新目标发布。",
+    defaultSyncTargetsApplyHelp: "要把新的默认目标应用到已安装 Skills，请点击“应用同步设置到已安装 Skills”。主库不会被改动；被取消的已发布副本会先备份，再从对应工具目录移除，并写入任务日志。",
     syncBackupKeep: "同步备份保留",
-    syncInstalledSkills: "同步已安装 Skills",
+    syncInstalledSkills: "应用同步设置到已安装 Skills",
     syncingSkills: "同步中",
     syncTargets: "同步目标",
     syncTargetsInherited: "继承默认目标",
     syncTargetsCustom: "自定义目标",
+    skillCustomTargetsHelp: "自定义目标会立即应用到当前 Skill。取消某个已发布目标时，会先备份该副本，再从工具目录移除；不会删除 Skill 主库。",
     syncTargetsNone: "仅保留在主库",
     publishedTargets: "已发布到",
     inheritDefaults: "继承默认",
     customTargets: "自定义",
     syncTargetsSaved: "同步目标已保存。",
-    installedSkillsSynced: "已同步安装的 Skills。",
+    installedSkillsSynced: "已应用同步设置到已安装 Skills。",
     localFolder: "本地目录",
     saveRoot: "保存目录",
     chooseFolder: "选择文件夹",
@@ -943,19 +945,21 @@ const COPY = {
     skillsRoot: "Skill library root",
     skillLibraryRoot: "Skill library root",
     defaultSyncTargets: "Default sync targets",
-    defaultSyncTargetsHelp: "After install, update, and restore, copy Skills from the library into selected tool directories.",
+    defaultSyncTargetsHelp: "By default, Skills publish only to Claude Code and Codex. Unchecking a target and saving does not immediately remove files; future installs, updates, and restores use the new targets.",
+    defaultSyncTargetsApplyHelp: "To apply the new defaults to installed Skills, click “Apply sync settings to installed Skills”. The library is not changed; removed published copies are backed up, removed from tool directories, and recorded in the task log.",
     syncBackupKeep: "Sync backups to keep",
-    syncInstalledSkills: "Sync installed Skills",
+    syncInstalledSkills: "Apply sync settings to installed Skills",
     syncingSkills: "Syncing",
     syncTargets: "Sync targets",
     syncTargetsInherited: "Inherited targets",
     syncTargetsCustom: "Custom targets",
+    skillCustomTargetsHelp: "Custom targets apply immediately to this Skill. Removing a published target backs up that copy, removes it from the tool directory, and leaves the Skill library untouched.",
     syncTargetsNone: "Library only",
     publishedTargets: "Published to",
     inheritDefaults: "Inherit defaults",
     customTargets: "Custom",
     syncTargetsSaved: "Sync targets saved.",
-    installedSkillsSynced: "Installed Skills synced.",
+    installedSkillsSynced: "Sync settings applied to installed Skills.",
     localFolder: "Local folder",
     saveRoot: "Save root",
     chooseFolder: "Choose Folder",
@@ -1879,10 +1883,10 @@ export function App() {
     const actionKey = "syncInstalledSkills";
     if (isPending(actionKey)) return;
     const optimisticTaskId = beginOptimisticTask(actionKey, {
-      kind: "Sync installed Skills",
+      kind: "Apply Skill sync settings",
       target: "Installed Skills",
-      summary: "sync installed Skills started",
-      log: ["sync installed Skills"],
+      summary: "apply Skill sync settings started",
+      log: ["apply Skill sync settings"],
     });
     if (desktopRuntime) {
       try {
@@ -3759,6 +3763,7 @@ function SkillInspector({
           {syncMode === "custom" ? t("syncTargetsCustom") : t("syncTargetsInherited")}:{" "}
           {syncTargetSummary(resolvedTargets, availableSyncTargets, language)}
         </p>
+        <p className="detail-copy muted-copy">{t("skillCustomTargetsHelp")}</p>
         <div className="target-toggle-grid compact-target-grid">
           {availableSyncTargets.map((target) => {
             const checked = (syncMode === "custom" ? customTargets : defaultSyncTargets).includes(target.id);
@@ -4241,6 +4246,7 @@ function PreferencesPanel({
                 );
               })}
             </div>
+            <p className="settings-note">{t("defaultSyncTargetsApplyHelp")}</p>
           </SettingRow>
           <SettingRow label={t("syncBackupKeep")}>
             <div className="range-row">
