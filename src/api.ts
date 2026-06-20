@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
 
 type ApiError = {
   code: string;
@@ -39,7 +38,7 @@ export const api = {
   getGithubPreview: (url: string) => command<any>("get_github_preview", { request: { url } }),
   listTasks: () => command<any[]>("list_tasks"),
   getSettings: () => command<any>("get_settings"),
-  pickDirectory: () => open({ directory: true, multiple: false }),
+  pickDirectory: (defaultPath?: string) => command<string | null>("pick_directory", { defaultPath }),
   validateDirectory: (kind: string, path: string) =>
     command<any>("validate_directory", { request: { kind, path } }),
   updateSettings: (request: Record<string, unknown>) => command<any>("update_settings", { request }),
@@ -56,6 +55,9 @@ export const api = {
   deleteSkill: (skillId: string) =>
     command<any[]>("delete_skill", { request: { skillId, mode: "backup_then_remove" } }),
   restoreSkill: (skillId: string) => command<any[]>("restore_skill", { request: { skillId } }),
+  syncInstalledSkills: () => command<any[]>("sync_installed_skills"),
+  updateSkillSyncTargets: (skillId: string, mode: string, targets: string[]) =>
+    command<any[]>("update_skill_sync_targets", { request: { skillId, mode, targets } }),
   resolveSkillLocalConflict: (skillId: string, choice: string) =>
     command<any[]>("resolve_skill_local_conflict", { request: { skillId, choice } }),
   retryTask: (taskId: string) => command<any[]>("retry_task", { request: { taskId } }),

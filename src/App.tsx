@@ -456,7 +456,7 @@ const navItems = [
 
 const APP_METADATA = {
   name: "Skill Repo Tracker",
-  version: "1.0.0",
+  version: "1.1.0",
   projectGithubUrl: "https://github.com/xrevoman-hu/skill-repo-tracker",
   openSource: true,
 };
@@ -631,14 +631,29 @@ const COPY = {
     comfortable: "舒适",
     compact: "紧凑",
     backupRoot: "备份根目录",
-    skillsRoot: "Skills 目录",
+    skillsRoot: "Skill 主库目录",
+    skillLibraryRoot: "Skill 主库目录",
+    defaultSyncTargets: "默认同步到",
+    defaultSyncTargetsHelp: "安装、更新和恢复后，将主库中的 Skill 复制发布到选中的工具目录。",
+    syncBackupKeep: "同步备份保留",
+    syncInstalledSkills: "同步已安装 Skills",
+    syncingSkills: "同步中",
+    syncTargets: "同步目标",
+    syncTargetsInherited: "继承默认目标",
+    syncTargetsCustom: "自定义目标",
+    syncTargetsNone: "仅保留在主库",
+    publishedTargets: "已发布到",
+    inheritDefaults: "继承默认",
+    customTargets: "自定义",
+    syncTargetsSaved: "同步目标已保存。",
+    installedSkillsSynced: "已同步安装的 Skills。",
     localFolder: "本地目录",
     saveRoot: "保存目录",
     chooseFolder: "选择文件夹",
     backupRootHelp: "用于保存源码 ZIP、manifest.json 和 task-log.jsonl。",
-    skillsRootHelp: "用于安装、扫描和管理本地 Skills；默认优先使用 CC-switch 主目录。",
+    skillsRootHelp: "用于安装、扫描和管理本地 Skills；工具目录只是可选发布目标。",
     helpBackupRoot: "源码 ZIP、manifest.json 和 task-log.jsonl 会写入这个目录。",
-    helpSkillsRoot: "安装、扫描和管理本地 Skills 的主目录；默认优先使用 CC-switch 的 Skills 目录。",
+    helpSkillsRoot: "安装、扫描和管理本地 Skills 的独立主库目录。",
     helpMetadataConcurrency: "同时检测远端仓库元数据的数量。数值越高越快，也更容易触发限流。",
     helpRetryCount: "检测、备份或更新失败后自动重试的次数。",
     helpAutoCheckInterval: "应用打开期间自动检测远端 SHA 的间隔。",
@@ -740,7 +755,7 @@ const COPY = {
     repoExists: "该仓库和 ref 已经被追踪。",
     repoAddedSkill: "已作为技能仓库添加。",
     repoAddedGeneric: "已作为普通仓库添加。",
-    installedSkill: "已安装到本地 Skills 目录。",
+    installedSkill: "已安装到 Skill 主库。",
     sourceUnavailableToast: "来源不可用。请先重新检测仓库。",
     skillUpdated: "已更新本地 Skill。不会触发仓库备份。",
     updateSkipped: "已跳过更新，本地改动已保留。",
@@ -925,14 +940,29 @@ const COPY = {
     comfortable: "Comfortable",
     compact: "Compact",
     backupRoot: "Backup root",
-    skillsRoot: "Skills root",
+    skillsRoot: "Skill library root",
+    skillLibraryRoot: "Skill library root",
+    defaultSyncTargets: "Default sync targets",
+    defaultSyncTargetsHelp: "After install, update, and restore, copy Skills from the library into selected tool directories.",
+    syncBackupKeep: "Sync backups to keep",
+    syncInstalledSkills: "Sync installed Skills",
+    syncingSkills: "Syncing",
+    syncTargets: "Sync targets",
+    syncTargetsInherited: "Inherited targets",
+    syncTargetsCustom: "Custom targets",
+    syncTargetsNone: "Library only",
+    publishedTargets: "Published to",
+    inheritDefaults: "Inherit defaults",
+    customTargets: "Custom",
+    syncTargetsSaved: "Sync targets saved.",
+    installedSkillsSynced: "Installed Skills synced.",
     localFolder: "Local folder",
     saveRoot: "Save root",
     chooseFolder: "Choose Folder",
     backupRootHelp: "Stores source ZIP files, manifest.json, and task-log.jsonl.",
-    skillsRootHelp: "Installs, scans, and manages local Skills; defaults to the CC-switch main directory when available.",
+    skillsRootHelp: "Installs, scans, and manages local Skills; tool directories are optional publish targets.",
     helpBackupRoot: "Source ZIP files, manifest.json, and task-log.jsonl are written here.",
-    helpSkillsRoot: "Main folder for installing, scanning, and managing local Skills; defaults to the CC-switch Skills directory.",
+    helpSkillsRoot: "Independent library folder for installing, scanning, and managing local Skills.",
     helpMetadataConcurrency: "Number of remote repository metadata checks to run at once. Higher is faster but can hit rate limits.",
     helpRetryCount: "Automatic retry count after detection, backup, or update failures.",
     helpAutoCheckInterval: "Interval for checking remote SHA while the app is open.",
@@ -1034,7 +1064,7 @@ const COPY = {
     repoExists: "This repository and ref are already tracked.",
     repoAddedSkill: "added as a skill repo.",
     repoAddedGeneric: "added as a generic repo.",
-    installedSkill: "installed to local Skills directory.",
+    installedSkill: "installed to the Skill library.",
     sourceUnavailableToast: "Source unavailable. Re-check the repository before updating this Skill.",
     skillUpdated: "updated locally. Repository backup was not triggered.",
     updateSkipped: "Update skipped. Local changes were preserved.",
@@ -1235,6 +1265,24 @@ function displayValue(value, language) {
   return value;
 }
 
+const fallbackSyncTargets = [
+  { id: "claude", label: "Claude Code", path: "~/.claude/skills", exists: false },
+  { id: "codex", label: "Codex", path: "~/.codex/skills", exists: false },
+  { id: "gemini", label: "Gemini", path: "~/.gemini/skills", exists: false },
+  { id: "opencode", label: "OpenCode", path: "~/.config/opencode/skills", exists: false },
+  { id: "openclaw", label: "OpenClaw", path: "~/.openclaw/skills", exists: false },
+  { id: "hermes", label: "Hermes", path: "~/.hermes/skills", exists: false },
+];
+
+function syncTargetLabel(targetId, targets = fallbackSyncTargets) {
+  return targets.find((target) => target.id === targetId)?.label || targetId;
+}
+
+function syncTargetSummary(targetIds = [], targets = fallbackSyncTargets, language = "zh") {
+  if (!targetIds.length) return getCopy(language, "syncTargetsNone");
+  return targetIds.map((id) => syncTargetLabel(id, targets)).join(", ");
+}
+
 function displayRepoName(value, language = "zh") {
   if (value === "Local Skills Library" || value === "本地 Skills 库") {
     return language === "zh" ? "本地 Skills 库" : "Local Skills Library";
@@ -1401,7 +1449,10 @@ export function App() {
   const toastTimerRef = useRef<number | undefined>(undefined);
   const [pendingActions, setPendingActions] = useState({});
   const [backupRoot, setBackupRoot] = useState("~/SkillRepoBackups");
-  const [skillsRoot, setSkillsRoot] = useState("~/.cc-switch/skills");
+  const [skillsRoot, setSkillsRoot] = useState("~/SkillRepoTracker/skills");
+  const [defaultSyncTargets, setDefaultSyncTargets] = useState([]);
+  const [availableSyncTargets, setAvailableSyncTargets] = useState(fallbackSyncTargets);
+  const [syncBackupKeep, setSyncBackupKeep] = useState(5);
   const [directoryStatus, setDirectoryStatus] = useState({});
   const [concurrency, setConcurrency] = useState(5);
   const [retryCount, setRetryCount] = useState(2);
@@ -1471,7 +1522,10 @@ export function App() {
   function applySettings(settings) {
     if (!settings) return;
     setBackupRoot(settings.backupRoot || "~/SkillRepoBackups");
-    setSkillsRoot(settings.skillsRoot || "~/.cc-switch/skills");
+    setSkillsRoot(settings.skillLibraryRoot || settings.skillsRoot || "~/SkillRepoTracker/skills");
+    setDefaultSyncTargets(settings.defaultSyncTargets || []);
+    setAvailableSyncTargets(settings.availableSyncTargets?.length ? settings.availableSyncTargets : fallbackSyncTargets);
+    setSyncBackupKeep(settings.syncBackupKeep || 5);
     setConcurrency(settings.concurrency || 5);
     setRetryCount(settings.retryCount ?? 2);
     setAutoCheckInterval(settings.autoCheckInterval || 60);
@@ -1528,6 +1582,11 @@ export function App() {
     setBackupRoot,
     skillsRoot,
     setSkillsRoot,
+    defaultSyncTargets,
+    setDefaultSyncTargets,
+    availableSyncTargets,
+    syncBackupKeep,
+    setSyncBackupKeep,
     concurrency,
     setConcurrency,
     retryCount,
@@ -1556,7 +1615,10 @@ export function App() {
     desktopRuntime,
     refreshDesktopState,
     chooseDirectory,
+    validateDirectory,
+    syncInstalledSkills,
     persistSettings,
+    updateSkillSyncTargets,
     saveGithubToken,
     clearGithubToken,
     validateGithubToken,
@@ -1769,7 +1831,8 @@ export function App() {
   async function chooseDirectory(kind) {
     if (!desktopRuntime) return;
     try {
-      const selected = await api.pickDirectory();
+      const currentPath = kind === "backupRoot" ? backupRoot : skillsRoot;
+      const selected = await api.pickDirectory(currentPath);
       const path = Array.isArray(selected) ? selected[0] : selected;
       if (!path) return;
       if (kind === "backupRoot") {
@@ -1810,6 +1873,72 @@ export function App() {
     }
     showToast(t("localSkillsScanned"));
     finishOptimisticTask(actionKey, optimisticTaskId);
+  }
+
+  async function syncInstalledSkills() {
+    const actionKey = "syncInstalledSkills";
+    if (isPending(actionKey)) return;
+    const optimisticTaskId = beginOptimisticTask(actionKey, {
+      kind: "Sync installed Skills",
+      target: "Installed Skills",
+      summary: "sync installed Skills started",
+      log: ["sync installed Skills"],
+    });
+    if (desktopRuntime) {
+      try {
+        const nextSkills = await api.syncInstalledSkills();
+        const nextTasks = await api.listTasks();
+        setSkills(nextSkills);
+        setTasks(nextTasks);
+        showToast(t("installedSkillsSynced"));
+      } catch (error) {
+        finishOptimisticTask(actionKey, optimisticTaskId);
+        showToast(error.message || t("directoryInvalid"));
+        return;
+      }
+      setActionPending(actionKey, false);
+      return;
+    }
+    showToast(t("installedSkillsSynced"));
+    finishOptimisticTask(actionKey, optimisticTaskId);
+  }
+
+  async function updateSkillSyncTargets(skillId, mode, targets) {
+    const actionKey = `syncTargets:${skillId}`;
+    if (isPending(actionKey)) return;
+    setActionPending(actionKey, true);
+    if (desktopRuntime) {
+      try {
+        const nextSkills = await api.updateSkillSyncTargets(skillId, mode, targets);
+        const nextTasks = await api.listTasks();
+        setSkills(nextSkills);
+        setTasks(nextTasks);
+        if (selectedSkillId === skillId) {
+          const detail = await api.getSkillDetail(skillId);
+          setSkillDetail(detail);
+        }
+        showToast(t("syncTargetsSaved"));
+      } catch (error) {
+        showToast(error.message || t("directoryInvalid"));
+      } finally {
+        setActionPending(actionKey, false);
+      }
+      return;
+    }
+    setSkills((items) =>
+      items.map((item) =>
+        item.id === skillId
+          ? {
+              ...item,
+              syncTargetsMode: mode,
+              syncTargets: targets,
+              resolvedSyncTargets: mode === "custom" ? targets : defaultSyncTargets,
+            }
+          : item,
+      ),
+    );
+    showToast(t("syncTargetsSaved"));
+    setActionPending(actionKey, false);
   }
 
   async function addLocalRepositoryFromPicker() {
@@ -1922,7 +2051,10 @@ export function App() {
       try {
         const nextSettings = await api.updateSettings({
           backupRoot,
+          skillLibraryRoot: skillsRoot,
           skillsRoot,
+          defaultSyncTargets,
+          syncBackupKeep,
           concurrency,
           retryCount,
           autoCheckInterval,
@@ -2672,6 +2804,7 @@ export function App() {
               setModal={setModal}
               restoreSkill={restoreSkill}
               repositories={repositories}
+              availableSyncTargets={availableSyncTargets}
               hasSkills={skills.length > 0}
               hasInspector={Boolean(selectedSkill)}
               selectedSkillId={selectedSkillId}
@@ -2730,6 +2863,10 @@ export function App() {
               setSelectedRepoId={setSelectedRepoId}
               setInspectorRepoId={setInspectorRepoId}
               repositories={repositories}
+              availableSyncTargets={availableSyncTargets}
+              defaultSyncTargets={defaultSyncTargets}
+              updateSkillSyncTargets={updateSkillSyncTargets}
+              isPending={isPending}
               language={language}
               t={t}
             />
@@ -3345,6 +3482,7 @@ function SkillsView({
   setModal,
   restoreSkill,
   repositories,
+  availableSyncTargets,
   hasSkills,
   hasInspector,
   selectedSkillId,
@@ -3451,6 +3589,9 @@ function SkillsView({
                     <td>
                       <strong>{skill.name}</strong>
                       <span className="subtext">{skillDescription(skill, language)}</span>
+                      <span className="subtext">
+                        {t("syncTargets")}: {syncTargetSummary(skill.resolvedSyncTargets || [], availableSyncTargets, language)}
+                      </span>
                     </td>
                     <td>
                       <Tag value={sourceLabel(skill, language)} tone="source-chip" language={language} />
@@ -3533,10 +3674,19 @@ function SkillInspector({
   setSelectedRepoId,
   setInspectorRepoId,
   repositories,
+  availableSyncTargets,
+  defaultSyncTargets,
+  updateSkillSyncTargets,
+  isPending,
   language,
   t,
 }: any) {
   const activeDetail = detail || skill;
+  const syncMode = activeDetail.syncTargetsMode || "inherit";
+  const customTargets = activeDetail.syncTargets || [];
+  const resolvedTargets = activeDetail.resolvedSyncTargets || skill.resolvedSyncTargets || [];
+  const publishedTargets = activeDetail.publishedTargets || skill.publishedTargets || [];
+  const syncPending = isPending?.(`syncTargets:${skill.id}`);
   function jumpToRepo() {
     const repo = repositories.find(
       (item) => displayRepoName(item.name, language) === displayRepoName(skill.repo, language),
@@ -3546,6 +3696,18 @@ function SkillInspector({
       setInspectorRepoId(repo.id);
     }
     setActiveTab("repositories");
+  }
+
+  function setSyncMode(nextMode) {
+    const nextTargets = nextMode === "custom" ? resolvedTargets : defaultSyncTargets;
+    updateSkillSyncTargets(skill.id, nextMode, nextTargets);
+  }
+
+  function toggleCustomTarget(targetId, checked) {
+    const nextTargets = checked
+      ? [...customTargets, targetId]
+      : customTargets.filter((id) => id !== targetId);
+    updateSkillSyncTargets(skill.id, "custom", nextTargets);
   }
 
   return (
@@ -3566,8 +3728,52 @@ function SkillInspector({
         <Detail label={t("path")} value={skill.path} mono />
         <Detail label={t("version")} value={versionSummary(skill, language)} mono />
         <Detail label={t("localSource")} value={displayValue(skill.installPath || skill.localPath || "unknown", language)} />
+        <Detail label={t("publishedTargets")} value={syncTargetSummary(publishedTargets, availableSyncTargets, language)} />
         <div className="inline-action-row">
           <Button onClick={jumpToRepo}>{t("source")}</Button>
+        </div>
+      </Section>
+
+      <Section title={t("syncTargets")}>
+        <div className="segmented compact-segmented" role="group" aria-label={t("syncTargets")}>
+          <button
+            aria-pressed={syncMode !== "custom"}
+            className={syncMode !== "custom" ? "selected" : ""}
+            disabled={syncPending}
+            onClick={() => setSyncMode("inherit")}
+            type="button"
+          >
+            {t("inheritDefaults")}
+          </button>
+          <button
+            aria-pressed={syncMode === "custom"}
+            className={syncMode === "custom" ? "selected" : ""}
+            disabled={syncPending}
+            onClick={() => setSyncMode("custom")}
+            type="button"
+          >
+            {t("customTargets")}
+          </button>
+        </div>
+        <p className="detail-copy">
+          {syncMode === "custom" ? t("syncTargetsCustom") : t("syncTargetsInherited")}:{" "}
+          {syncTargetSummary(resolvedTargets, availableSyncTargets, language)}
+        </p>
+        <div className="target-toggle-grid compact-target-grid">
+          {availableSyncTargets.map((target) => {
+            const checked = (syncMode === "custom" ? customTargets : defaultSyncTargets).includes(target.id);
+            return (
+              <label className="check-pill" key={target.id} title={target.path}>
+                <input
+                  checked={checked}
+                  disabled={syncPending || syncMode !== "custom"}
+                  onChange={(event) => toggleCustomTarget(target.id, event.target.checked)}
+                  type="checkbox"
+                />
+                <span>{target.label}</span>
+              </label>
+            );
+          })}
         </div>
       </Section>
 
@@ -3816,6 +4022,11 @@ function PreferencesPanel({
   setBackupRoot,
   skillsRoot,
   setSkillsRoot,
+  defaultSyncTargets,
+  setDefaultSyncTargets,
+  availableSyncTargets,
+  syncBackupKeep,
+  setSyncBackupKeep,
   concurrency,
   setConcurrency,
   retryCount,
@@ -3841,6 +4052,8 @@ function PreferencesPanel({
   nextAutoBackupAt,
   directoryStatus,
   chooseDirectory,
+  validateDirectory,
+  syncInstalledSkills,
   persistSettings,
   saveGithubToken,
   clearGithubToken,
@@ -3969,7 +4182,14 @@ function PreferencesPanel({
             stacked
           >
             <div className="folder-picker-row">
-              <input id="backup-root-input" aria-label={t("localFolder")} readOnly title={backupRoot} value={backupRoot} />
+              <input
+                id="backup-root-input"
+                aria-label={t("localFolder")}
+                onBlur={() => validateDirectory("backupRoot", backupRoot)}
+                onChange={(event) => setBackupRoot(event.target.value)}
+                title={backupRoot}
+                value={backupRoot}
+              />
               <button onClick={() => chooseDirectory("backupRoot")} type="button">
                 {t("chooseFolder")}
               </button>
@@ -3982,22 +4202,80 @@ function PreferencesPanel({
             stacked
           >
             <div className="folder-picker-row">
-              <input id="skills-root-input" aria-label={t("skillsRoot")} readOnly title={skillsRoot} value={skillsRoot} />
+              <input
+                id="skills-root-input"
+                aria-label={t("skillsRoot")}
+                onBlur={() => validateDirectory("skillLibraryRoot", skillsRoot)}
+                onChange={(event) => setSkillsRoot(event.target.value)}
+                title={skillsRoot}
+                value={skillsRoot}
+              />
               <button onClick={() => chooseDirectory("skillsRoot")} type="button">
                 {t("chooseFolder")}
               </button>
             </div>
           </SettingRow>
+          <SettingRow
+            description={t("defaultSyncTargetsHelp")}
+            label={t("defaultSyncTargets")}
+            stacked
+          >
+            <div className="target-toggle-grid">
+              {availableSyncTargets.map((target) => {
+                const checked = defaultSyncTargets.includes(target.id);
+                return (
+                  <label className="check-pill" key={target.id} title={target.path}>
+                    <input
+                      checked={checked}
+                      onChange={(event) => {
+                        setDefaultSyncTargets((items) =>
+                          event.target.checked
+                            ? [...items, target.id]
+                            : items.filter((id) => id !== target.id),
+                        );
+                      }}
+                      type="checkbox"
+                    />
+                    <span>{target.label}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </SettingRow>
+          <SettingRow label={t("syncBackupKeep")}>
+            <div className="range-row">
+              <input
+                max="20"
+                min="1"
+                onChange={(event) => setSyncBackupKeep(Number(event.target.value))}
+                step="1"
+                type="range"
+                value={syncBackupKeep}
+              />
+              <strong>{syncBackupKeep}</strong>
+            </div>
+          </SettingRow>
+          <div className="settings-actions inline-actions">
+            <Button
+              onClick={syncInstalledSkills}
+              pending={isPending("syncInstalledSkills")}
+              pendingLabel={t("syncingSkills")}
+            >
+              {t("syncInstalledSkills")}
+            </Button>
+          </div>
           <p
             className={
               directoryStatus?.backupRoot?.writable === false ||
-              directoryStatus?.skillsRoot?.writable === false
+              directoryStatus?.skillsRoot?.writable === false ||
+              directoryStatus?.skillLibraryRoot?.writable === false
                 ? "settings-note warning"
                 : "settings-note"
             }
           >
             {directoryStatus?.backupRoot?.message ||
               directoryStatus?.skillsRoot?.message ||
+              directoryStatus?.skillLibraryRoot?.message ||
               t("directoryReady")}
           </p>
         </SettingsSection>

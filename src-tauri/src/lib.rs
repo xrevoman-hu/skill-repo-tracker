@@ -5,22 +5,28 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
+    collections::HashSet,
     fs,
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
     process::Command,
     sync::Mutex,
 };
-use tauri::{Manager, State};
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.0.0";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.0";
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
 const LOCAL_SKILLS_LIBRARY_NAME: &str = "本地 Skills 库";
 const LEGACY_LOCAL_SKILLS_LIBRARY_NAME: &str = "Local Skills Library";
 const PREVIEW_MAX_CHARS: usize = 120_000;
+const DEFAULT_SYNC_BACKUP_KEEP: i64 = 5;
+const SYNC_TARGET_IDS: [&str; 6] = [
+    "claude", "codex", "gemini", "opencode", "openclaw", "hermes",
+];
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -128,10 +134,18 @@ impl AppState {
 
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let default_backup_root = home.join("SkillRepoBackups");
-        let default_skills_root = default_skills_root(&home);
+        let default_library_root = default_skill_library_root(&home);
+        let legacy_skills_root = get_setting(&conn, "skills_root")?;
+        let had_library_setting = get_setting(&conn, "skill_library_root")?.is_some();
 
-        seed_settings(&conn, &default_backup_root, &default_skills_root)?;
-        migrate_legacy_codex_skills_root(&conn, &home, &default_skills_root)?;
+        seed_settings(&conn, &home, &default_backup_root, &default_library_root)?;
+        migrate_independent_skill_library(
+            &conn,
+            &home,
+            &default_library_root,
+            legacy_skills_root.as_deref(),
+            had_library_setting,
+        )?;
         migrate_local_library_names(&conn)?;
 
         Ok(Self {
@@ -202,6 +216,10 @@ pub struct UiSkill {
     local_path: Option<String>,
     install_path: Option<String>,
     deleted_path: Option<String>,
+    sync_targets_mode: String,
+    sync_targets: Vec<String>,
+    resolved_sync_targets: Vec<String>,
+    published_targets: Vec<String>,
     can_restore: bool,
     can_delete: bool,
 }
@@ -222,6 +240,10 @@ pub struct SkillDetail {
     source_type: String,
     local_path: Option<String>,
     install_path: Option<String>,
+    sync_targets_mode: String,
+    sync_targets: Vec<String>,
+    resolved_sync_targets: Vec<String>,
+    published_targets: Vec<String>,
     skill_md: String,
     file_path: Option<String>,
 }
@@ -241,6 +263,15 @@ pub struct BrowserInfo {
     id: String,
     name: String,
     app_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncTargetInfo {
+    id: String,
+    label: String,
+    path: String,
+    exists: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -275,6 +306,10 @@ pub struct UiTask {
 pub struct AppSettings {
     backup_root: String,
     skills_root: String,
+    skill_library_root: String,
+    default_sync_targets: Vec<String>,
+    available_sync_targets: Vec<SyncTargetInfo>,
+    sync_backup_keep: i64,
     concurrency: i64,
     retry_count: i64,
     auto_check_interval: i64,
@@ -400,6 +435,9 @@ pub struct TokenRequest {
 pub struct UpdateSettingsRequest {
     backup_root: Option<String>,
     skills_root: Option<String>,
+    skill_library_root: Option<String>,
+    default_sync_targets: Option<Vec<String>>,
+    sync_backup_keep: Option<i64>,
     concurrency: Option<i64>,
     retry_count: Option<i64>,
     auto_check_interval: Option<i64>,
@@ -414,6 +452,14 @@ pub struct ScheduleRequest {
     kind: String,
     enabled: bool,
     interval_minutes: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillSyncTargetsRequest {
+    skill_id: String,
+    mode: String,
+    targets: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -460,6 +506,28 @@ struct RemoteInfo {
     default_branch: String,
     resolved_ref: String,
     sha: String,
+}
+
+#[derive(Debug, Clone)]
+struct SyncTargetSpec {
+    id: &'static str,
+    label: &'static str,
+    path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+struct SkillSyncRecord {
+    target_id: String,
+    target_path: String,
+    skill_path: String,
+}
+
+#[derive(Debug, Default)]
+struct SyncReport {
+    success_count: usize,
+    failure_count: usize,
+    skipped_count: usize,
+    log: Vec<String>,
 }
 
 fn default_ref() -> String {
@@ -515,7 +583,20 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           install_path TEXT,
           deleted_at TEXT,
           deleted_path TEXT,
+          sync_targets_mode TEXT NOT NULL DEFAULT 'inherit',
+          sync_targets TEXT,
           FOREIGN KEY(repo_id) REFERENCES repositories(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS skill_sync_records (
+          skill_id TEXT NOT NULL,
+          target_id TEXT NOT NULL,
+          target_path TEXT NOT NULL,
+          skill_path TEXT NOT NULL,
+          content_hash TEXT,
+          synced_at TEXT NOT NULL,
+          PRIMARY KEY(skill_id, target_id),
+          FOREIGN KEY(skill_id) REFERENCES skills(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS backup_jobs (
@@ -618,6 +699,18 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
         "deleted_path",
         "ALTER TABLE skills ADD COLUMN deleted_path TEXT",
     )?;
+    add_column_if_missing(
+        conn,
+        "skills",
+        "sync_targets_mode",
+        "ALTER TABLE skills ADD COLUMN sync_targets_mode TEXT NOT NULL DEFAULT 'inherit'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "skills",
+        "sync_targets",
+        "ALTER TABLE skills ADD COLUMN sync_targets TEXT",
+    )?;
     Ok(())
 }
 
@@ -640,12 +733,17 @@ fn add_column_if_missing(
 
 fn seed_settings(
     conn: &Connection,
+    home: &Path,
     default_backup_root: &Path,
-    default_skills_root: &Path,
+    default_library_root: &Path,
 ) -> Result<(), AppError> {
+    let default_targets = serialize_sync_targets(&existing_sync_target_ids(home));
     let defaults = [
         ("backup_root", path_string(default_backup_root)),
-        ("skills_root", path_string(default_skills_root)),
+        ("skills_root", path_string(default_library_root)),
+        ("skill_library_root", path_string(default_library_root)),
+        ("default_sync_targets", default_targets),
+        ("sync_backup_keep", DEFAULT_SYNC_BACKUP_KEEP.to_string()),
         ("concurrency", "5".to_string()),
         ("retry_count", "2".to_string()),
         ("auto_check_interval", "60".to_string()),
@@ -674,16 +772,77 @@ fn seed_settings(
     Ok(())
 }
 
-fn migrate_legacy_codex_skills_root(
+fn migrate_independent_skill_library(
     conn: &Connection,
-    home: &Path,
-    default_skills_root: &Path,
+    _home: &Path,
+    default_library_root: &Path,
+    legacy_skills_root: Option<&str>,
+    had_library_setting: bool,
 ) -> Result<(), AppError> {
-    let Some(stored_root) = get_setting(conn, "skills_root")? else {
+    if had_library_setting {
+        if let Some(library_root) = get_setting(conn, "skill_library_root")? {
+            set_setting(conn, "skills_root", library_root)?;
+        }
         return Ok(());
-    };
-    if is_legacy_codex_skills_root(&stored_root, home) {
-        set_setting(conn, "skills_root", path_string(default_skills_root))?;
+    }
+
+    let target_root = default_library_root;
+    let legacy_source = legacy_skills_root
+        .map(expand_tilde)
+        .filter(|path| path.exists());
+
+    if let Some(source_root) = legacy_source.as_ref() {
+        if source_root != target_root && source_root.is_dir() {
+            copy_dir_contents_missing(source_root, target_root)?;
+            migrate_installed_skill_paths(conn, source_root, target_root)?;
+        }
+    }
+
+    set_setting(conn, "skill_library_root", path_string(target_root))?;
+    set_setting(conn, "skills_root", path_string(target_root))?;
+    Ok(())
+}
+
+fn migrate_installed_skill_paths(
+    conn: &Connection,
+    old_root: &Path,
+    new_root: &Path,
+) -> Result<(), AppError> {
+    let old_root_string = path_string(old_root);
+    let mut stmt = conn.prepare("SELECT id, name, install_path FROM skills WHERE installed = 1")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    let mut updates = Vec::new();
+    for row in rows {
+        let (id, name, install_path) = row?;
+        let next_path = match install_path.as_deref() {
+            Some(raw_path) => {
+                let expanded = expand_tilde(raw_path);
+                if let Ok(relative) = expanded.strip_prefix(old_root) {
+                    Some(new_root.join(relative))
+                } else if raw_path == old_root_string {
+                    Some(new_root.join(&name))
+                } else {
+                    None
+                }
+            }
+            None => Some(new_root.join(&name)),
+        };
+        if let Some(next_path) = next_path {
+            updates.push((id, path_string(&next_path)));
+        }
+    }
+    drop(stmt);
+    for (id, path) in updates {
+        conn.execute(
+            "UPDATE skills SET install_path = ?2 WHERE id = ?1",
+            params![id, path],
+        )?;
     }
     Ok(())
 }
@@ -702,17 +861,6 @@ fn migrate_local_library_names(conn: &Connection) -> Result<(), AppError> {
         params![LOCAL_SKILLS_LIBRARY_NAME, LEGACY_LOCAL_SKILLS_LIBRARY_NAME],
     )?;
     Ok(())
-}
-
-fn is_legacy_codex_skills_root(raw_path: &str, home: &Path) -> bool {
-    let expanded = if raw_path == "~" {
-        home.to_path_buf()
-    } else if let Some(rest) = raw_path.strip_prefix("~/") {
-        home.join(rest)
-    } else {
-        PathBuf::from(raw_path)
-    };
-    expanded == home.join(".codex").join("skills")
 }
 
 fn display_local_library_name(value: String) -> String {
@@ -742,8 +890,110 @@ fn path_string(path: &Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-fn default_skills_root(home: &Path) -> PathBuf {
-    home.join(".cc-switch").join("skills")
+fn default_skill_library_root(home: &Path) -> PathBuf {
+    home.join("SkillRepoTracker").join("skills")
+}
+
+fn sync_backup_root(home: &Path) -> PathBuf {
+    home.join("SkillRepoTracker").join("sync-backups")
+}
+
+fn sync_target_specs(home: &Path) -> Vec<SyncTargetSpec> {
+    vec![
+        SyncTargetSpec {
+            id: "claude",
+            label: "Claude Code",
+            path: home.join(".claude").join("skills"),
+        },
+        SyncTargetSpec {
+            id: "codex",
+            label: "Codex",
+            path: home.join(".codex").join("skills"),
+        },
+        SyncTargetSpec {
+            id: "gemini",
+            label: "Gemini",
+            path: home.join(".gemini").join("skills"),
+        },
+        SyncTargetSpec {
+            id: "opencode",
+            label: "OpenCode",
+            path: home.join(".config").join("opencode").join("skills"),
+        },
+        SyncTargetSpec {
+            id: "openclaw",
+            label: "OpenClaw",
+            path: home.join(".openclaw").join("skills"),
+        },
+        SyncTargetSpec {
+            id: "hermes",
+            label: "Hermes",
+            path: home.join(".hermes").join("skills"),
+        },
+    ]
+}
+
+fn sync_target_info(home: &Path) -> Vec<SyncTargetInfo> {
+    sync_target_specs(home)
+        .into_iter()
+        .map(|target| SyncTargetInfo {
+            id: target.id.to_string(),
+            label: target.label.to_string(),
+            path: path_string(&target.path),
+            exists: target.path.exists(),
+        })
+        .collect()
+}
+
+fn sync_target_spec(home: &Path, id: &str) -> Option<SyncTargetSpec> {
+    sync_target_specs(home)
+        .into_iter()
+        .find(|target| target.id == id)
+}
+
+fn existing_sync_target_ids(home: &Path) -> Vec<String> {
+    sync_target_specs(home)
+        .into_iter()
+        .filter(|target| target.path.exists())
+        .map(|target| target.id.to_string())
+        .collect()
+}
+
+fn normalize_sync_targets(targets: &[String]) -> Vec<String> {
+    let requested: HashSet<&str> = targets.iter().map(String::as_str).collect();
+    SYNC_TARGET_IDS
+        .iter()
+        .filter(|id| requested.contains(**id))
+        .map(|id| (*id).to_string())
+        .collect()
+}
+
+fn parse_sync_targets(raw: Option<&str>) -> Vec<String> {
+    raw.and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .map(|items| normalize_sync_targets(&items))
+        .unwrap_or_default()
+}
+
+fn serialize_sync_targets(targets: &[String]) -> String {
+    serde_json::to_string(&normalize_sync_targets(targets)).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn sync_targets_from_db(conn: &Connection) -> Result<Vec<String>, AppError> {
+    Ok(parse_sync_targets(
+        get_setting(conn, "default_sync_targets")?.as_deref(),
+    ))
+}
+
+fn resolve_skill_sync_targets(
+    mode: &str,
+    custom_targets: &[String],
+    default_targets: &[String],
+) -> Vec<String> {
+    if mode == "custom" {
+        normalize_sync_targets(custom_targets)
+    } else {
+        normalize_sync_targets(default_targets)
+    }
 }
 
 fn expand_tilde(value: &str) -> PathBuf {
@@ -851,6 +1101,10 @@ fn set_setting(conn: &Connection, key: &str, value: impl ToString) -> Result<(),
 
 fn settings_from_db(conn: &Connection, token_configured: bool) -> Result<AppSettings, AppError> {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let skill_library_root = get_setting(conn, "skill_library_root")?
+        .or(get_setting(conn, "skills_root")?)
+        .unwrap_or_else(|| path_string(&default_skill_library_root(&home)));
+    let default_sync_targets = sync_targets_from_db(conn)?;
     let stored_status = get_setting(conn, "github_token_status")?
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
@@ -868,8 +1122,13 @@ fn settings_from_db(conn: &Connection, token_configured: bool) -> Result<AppSett
     Ok(AppSettings {
         backup_root: get_setting(conn, "backup_root")?
             .unwrap_or_else(|| "~/SkillRepoBackups".into()),
-        skills_root: get_setting(conn, "skills_root")?
-            .unwrap_or_else(|| path_string(&default_skills_root(&home))),
+        skills_root: skill_library_root.clone(),
+        skill_library_root,
+        default_sync_targets,
+        available_sync_targets: sync_target_info(&home),
+        sync_backup_keep: get_setting(conn, "sync_backup_keep")?
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(DEFAULT_SYNC_BACKUP_KEEP),
         concurrency: get_setting(conn, "concurrency")?
             .and_then(|value| value.parse().ok())
             .unwrap_or(5),
@@ -1032,10 +1291,11 @@ fn load_ui_repositories(conn: &Connection) -> Result<Vec<UiRepository>, AppError
 }
 
 fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
+    let default_sync_targets = sync_targets_from_db(conn)?;
     let mut stmt = conn.prepare(
         "SELECT id, repo_id, name, description, repo_name, path, ref_name, local_version,
                 remote_version, status, installed, updated_at, source_type, local_path, install_path,
-                deleted_at, deleted_path
+                deleted_at, deleted_path, sync_targets_mode, sync_targets
          FROM skills
          ORDER BY
            CASE WHEN deleted_at IS NOT NULL THEN 5 ELSE 0 END,
@@ -1052,6 +1312,12 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
         let installed = row.get::<_, i64>(10)? == 1;
         let deleted_at = row.get::<_, Option<String>>(15)?;
         let deleted_path = row.get::<_, Option<String>>(16)?;
+        let sync_targets_mode = row
+            .get::<_, Option<String>>(17)?
+            .unwrap_or_else(|| "inherit".to_string());
+        let sync_targets = parse_sync_targets(row.get::<_, Option<String>>(18)?.as_deref());
+        let resolved_sync_targets =
+            resolve_skill_sync_targets(&sync_targets_mode, &sync_targets, &default_sync_targets);
         let status = if deleted_at.is_some() {
             "deleted".to_string()
         } else {
@@ -1076,6 +1342,10 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
             local_path: row.get(13)?,
             install_path: row.get(14)?,
             deleted_path: deleted_path.clone(),
+            sync_targets_mode,
+            sync_targets,
+            resolved_sync_targets,
+            published_targets: Vec::new(),
             can_restore: deleted_at.is_some() && deleted_path.is_some(),
             can_delete: installed && deleted_at.is_none(),
         })
@@ -1084,6 +1354,10 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
     let mut skills = Vec::new();
     for row in rows {
         skills.push(row?);
+    }
+    drop(stmt);
+    for skill in &mut skills {
+        skill.published_targets = published_target_ids(conn, &skill.id)?;
     }
     Ok(skills)
 }
@@ -2000,10 +2274,23 @@ fn hash_directory(path: &Path) -> Result<String, AppError> {
 }
 
 fn extract_skill_from_zip(bytes: &[u8], skill_path: &str, dest: &Path) -> Result<(), AppError> {
-    if dest.exists() {
-        fs::remove_dir_all(dest)?;
-    }
-    fs::create_dir_all(dest)?;
+    let parent = dest.parent().ok_or_else(|| {
+        AppError::with_details(
+            "filesystem_error",
+            "Skill 安装目录缺少父目录。",
+            path_string(dest),
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+    let temp = unique_temp_path(
+        parent,
+        dest.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("skill"),
+        "install-tmp",
+    );
+    remove_path(&temp)?;
+    fs::create_dir_all(&temp)?;
     let mut archive = ZipArchive::new(Cursor::new(bytes))?;
     let normalized_skill_path = if skill_path == "." {
         String::new()
@@ -2027,7 +2314,7 @@ fn extract_skill_from_zip(bytes: &[u8], skill_path: &str, dest: &Path) -> Result
         if output_relative.is_empty() {
             continue;
         }
-        let output_path = dest.join(output_relative);
+        let output_path = temp.join(output_relative);
         if file.is_dir() {
             fs::create_dir_all(output_path)?;
         } else {
@@ -2036,6 +2323,14 @@ fn extract_skill_from_zip(bytes: &[u8], skill_path: &str, dest: &Path) -> Result
             }
             let mut output = fs::File::create(output_path)?;
             std::io::copy(&mut file, &mut output)?;
+        }
+    }
+    remove_path(dest)?;
+    match fs::rename(&temp, dest) {
+        Ok(()) => {}
+        Err(_) => {
+            copy_dir_all(&temp, dest)?;
+            remove_path(&temp)?;
         }
     }
     Ok(())
@@ -2101,8 +2396,453 @@ fn copy_dir_all(source: &Path, dest: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+fn copy_dir_contents_missing(source: &Path, dest: &Path) -> Result<(), AppError> {
+    fs::create_dir_all(dest)?;
+    for entry in WalkDir::new(source)
+        .min_depth(1)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        let relative = entry.path().strip_prefix(source).map_err(|err| {
+            AppError::with_details("filesystem_error", "复制目录失败。", err.to_string())
+        })?;
+        let target = dest.join(relative);
+        if target.exists() {
+            continue;
+        }
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&target)?;
+        } else {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+fn remove_path(path: &Path) -> Result<(), AppError> {
+    if !path.exists() {
+        return Ok(());
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        fs::remove_dir_all(path)?;
+    } else {
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}
+
+fn unique_temp_path(parent: &Path, name: &str, suffix: &str) -> PathBuf {
+    let timestamp = Utc::now()
+        .timestamp_nanos_opt()
+        .unwrap_or_else(|| Utc::now().timestamp_micros() * 1_000);
+    parent.join(format!(".{}-{}-{suffix}", slugify(name), timestamp))
+}
+
+fn backup_sync_target(
+    target_id: &str,
+    skill_name: &str,
+    source: &Path,
+    keep: i64,
+) -> Result<Option<PathBuf>, AppError> {
+    if !source.exists() {
+        return Ok(None);
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let skill_slug = slugify(skill_name);
+    let timestamp = Local::now().format("%Y%m%d%H%M%S%.3f").to_string();
+    let backup_dir = sync_backup_root(&home)
+        .join(target_id)
+        .join(&skill_slug)
+        .join(timestamp);
+    if source.is_dir() {
+        copy_dir_all(source, &backup_dir)?;
+    } else {
+        fs::create_dir_all(&backup_dir)?;
+        fs::copy(source, backup_dir.join("content"))?;
+    }
+    let manifest = serde_json::json!({
+        "targetId": target_id,
+        "skillName": skill_name,
+        "sourcePath": path_string(source),
+        "backupPath": path_string(&backup_dir),
+        "createdAt": utc_now(),
+    });
+    fs::write(
+        backup_dir.join("manifest.json"),
+        serde_json::to_vec_pretty(&manifest).map_err(|err| {
+            AppError::with_details(
+                "json_error",
+                "同步备份 manifest 生成失败。",
+                err.to_string(),
+            )
+        })?,
+    )?;
+    prune_sync_backups(target_id, &skill_slug, keep.max(1) as usize)?;
+    Ok(Some(backup_dir))
+}
+
+fn prune_sync_backups(target_id: &str, skill_slug: &str, keep: usize) -> Result<(), AppError> {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let backup_root = sync_backup_root(&home).join(target_id).join(skill_slug);
+    if !backup_root.exists() {
+        return Ok(());
+    }
+    let mut entries = fs::read_dir(&backup_root)?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .collect::<Vec<_>>();
+    entries.sort_by_key(|entry| entry.file_name());
+    entries.reverse();
+    for entry in entries.into_iter().skip(keep) {
+        let _ = fs::remove_dir_all(entry.path());
+    }
+    Ok(())
+}
+
+fn replace_dir_from_source(
+    source: &Path,
+    dest: &Path,
+    target_id: &str,
+    skill_name: &str,
+    keep: i64,
+) -> Result<Option<PathBuf>, AppError> {
+    let parent = dest.parent().ok_or_else(|| {
+        AppError::with_details(
+            "filesystem_error",
+            "目标目录缺少父目录。",
+            path_string(dest),
+        )
+    })?;
+    fs::create_dir_all(parent)?;
+    let temp = unique_temp_path(parent, skill_name, "sync-tmp");
+    remove_path(&temp)?;
+    copy_dir_all(source, &temp)?;
+    let backup = backup_sync_target(target_id, skill_name, dest, keep)?;
+    remove_path(dest)?;
+    match fs::rename(&temp, dest) {
+        Ok(()) => {}
+        Err(_) => {
+            copy_dir_all(&temp, dest)?;
+            remove_path(&temp)?;
+        }
+    }
+    Ok(backup)
+}
+
 fn skill_destination(settings: &AppSettings, skill_name: &str) -> PathBuf {
-    expand_tilde(&settings.skills_root).join(skill_name)
+    expand_tilde(&settings.skill_library_root).join(skill_name)
+}
+
+fn sync_records_for_skill(
+    conn: &Connection,
+    skill_id: &str,
+) -> Result<Vec<SkillSyncRecord>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT target_id, target_path, skill_path
+         FROM skill_sync_records
+         WHERE skill_id = ?1
+         ORDER BY target_id ASC",
+    )?;
+    let rows = stmt.query_map(params![skill_id], |row| {
+        Ok(SkillSyncRecord {
+            target_id: row.get(0)?,
+            target_path: row.get(1)?,
+            skill_path: row.get(2)?,
+        })
+    })?;
+    let mut records = Vec::new();
+    for row in rows {
+        records.push(row?);
+    }
+    Ok(records)
+}
+
+fn published_target_ids(conn: &Connection, skill_id: &str) -> Result<Vec<String>, AppError> {
+    Ok(sync_records_for_skill(conn, skill_id)?
+        .into_iter()
+        .map(|record| record.target_id)
+        .collect())
+}
+
+fn upsert_sync_record(
+    conn: &Connection,
+    skill_id: &str,
+    target_id: &str,
+    target_path: &Path,
+    skill_path: &Path,
+    content_hash: &str,
+) -> Result<(), AppError> {
+    conn.execute(
+        "INSERT INTO skill_sync_records
+         (skill_id, target_id, target_path, skill_path, content_hash, synced_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(skill_id, target_id) DO UPDATE SET
+          target_path = excluded.target_path,
+          skill_path = excluded.skill_path,
+          content_hash = excluded.content_hash,
+          synced_at = excluded.synced_at",
+        params![
+            skill_id,
+            target_id,
+            path_string(target_path),
+            path_string(skill_path),
+            content_hash,
+            utc_now(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn delete_sync_record(conn: &Connection, skill_id: &str, target_id: &str) -> Result<(), AppError> {
+    conn.execute(
+        "DELETE FROM skill_sync_records WHERE skill_id = ?1 AND target_id = ?2",
+        params![skill_id, target_id],
+    )?;
+    Ok(())
+}
+
+fn reconcile_skill_sync(
+    conn: &Connection,
+    settings: &AppSettings,
+    skill: &SkillRecord,
+) -> SyncReport {
+    let mut report = SyncReport::default();
+    if !skill.installed {
+        report.skipped_count += 1;
+        report
+            .log
+            .push(format!("skip {} because it is not installed", skill.name));
+        return report;
+    }
+
+    let source = skill
+        .install_path
+        .as_deref()
+        .map(expand_tilde)
+        .unwrap_or_else(|| skill_destination(settings, &skill.name));
+    if !source.is_dir() {
+        report.failure_count += 1;
+        report.log.push(format!(
+            "source missing for {} at {}",
+            skill.name,
+            path_string(&source)
+        ));
+        return report;
+    }
+
+    let desired_targets = resolve_skill_sync_targets(
+        &skill.sync_targets_mode,
+        &skill.sync_targets,
+        &settings.default_sync_targets,
+    );
+    let desired_set: HashSet<&str> = desired_targets.iter().map(String::as_str).collect();
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let source_hash = match hash_directory(&source) {
+        Ok(hash) => hash,
+        Err(error) => {
+            report.failure_count += 1;
+            report.log.push(format_error_for_log(&skill.name, &error));
+            return report;
+        }
+    };
+
+    for target_id in &desired_targets {
+        let Some(spec) = sync_target_spec(&home, target_id) else {
+            report.failure_count += 1;
+            report.log.push(format!("unknown sync target {target_id}"));
+            continue;
+        };
+        let target_path = spec.path.join(&skill.name);
+        match replace_dir_from_source(
+            &source,
+            &target_path,
+            spec.id,
+            &skill.name,
+            settings.sync_backup_keep,
+        )
+        .and_then(|backup| {
+            upsert_sync_record(
+                conn,
+                &skill.id,
+                spec.id,
+                &spec.path,
+                &target_path,
+                &source_hash,
+            )?;
+            Ok(backup)
+        }) {
+            Ok(Some(backup)) => {
+                report.success_count += 1;
+                report.log.push(format!(
+                    "sync {} -> {} with backup {}",
+                    skill.name,
+                    path_string(&target_path),
+                    path_string(&backup)
+                ));
+            }
+            Ok(None) => {
+                report.success_count += 1;
+                report.log.push(format!(
+                    "sync {} -> {}",
+                    skill.name,
+                    path_string(&target_path)
+                ));
+            }
+            Err(error) => {
+                report.failure_count += 1;
+                report.log.push(format_error_for_log(spec.id, &error));
+            }
+        }
+    }
+
+    let existing_records = match sync_records_for_skill(conn, &skill.id) {
+        Ok(records) => records,
+        Err(error) => {
+            report.failure_count += 1;
+            report.log.push(format_error_for_log(&skill.name, &error));
+            Vec::new()
+        }
+    };
+    for record in existing_records {
+        if desired_set.contains(record.target_id.as_str()) {
+            continue;
+        }
+        let skill_path = expand_tilde(&record.skill_path);
+        match backup_sync_target(
+            &record.target_id,
+            &skill.name,
+            &skill_path,
+            settings.sync_backup_keep,
+        )
+        .and_then(|backup| {
+            remove_path(&skill_path)?;
+            delete_sync_record(conn, &skill.id, &record.target_id)?;
+            Ok(backup)
+        }) {
+            Ok(Some(backup)) => {
+                report.success_count += 1;
+                report.log.push(format!(
+                    "unsync {} from {} ({}) with backup {}",
+                    skill.name,
+                    record.target_id,
+                    record.target_path,
+                    path_string(&backup)
+                ));
+            }
+            Ok(None) => {
+                report.success_count += 1;
+                report.log.push(format!(
+                    "unsync {} from {} ({})",
+                    skill.name, record.target_id, record.target_path
+                ));
+            }
+            Err(error) => {
+                report.failure_count += 1;
+                report
+                    .log
+                    .push(format_error_for_log(&record.target_id, &error));
+            }
+        }
+    }
+
+    if desired_targets.is_empty() && report.success_count == 0 && report.failure_count == 0 {
+        report.skipped_count += 1;
+        report.log.push(format!(
+            "skip {} because no sync targets are selected",
+            skill.name
+        ));
+    }
+    report
+}
+
+fn remove_all_sync_targets_for_skill(
+    conn: &Connection,
+    settings: &AppSettings,
+    skill: &SkillRecord,
+) -> SyncReport {
+    let mut report = SyncReport::default();
+    let records = match sync_records_for_skill(conn, &skill.id) {
+        Ok(records) => records,
+        Err(error) => {
+            report.failure_count += 1;
+            report.log.push(format_error_for_log(&skill.name, &error));
+            return report;
+        }
+    };
+    if records.is_empty() {
+        report.skipped_count += 1;
+        report.log.push(format!(
+            "skip {} because it has no published targets",
+            skill.name
+        ));
+        return report;
+    }
+    for record in records {
+        let skill_path = expand_tilde(&record.skill_path);
+        match backup_sync_target(
+            &record.target_id,
+            &skill.name,
+            &skill_path,
+            settings.sync_backup_keep,
+        )
+        .and_then(|backup| {
+            remove_path(&skill_path)?;
+            delete_sync_record(conn, &skill.id, &record.target_id)?;
+            Ok(backup)
+        }) {
+            Ok(Some(backup)) => {
+                report.success_count += 1;
+                report.log.push(format!(
+                    "remove published {} from {} ({}) with backup {}",
+                    skill.name,
+                    record.target_id,
+                    record.target_path,
+                    path_string(&backup)
+                ));
+            }
+            Ok(None) => {
+                report.success_count += 1;
+                report.log.push(format!(
+                    "remove published {} from {} ({})",
+                    skill.name, record.target_id, record.target_path
+                ));
+            }
+            Err(error) => {
+                report.failure_count += 1;
+                report
+                    .log
+                    .push(format_error_for_log(&record.target_id, &error));
+            }
+        }
+    }
+    report
+}
+
+fn sync_task_status(report: &SyncReport) -> &'static str {
+    if report.failure_count == 0 {
+        "success"
+    } else if report.success_count > 0 || report.skipped_count > 0 {
+        "partial-success"
+    } else {
+        "failed"
+    }
+}
+
+fn sync_task_summary(report: &SyncReport) -> String {
+    match (
+        report.success_count,
+        report.failure_count,
+        report.skipped_count,
+    ) {
+        (success, 0, skipped) => format!("{success} synced, {skipped} skipped"),
+        (success, failed, skipped) => {
+            format!("{success} synced, {failed} failed, {skipped} skipped")
+        }
+    }
 }
 
 fn browser_candidates() -> Vec<BrowserInfo> {
@@ -2172,17 +2912,23 @@ async fn get_skill_detail(
 ) -> CommandResult<SkillDetail> {
     let base = {
         let db = state.db.lock().expect("db mutex poisoned");
+        let default_sync_targets = sync_targets_from_db(&db).unwrap_or_default();
         let result = db.query_row(
             "SELECT s.id, s.name, s.description, s.repo_name, s.path, s.ref_name,
                     s.local_version, s.remote_version,
                     CASE WHEN s.deleted_at IS NOT NULL THEN 'deleted' ELSE s.status END AS status,
                     s.source_type, s.local_path, s.install_path, s.deleted_path,
+                    s.sync_targets_mode, s.sync_targets,
                     r.owner, r.repo, r.ref_name
              FROM skills s
              LEFT JOIN repositories r ON r.id = s.repo_id
              WHERE s.id = ?1",
             params![request.skill_id],
             |row| {
+                let sync_targets_mode = row
+                    .get::<_, Option<String>>(13)?
+                    .unwrap_or_else(|| "inherit".to_string());
+                let sync_targets = parse_sync_targets(row.get::<_, Option<String>>(14)?.as_deref());
                 Ok((
                     SkillDetail {
                         id: row.get(0)?,
@@ -2199,18 +2945,30 @@ async fn get_skill_detail(
                         source_type: row.get(9)?,
                         local_path: row.get(10)?,
                         install_path: row.get(11)?,
+                        sync_targets_mode: sync_targets_mode.clone(),
+                        resolved_sync_targets: resolve_skill_sync_targets(
+                            &sync_targets_mode,
+                            &sync_targets,
+                            &default_sync_targets,
+                        ),
+                        sync_targets,
+                        published_targets: Vec::new(),
                         skill_md: String::new(),
                         file_path: None,
                     },
                     row.get::<_, Option<String>>(12)?,
-                    row.get::<_, Option<String>>(13)?,
-                    row.get::<_, Option<String>>(14)?,
                     row.get::<_, Option<String>>(15)?,
+                    row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<String>>(17)?,
                 ))
             },
         );
         match result.optional() {
-            Ok(Some(value)) => value,
+            Ok(Some(mut value)) => {
+                value.0.published_targets =
+                    published_target_ids(&db, &value.0.id).unwrap_or_default();
+                value
+            }
             Ok(None) => return Ok(api_err(AppError::new("skill_not_found", "Skill 不存在。"))),
             Err(error) => return Ok(api_err(AppError::from(error))),
         }
@@ -2407,16 +3165,24 @@ fn update_settings(
             }
             set_setting(&db, "backup_root", value)?;
         }
-        if let Some(value) = request.skills_root {
-            let validation = validate_directory_path("skillsRoot", &value);
+        let requested_library_root = request.skill_library_root.or(request.skills_root);
+        if let Some(value) = requested_library_root {
+            let validation = validate_directory_path("skillLibraryRoot", &value);
             if !validation.writable {
                 return Err(AppError::with_details(
-                    "skills_root_unwritable",
-                    "Skills 目录不可写，请选择其他目录。",
+                    "skill_library_root_unwritable",
+                    "Skill 主库目录不可写，请选择其他目录。",
                     validation.message,
                 ));
             }
+            set_setting(&db, "skill_library_root", value.clone())?;
             set_setting(&db, "skills_root", value)?;
+        }
+        if let Some(value) = request.default_sync_targets {
+            set_setting(&db, "default_sync_targets", serialize_sync_targets(&value))?;
+        }
+        if let Some(value) = request.sync_backup_keep {
+            set_setting(&db, "sync_backup_keep", value.clamp(1, 50))?;
         }
         if let Some(value) = request.concurrency {
             set_setting(&db, "concurrency", value.clamp(1, 10))?;
@@ -2447,6 +3213,49 @@ fn update_settings(
 #[tauri::command]
 fn validate_directory(request: ValidateDirectoryRequest) -> ApiResponse<DirectoryValidation> {
     ApiResponse::ok(validate_directory_path(&request.kind, &request.path))
+}
+
+#[tauri::command]
+async fn pick_directory(
+    app: AppHandle,
+    #[allow(non_snake_case)] defaultPath: Option<String>,
+) -> ApiResponse<Option<String>> {
+    let initial = defaultPath
+        .map(|path| path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .map(|path| path_string(&expand_tilde(&path)));
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut builder = app.dialog().file();
+        if let Some(path) = initial {
+            builder = builder.set_directory(path);
+        }
+        builder.blocking_pick_folder()
+    })
+    .await
+    .map_err(|err| {
+        AppError::with_details(
+            "directory_picker_failed",
+            "弹出目录选择器失败。",
+            err.to_string(),
+        )
+    })
+    .and_then(|selected| match selected {
+        Some(path) => path
+            .into_path()
+            .map(|path| Some(path_string(&path)))
+            .map_err(|err| {
+                AppError::with_details(
+                    "directory_picker_failed",
+                    "解析选择的目录失败。",
+                    err.to_string(),
+                )
+            }),
+        None => Ok(None),
+    });
+    match result {
+        Ok(path) => ApiResponse::ok(path),
+        Err(error) => api_err(error),
+    }
 }
 
 #[tauri::command]
@@ -2986,20 +3795,38 @@ async fn update_skill_inner(
                  WHERE id = ?1",
             params![skill_id_value, hash, now, path_string(&dest)],
         )?;
+        let synced_skill = load_skill_record(&db, &skill_id_value)?
+            .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
+        let sync_report = reconcile_skill_sync(&db, &settings, &synced_skill);
+        let mut task_log = vec![
+            format!("download remote Skill directory {}", skill.path),
+            format!("replace local files at {}", path_string(&dest)),
+            "record installed_skill_hash".into(),
+        ];
+        task_log.extend(sync_report.log.clone());
+        let task_status = sync_task_status(&sync_report);
+        let task_summary = if sync_report.failure_count > 0 {
+            format!(
+                "local Skill updated; sync {}",
+                sync_task_summary(&sync_report)
+            )
+        } else {
+            "local Skill updated".to_string()
+        };
         insert_task(
             &db,
             &format!("skill-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Update Skill",
             &skill.name,
-            "1 / 1",
-            "success",
-            "local Skill updated",
+            &format!(
+                "{} / {}",
+                sync_report.success_count + 1,
+                sync_report.success_count + sync_report.failure_count + 1
+            ),
+            task_status,
+            &task_summary,
             None,
-            &[
-                format!("download remote Skill directory {}", skill.path),
-                format!("replace local files at {}", path_string(&dest)),
-                "record installed_skill_hash".into(),
-            ],
+            &task_log,
         )?;
         load_ui_skills(&db)
     })();
@@ -3028,11 +3855,14 @@ struct SkillRecord {
     installed_hash: Option<String>,
     source_type: String,
     install_path: Option<String>,
+    sync_targets_mode: String,
+    sync_targets: Vec<String>,
 }
 
 fn load_skill_record(conn: &Connection, id: &str) -> Result<Option<SkillRecord>, AppError> {
     conn.query_row(
-        "SELECT id, repo_id, name, path, installed, installed_hash, source_type, install_path
+        "SELECT id, repo_id, name, path, installed, installed_hash, source_type, install_path,
+                sync_targets_mode, sync_targets
          FROM skills WHERE id = ?1 AND deleted_at IS NULL",
         params![id],
         |row| {
@@ -3045,6 +3875,10 @@ fn load_skill_record(conn: &Connection, id: &str) -> Result<Option<SkillRecord>,
                 installed_hash: row.get(5)?,
                 source_type: row.get(6)?,
                 install_path: row.get(7)?,
+                sync_targets_mode: row
+                    .get::<_, Option<String>>(8)?
+                    .unwrap_or_else(|| "inherit".to_string()),
+                sync_targets: parse_sync_targets(row.get::<_, Option<String>>(9)?.as_deref()),
             })
         },
     )
@@ -3126,7 +3960,7 @@ fn scan_local_skills(
         if !validation.writable {
             return Err(AppError::with_details(
                 "skills_root_unwritable",
-                "Skills 目录不可用，请重新选择。",
+                "Skill 主库目录不可用，请重新选择。",
                 validation.message,
             ));
         }
@@ -3238,6 +4072,7 @@ fn delete_skill(
             .as_deref()
             .map(expand_tilde)
             .unwrap_or_else(|| skill_destination(&settings, &skill.name));
+        let sync_report = remove_all_sync_targets_for_skill(&db, &settings, &skill);
         let deleted_path = move_skill_to_deleted(&source, &state.data_dir, &skill.name)?;
         let now = utc_now();
         if skill.source_type == "installed_local" {
@@ -3265,23 +4100,31 @@ fn delete_skill(
                 params![skill.id, now],
             )?;
         }
+        let mut task_log = vec![format!(
+            "move {} -> {}",
+            path_string(&source),
+            path_string(&deleted_path)
+        )];
+        task_log.extend(sync_report.log.clone());
+        task_log.push("delete mode backup_then_remove".into());
         insert_task(
             &db,
             &format!("delete-skill-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Delete Skill",
             &skill.name,
-            "1 / 1",
-            "success",
-            "local Skill moved to deleted-skills",
+            &format!(
+                "{} / {}",
+                sync_report.success_count + 1,
+                sync_report.success_count + sync_report.failure_count + 1
+            ),
+            sync_task_status(&sync_report),
+            if sync_report.failure_count > 0 {
+                "local Skill moved to deleted-skills; sync cleanup partial"
+            } else {
+                "local Skill moved to deleted-skills"
+            },
             None,
-            &[
-                format!(
-                    "move {} -> {}",
-                    path_string(&source),
-                    path_string(&deleted_path)
-                ),
-                "delete mode backup_then_remove".into(),
-            ],
+            &task_log,
         )?;
         load_ui_skills(&db)
     })();
@@ -3372,23 +4215,37 @@ fn restore_skill(
              WHERE id = ?1",
             params![id, hash, now],
         )?;
+        let settings = settings_from_db(&db, state.token().is_some())?;
+        let restored_skill = load_skill_record(&db, &id)?
+            .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
+        let sync_report = reconcile_skill_sync(&db, &settings, &restored_skill);
+        let mut task_log = vec![
+            format!(
+                "restore {} -> {}",
+                path_string(&source),
+                path_string(&destination)
+            ),
+            "clear deleted_at".into(),
+        ];
+        task_log.extend(sync_report.log.clone());
         insert_task(
             &db,
             &format!("restore-skill-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Restore Skill",
             &name,
-            "1 / 1",
-            "success",
-            "local Skill restored",
+            &format!(
+                "{} / {}",
+                sync_report.success_count + 1,
+                sync_report.success_count + sync_report.failure_count + 1
+            ),
+            sync_task_status(&sync_report),
+            if sync_report.failure_count > 0 {
+                "local Skill restored; sync partial"
+            } else {
+                "local Skill restored"
+            },
             None,
-            &[
-                format!(
-                    "restore {} -> {}",
-                    path_string(&source),
-                    path_string(&destination)
-                ),
-                "clear deleted_at".into(),
-            ],
+            &task_log,
         )?;
         load_ui_skills(&db)
     })();
@@ -3405,6 +4262,105 @@ fn restore_skill(
             );
             api_err(error)
         }
+    }
+}
+
+#[tauri::command]
+fn sync_installed_skills(state: State<'_, AppState>) -> ApiResponse<Vec<UiSkill>> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = (|| -> Result<Vec<UiSkill>, AppError> {
+        let settings = settings_from_db(&db, state.token().is_some())?;
+        let mut stmt =
+            db.prepare("SELECT id FROM skills WHERE installed = 1 AND deleted_at IS NULL")?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let mut aggregate = SyncReport::default();
+        for id in ids {
+            let Some(skill) = load_skill_record(&db, &id)? else {
+                continue;
+            };
+            let report = reconcile_skill_sync(&db, &settings, &skill);
+            aggregate.success_count += report.success_count;
+            aggregate.failure_count += report.failure_count;
+            aggregate.skipped_count += report.skipped_count;
+            aggregate.log.extend(report.log);
+        }
+        insert_task(
+            &db,
+            &format!("sync-skills-{}", Local::now().format("%Y%m%d%H%M%S")),
+            "Sync installed Skills",
+            "Installed Skills",
+            &format!(
+                "{} / {}",
+                aggregate.success_count,
+                aggregate.success_count + aggregate.failure_count + aggregate.skipped_count
+            ),
+            sync_task_status(&aggregate),
+            &sync_task_summary(&aggregate),
+            None,
+            &aggregate.log,
+        )?;
+        load_ui_skills(&db)
+    })();
+    match result {
+        Ok(items) => ApiResponse::ok(items),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn update_skill_sync_targets(
+    request: SkillSyncTargetsRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<Vec<UiSkill>> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    let requested_skill_id = request.skill_id.clone();
+    let result = (|| -> Result<Vec<UiSkill>, AppError> {
+        let mode = if request.mode == "custom" {
+            "custom"
+        } else {
+            "inherit"
+        };
+        let targets = normalize_sync_targets(&request.targets);
+        db.execute(
+            "UPDATE skills
+             SET sync_targets_mode = ?2,
+                 sync_targets = ?3,
+                 updated_at = ?4
+             WHERE id = ?1",
+            params![
+                request.skill_id,
+                mode,
+                serialize_sync_targets(&targets),
+                utc_now()
+            ],
+        )?;
+        let settings = settings_from_db(&db, state.token().is_some())?;
+        let skill = load_skill_record(&db, &requested_skill_id)?
+            .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
+        let report = reconcile_skill_sync(&db, &settings, &skill);
+        insert_task(
+            &db,
+            &format!("sync-targets-{}", Local::now().format("%Y%m%d%H%M%S")),
+            "Update Skill sync targets",
+            &skill.name,
+            &format!(
+                "{} / {}",
+                report.success_count,
+                report.success_count + report.failure_count + report.skipped_count
+            ),
+            sync_task_status(&report),
+            &sync_task_summary(&report),
+            None,
+            &report.log,
+        )?;
+        load_ui_skills(&db)
+    })();
+    match result {
+        Ok(items) => ApiResponse::ok(items),
+        Err(error) => api_err(error),
     }
 }
 
@@ -3764,6 +4720,8 @@ pub fn run() {
             add_local_repository,
             delete_skill,
             restore_skill,
+            sync_installed_skills,
+            update_skill_sync_targets,
             list_tasks,
             retry_task,
             cancel_task,
@@ -3771,6 +4729,7 @@ pub fn run() {
             get_settings,
             update_settings,
             validate_directory,
+            pick_directory,
             set_github_token,
             clear_github_token,
             validate_github_token,
@@ -3835,19 +4794,32 @@ mod tests {
     }
 
     #[test]
-    fn prefers_cc_switch_default_skills_root() {
+    fn uses_skill_repo_tracker_default_library_root() {
         let home = tempfile::tempdir().unwrap();
-        let cc_switch = home.path().join(".cc-switch").join("skills");
-        fs::create_dir_all(&cc_switch).unwrap();
-        assert_eq!(default_skills_root(home.path()), cc_switch);
+        assert_eq!(
+            default_skill_library_root(home.path()),
+            home.path().join("SkillRepoTracker").join("skills")
+        );
     }
 
     #[test]
-    fn uses_cc_switch_default_even_before_directory_exists() {
+    fn seeds_library_and_existing_sync_targets() {
         let home = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let backup_root = home.path().join("SkillRepoBackups");
+        let library_root = home.path().join("SkillRepoTracker").join("skills");
+        fs::create_dir_all(home.path().join(".codex").join("skills")).unwrap();
+
+        seed_settings(&conn, home.path(), &backup_root, &library_root).unwrap();
+
         assert_eq!(
-            default_skills_root(home.path()),
-            home.path().join(".cc-switch").join("skills")
+            get_setting(&conn, "skill_library_root").unwrap(),
+            Some(path_string(&library_root))
+        );
+        assert_eq!(
+            sync_targets_from_db(&conn).unwrap(),
+            vec!["codex".to_string()]
         );
     }
 
@@ -3888,41 +4860,81 @@ mod tests {
     }
 
     #[test]
-    fn migrates_legacy_codex_skills_root() {
+    fn copies_legacy_skills_root_to_independent_library() {
         let home = tempfile::tempdir().unwrap();
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let backup_root = home.path().join("SkillRepoBackups");
         let legacy_root = home.path().join(".codex").join("skills");
-        let target_root = home.path().join(".cc-switch").join("skills");
-        seed_settings(&conn, &backup_root, &legacy_root).unwrap();
+        let target_root = home.path().join("SkillRepoTracker").join("skills");
+        let legacy_skill = legacy_root.join("demo-skill");
+        fs::create_dir_all(&legacy_skill).unwrap();
+        fs::write(legacy_skill.join("SKILL.md"), "name: demo-skill").unwrap();
+        seed_settings(&conn, home.path(), &backup_root, &target_root).unwrap();
+        set_setting(&conn, "skills_root", path_string(&legacy_root)).unwrap();
+        conn.execute(
+            "INSERT INTO repositories
+             (id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
+              backup_status, check_status, url, branch, source_type, created_at, updated_at)
+             VALUES ('local:installed:test', 'Local Skills Library', 'local', 'skills', 'local',
+              'skill repo', 1, 'local', 'local-only', 'success', 'file:///tmp/skills',
+              'local', 'local', ?1, ?1)",
+            params![utc_now()],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO skills
+             (id, repo_id, name, description, repo_name, path, ref_name, local_version,
+              remote_version, status, installed, updated_at, source_type, install_path)
+             VALUES ('skill-1', 'local:installed:test', 'demo-skill', '', 'Local Skills Library',
+              'demo-skill', 'local', 'local', 'local', 'installed-latest', 1, ?1,
+              'installed_local', ?2)",
+            params![utc_now(), path_string(&legacy_skill)],
+        )
+        .unwrap();
 
-        migrate_legacy_codex_skills_root(&conn, home.path(), &target_root).unwrap();
-
-        assert_eq!(
-            get_setting(&conn, "skills_root").unwrap(),
-            Some(path_string(&target_root))
-        );
-    }
-
-    #[test]
-    fn keeps_custom_skills_root_during_legacy_migration() {
-        let home = tempfile::tempdir().unwrap();
-        let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
-        let custom_root = home.path().join("CustomSkills");
-        set_setting(&conn, "skills_root", path_string(&custom_root)).unwrap();
-
-        migrate_legacy_codex_skills_root(
+        migrate_independent_skill_library(
             &conn,
             home.path(),
-            &home.path().join(".cc-switch").join("skills"),
+            &target_root,
+            Some(&path_string(&legacy_root)),
+            false,
         )
         .unwrap();
 
         assert_eq!(
-            get_setting(&conn, "skills_root").unwrap(),
-            Some(path_string(&custom_root))
+            get_setting(&conn, "skill_library_root").unwrap(),
+            Some(path_string(&target_root))
+        );
+        assert!(legacy_skill.exists());
+        assert!(target_root.join("demo-skill").join("SKILL.md").exists());
+        let expected_install_path = path_string(&target_root.join("demo-skill"));
+        assert_eq!(
+            load_ui_skills(&conn).unwrap()[0].install_path.as_deref(),
+            Some(expected_install_path.as_str())
+        );
+    }
+
+    #[test]
+    fn keeps_existing_library_setting_during_migration() {
+        let home = tempfile::tempdir().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let existing_library = home.path().join("ExistingLibrary");
+        set_setting(&conn, "skill_library_root", path_string(&existing_library)).unwrap();
+
+        migrate_independent_skill_library(
+            &conn,
+            home.path(),
+            &home.path().join("SkillRepoTracker").join("skills"),
+            Some(&path_string(&home.path().join("LegacySkills"))),
+            true,
+        )
+        .unwrap();
+
+        assert_eq!(
+            get_setting(&conn, "skill_library_root").unwrap(),
+            Some(path_string(&existing_library))
         );
     }
 
@@ -4021,9 +5033,9 @@ mod tests {
         assert_eq!(repo.recognized_skills[0].path, ".");
 
         let skills = load_ui_skills(&conn).unwrap();
-        assert!(skills
-            .iter()
-            .any(|skill| skill.name == "stale-example-skill" && skill.status == "source-unavailable"));
+        assert!(skills.iter().any(
+            |skill| skill.name == "stale-example-skill" && skill.status == "source-unavailable"
+        ));
     }
 
     #[test]
@@ -4038,6 +5050,38 @@ mod tests {
         assert!(!skill_dir.exists());
         assert!(deleted_path.join("SKILL.md").exists());
         assert!(deleted_path.starts_with(data_root.path().join("deleted-skills")));
+    }
+
+    #[test]
+    fn resolves_inherited_and_custom_sync_targets() {
+        let defaults = vec!["codex".to_string(), "gemini".to_string()];
+        let custom = vec!["claude".to_string(), "unknown".to_string()];
+
+        assert_eq!(
+            resolve_skill_sync_targets("inherit", &custom, &defaults),
+            defaults
+        );
+        assert_eq!(
+            resolve_skill_sync_targets("custom", &custom, &defaults),
+            vec!["claude".to_string()]
+        );
+        assert!(resolve_skill_sync_targets("custom", &[], &defaults).is_empty());
+    }
+
+    #[test]
+    fn replace_dir_from_source_copies_complete_target() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let dest = root.path().join("target").join("demo-skill");
+        fs::create_dir_all(source.join("nested")).unwrap();
+        fs::write(source.join("SKILL.md"), "name: demo-skill").unwrap();
+        fs::write(source.join("nested").join("notes.md"), "ok").unwrap();
+
+        let backup = replace_dir_from_source(&source, &dest, "codex", "demo-skill", 5).unwrap();
+
+        assert!(backup.is_none());
+        assert!(dest.join("SKILL.md").exists());
+        assert!(dest.join("nested").join("notes.md").exists());
     }
 
     #[test]
@@ -4161,5 +5205,13 @@ mod tests {
         assert!(columns.contains(&"install_path".to_string()));
         assert!(columns.contains(&"deleted_at".to_string()));
         assert!(columns.contains(&"deleted_path".to_string()));
+        assert!(columns.contains(&"sync_targets_mode".to_string()));
+        assert!(columns.contains(&"sync_targets".to_string()));
+
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'skill_sync_records'")
+            .unwrap();
+        let table_name: Option<String> = stmt.query_row([], |row| row.get(0)).optional().unwrap();
+        assert_eq!(table_name.as_deref(), Some("skill_sync_records"));
     }
 }
