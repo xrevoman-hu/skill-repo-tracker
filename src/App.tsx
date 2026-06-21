@@ -456,7 +456,7 @@ const navItems = [
 
 const APP_METADATA = {
   name: "Skill Repo Tracker",
-  version: "1.1.1",
+  version: "1.1.2",
   projectGithubUrl: "https://github.com/xrevoman-hu/skill-repo-tracker",
   openSource: true,
 };
