@@ -17,7 +17,7 @@ use tauri_plugin_dialog::DialogExt;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.1";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.2";
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
 const LOCAL_SKILLS_LIBRARY_NAME: &str = "本地 Skills 库";

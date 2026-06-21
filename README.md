@@ -22,7 +22,7 @@ Skill Repo Tracker 是一个给 AI Skill 使用者准备的本地桌面工具。
 
 Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再按你的选择发布到工具目录。主库默认在 `~/SkillRepoTracker/skills`，当前默认发布到 Claude Code 和 Codex。Gemini、OpenCode、OpenClaw、Hermes 可以手动勾选，但不会默认打开。
 
-当前版本：`v1.1.1`
+当前版本：`v1.1.2`
 
 ### 它帮你完成什么
 
@@ -94,7 +94,7 @@ Web 预览使用 mock state；Tauri 桌面版会调用真实 Rust commands、SQL
 
 ### 构建和验证
 
-生成 unsigned macOS `.app` 和 `.dmg`：
+生成 macOS `.app` 和 `.dmg`：
 
 ```bash
 npm run tauri build -- --bundles app,dmg
@@ -103,7 +103,9 @@ npm run tauri build -- --bundles app,dmg
 常见产物位置：
 
 - `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
-- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.1_*.dmg`
+- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.2_*.dmg`
+
+公开发布的 DMG 必须使用 Developer ID 签名并完成 Apple notarization。仅本地构建出的 unsigned 或 ad-hoc signed 产物适合开发验证，不应作为普通用户下载版本发布。
 
 发布前建议运行：
 
@@ -146,7 +148,7 @@ Skill Repo Tracker is a local-first macOS app for people who install, update, an
 
 Instead of treating Claude Code, Codex, Gemini, OpenCode, OpenClaw, or Hermes folders as the source of truth, the app keeps one independent Skill library at `~/SkillRepoTracker/skills`. Skills are installed there first, then copied to selected tool directories.
 
-Current version: `v1.1.1`
+Current version: `v1.1.2`
 
 ### What It Helps With
 
@@ -184,7 +186,9 @@ npm run tauri build -- --bundles app,dmg
 Generated artifacts:
 
 - `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
-- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.1_*.dmg`
+- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.2_*.dmg`
+
+Public DMG releases must be signed with Developer ID and notarized by Apple. Unsigned or ad-hoc signed local builds are for development validation only.
 
 ### License
 
