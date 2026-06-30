@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, isDesktopRuntime } from "./api";
+import type { GitHubAccount, GitHubRepository } from "./api";
+import { GitHubWorkbench } from "./GitHubWorkbench";
 
 const initialRepos = [
   {
@@ -447,7 +449,68 @@ const initialTasks = [
   },
 ];
 
+const initialGithubAccounts: GitHubAccount[] = [
+  {
+    id: "github:demo",
+    login: "demo-user",
+    displayName: "Demo user",
+    avatarUrl: null,
+    status: "verified",
+    scopes: "repo, user, starring",
+    lastVerified: "2026-06-30 10:00",
+    isDefault: true,
+  },
+];
+
+const initialGithubRepositories: GitHubRepository[] = [
+  {
+    accountId: "github:demo",
+    accountLogin: "demo-user",
+    owner: "example-org",
+    repo: "private-skill-kit",
+    fullName: "example-org/private-skill-kit",
+    htmlUrl: "https://github.com/example-org/private-skill-kit",
+    description: "Private Skill source repository with installable workflows.",
+    visibility: "private",
+    private: true,
+    fork: false,
+    archived: false,
+    defaultBranch: "main",
+    language: "TypeScript",
+    stargazersCount: 12,
+    starred: true,
+    trackedRepoId: null,
+    pushedAt: "2026-06-29 18:00",
+    updatedAt: "2026-06-29 18:00",
+    lastRefreshed: "2026-06-30 10:00",
+    permissions: "pull, push",
+  },
+  {
+    accountId: "github:demo",
+    accountLogin: "demo-user",
+    owner: "openai",
+    repo: "openai-cookbook",
+    fullName: "openai/openai-cookbook",
+    htmlUrl: "https://github.com/openai/openai-cookbook",
+    description: "Examples and guides for building with OpenAI.",
+    visibility: "public",
+    private: false,
+    fork: false,
+    archived: false,
+    defaultBranch: "main",
+    language: "MDX",
+    stargazersCount: 72000,
+    starred: true,
+    trackedRepoId: "cookbook",
+    pushedAt: "2026-06-28 11:00",
+    updatedAt: "2026-06-28 11:00",
+    lastRefreshed: "2026-06-30 10:00",
+    permissions: "pull",
+  },
+];
+
 const navItems = [
+  { id: "github", labelKey: "nav.github" },
   { id: "repositories", labelKey: "nav.repositories" },
   { id: "skills", labelKey: "nav.skills" },
   { id: "tasks", labelKey: "nav.tasks" },
@@ -456,7 +519,7 @@ const navItems = [
 
 const APP_METADATA = {
   name: "Skill Repo Tracker",
-  version: "1.1.2",
+  version: "1.1.3",
   projectGithubUrl: "https://github.com/xrevoman-hu/skill-repo-tracker",
   openSource: true,
 };
@@ -464,6 +527,7 @@ const APP_METADATA = {
 const COPY = {
   zh: {
     "nav.repositories": "仓库",
+    "nav.github": "GitHub",
     "nav.skills": "技能",
     "nav.tasks": "任务",
     "nav.settings": "设置",
@@ -679,6 +743,8 @@ const COPY = {
     githubAuthentication: "GitHub 认证",
     p1Disabled: "P1 未启用",
     authP1Text: "Token 仅保存到系统安全存储，不写入 SQLite、manifest 或任务日志。",
+    githubWorkbenchSettingsText: "账号、验证、刷新仓库、Star 和追踪操作都在 GitHub 工作台完成。这里保留安全状态，避免把 token 当成孤立设置项。",
+    openGithubWorkbench: "打开 GitHub 工作台",
     tokenStatus: "Token 状态",
     tokenConfigured: "已配置",
     tokenNotConfigured: "未配置",
@@ -772,9 +838,40 @@ const COPY = {
     localRepositoryAdded: "本地仓库已添加并扫描。",
     skillDeleted: "Skill 已移动到 deleted-skills。",
     noRunningTasks: "当前没有运行中任务。",
+    githubTitle: "GitHub",
+    githubSubtitle: "浏览当前账号可访问仓库、私仓和 Star 项目，并把需要的仓库加入追踪。",
+    refreshGithub: "刷新 GitHub",
+    refreshing: "刷新中…",
+    defaultAccount: "默认",
+    githubNoAccountTitle: "添加 GitHub 账号",
+    githubNoAccountText: "粘贴具备仓库读取权限的 token 后，可以查看私仓、Star 项目并加入追踪。",
+    addAccount: "添加账号",
+    githubAll: "全部",
+    githubPrivate: "私有",
+    githubPublic: "公开",
+    githubStarred: "Starred",
+    githubTracked: "已追踪",
+    visibility: "可见性",
+    stars: "Stars",
+    languageLabel: "语言",
+    tracked: "已追踪",
+    notTracked: "未追踪",
+    star: "Star",
+    unstar: "取消 Star",
+    track: "追踪",
+    untrack: "取消追踪",
+    notStarred: "未 Star",
+    githubNoReposTitle: "还没有仓库目录",
+    githubNoReposText: "刷新 GitHub 后会列出该账号可访问的仓库和 Star 项目。",
+    githubAccount: "GitHub 账号",
+    account: "账号",
+    permissions: "权限",
+    makeDefault: "设为默认",
+    deleteAccount: "删除账号",
   },
   en: {
     "nav.repositories": "Repositories",
+    "nav.github": "GitHub",
     "nav.skills": "Skills",
     "nav.tasks": "Tasks",
     "nav.settings": "Settings",
@@ -990,6 +1087,8 @@ const COPY = {
     githubAuthentication: "GitHub authentication",
     p1Disabled: "P1 disabled",
     authP1Text: "Tokens are stored only in the secure system store, never in SQLite, manifests, or task logs.",
+    githubWorkbenchSettingsText: "Account validation, repository refresh, Star actions, and tracking now happen in the GitHub workbench. Settings keep the security status without turning the token into a dead-end field.",
+    openGithubWorkbench: "Open GitHub Workbench",
     tokenStatus: "Token status",
     tokenConfigured: "Configured",
     tokenNotConfigured: "Not configured",
@@ -1083,6 +1182,36 @@ const COPY = {
     localRepositoryAdded: "Local repository added and scanned.",
     skillDeleted: "Skill moved to deleted-skills.",
     noRunningTasks: "No tasks are currently running.",
+    githubTitle: "GitHub",
+    githubSubtitle: "Browse accessible repositories, private repositories, and starred projects, then track what matters.",
+    refreshGithub: "Refresh GitHub",
+    refreshing: "Refreshing...",
+    defaultAccount: "Default",
+    githubNoAccountTitle: "Add GitHub account",
+    githubNoAccountText: "Paste a token with repository read access to browse private repos, starred projects, and tracked sources.",
+    addAccount: "Add account",
+    githubAll: "All",
+    githubPrivate: "Private",
+    githubPublic: "Public",
+    githubStarred: "Starred",
+    githubTracked: "Tracked",
+    visibility: "Visibility",
+    stars: "Stars",
+    languageLabel: "Language",
+    tracked: "Tracked",
+    notTracked: "Not tracked",
+    star: "Star",
+    unstar: "Unstar",
+    track: "Track",
+    untrack: "Untrack",
+    notStarred: "Not starred",
+    githubNoReposTitle: "No GitHub catalog yet",
+    githubNoReposText: "Refresh GitHub to list accessible repositories and starred projects.",
+    githubAccount: "GitHub account",
+    account: "Account",
+    permissions: "Permissions",
+    makeDefault: "Make default",
+    deleteAccount: "Delete account",
   },
 };
 
@@ -1466,10 +1595,12 @@ export function App() {
   const [cleanupKeep, setCleanupKeep] = useState(20);
   const [overwriteProtection, setOverwriteProtection] = useState(true);
   const [requireConfirmation, setRequireConfirmation] = useState(true);
-  const [githubToken, setGithubToken] = useState("");
   const [githubTokenConfigured, setGithubTokenConfigured] = useState(false);
   const [githubTokenStatus, setGithubTokenStatus] = useState("not_configured");
   const [githubTokenLastVerified, setGithubTokenLastVerified] = useState(null);
+  const [githubAccounts, setGithubAccounts] = useState<GitHubAccount[]>(initialGithubAccounts);
+  const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>(initialGithubRepositories);
+  const [activeGithubAccountId, setActiveGithubAccountId] = useState("github:demo");
   const [isAddingRepo, setIsAddingRepo] = useState(false);
   const addRepoRequestRef = useRef(0);
   const [nextAutoCheckAt, setNextAutoCheckAt] = useState(null);
@@ -1544,15 +1675,33 @@ export function App() {
   async function refreshDesktopState() {
     if (!desktopRuntime) return;
     try {
-      const [nextRepos, nextSkills, nextTasks, nextSettings] = await Promise.all([
+      const [
+        nextRepos,
+        nextSkills,
+        nextTasks,
+        nextSettings,
+        nextGithubAccounts,
+        nextGithubRepositories,
+      ] = await Promise.all([
         api.listRepositories(),
         api.listSkills(),
         api.listTasks(),
         api.getSettings(),
+        api.listGithubAccounts(),
+        api.listGithubRepositoryCatalog(),
       ]);
       setRepositories(nextRepos);
       setSkills(nextSkills);
       setTasks(nextTasks);
+      setGithubAccounts(nextGithubAccounts);
+      setGithubRepositories(nextGithubRepositories);
+      const nextDefaultAccount =
+        nextGithubAccounts.find((account) => account.isDefault) || nextGithubAccounts[0];
+      setActiveGithubAccountId((id) =>
+        id && nextGithubAccounts.some((account) => account.id === id)
+          ? id
+          : nextDefaultAccount?.id || "",
+      );
       applySettings(nextSettings);
       if (!nextRepos.length) {
         setSelectedRepoId("");
@@ -1607,8 +1756,6 @@ export function App() {
     setOverwriteProtection,
     requireConfirmation,
     setRequireConfirmation,
-    githubToken,
-    setGithubToken,
     githubTokenConfigured,
     githubTokenStatus,
     githubTokenLastVerified,
@@ -1623,10 +1770,8 @@ export function App() {
     syncInstalledSkills,
     persistSettings,
     updateSkillSyncTargets,
-    saveGithubToken,
-    clearGithubToken,
-    validateGithubToken,
     showToast,
+    openGitHubWorkbench: () => setActiveTab("github"),
     t,
   };
 
@@ -2083,25 +2228,50 @@ export function App() {
     setActionPending(actionKey, false);
   }
 
-  async function saveGithubToken() {
-    if (!githubToken.trim()) return;
-    const actionKey = "saveGithubToken";
+  function githubRepoActionKey(repo) {
+    return `${repo.accountId}:${repo.fullName}`;
+  }
+
+  async function saveGithubAccountToken(token) {
+    const actionKey = "githubSaveToken";
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
     if (desktopRuntime) {
       try {
-        const nextSettings = await api.setGithubToken(githubToken.trim());
-        applySettings(nextSettings);
-        setGithubToken("");
-        try {
-          const verifiedSettings = await api.validateGithubToken();
-          applySettings(verifiedSettings);
-          showToast(t("tokenValidated"));
-        } catch (validationError) {
-          const latestSettings = await api.getSettings();
-          applySettings(latestSettings);
-          showToast(validationError.message || t("tokenSavedButValidationFailed"));
+        const accounts = await api.saveGithubAccountToken(token);
+        setGithubAccounts(accounts);
+        const nextDefault = accounts.find((account) => account.isDefault) || accounts[0];
+        setActiveGithubAccountId(nextDefault?.id || "");
+        showToast(t("tokenValidated"));
+      } catch (error) {
+        showToast(error.message || t("tokenSavedButValidationFailed"));
+      } finally {
+        setActionPending(actionKey, false);
+      }
+      return;
+    }
+    showToast(t("tokenValidated"));
+    setActionPending(actionKey, false);
+  }
+
+  async function refreshGithubCatalog(accountId) {
+    const actionKey = `githubRefresh:${accountId || "all"}`;
+    if (isPending(actionKey)) return;
+    setActionPending(actionKey, true);
+    if (desktopRuntime) {
+      try {
+        const repos = await api.refreshGithubRepositories(accountId);
+        if (accountId) {
+          setGithubRepositories((items) => [
+            ...items.filter((item) => item.accountId !== accountId),
+            ...repos,
+          ]);
+        } else {
+          setGithubRepositories(repos);
         }
+        const accounts = await api.listGithubAccounts();
+        setGithubAccounts(accounts);
+        showToast(t("remoteRefreshed"));
       } catch (error) {
         showToast(error.message || t("sourceUnavailableToast"));
       } finally {
@@ -2109,55 +2279,176 @@ export function App() {
       }
       return;
     }
-    showToast(t("tokenSaved"));
+    showToast(t("remoteRefreshed"));
     setActionPending(actionKey, false);
   }
 
-  async function clearGithubToken() {
-    const actionKey = "clearGithubToken";
+  async function validateGithubAccount(accountId) {
+    const actionKey = `githubValidate:${accountId}`;
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
     if (desktopRuntime) {
       try {
-        const nextSettings = await api.clearGithubToken();
-        applySettings(nextSettings);
+        const accounts = await api.validateGithubAccount(accountId);
+        setGithubAccounts(accounts);
+        showToast(t("tokenValidated"));
+      } catch (error) {
+        showToast(error.message || t("tokenSavedButValidationFailed"));
+      } finally {
+        setActionPending(actionKey, false);
+      }
+      return;
+    }
+    showToast(t("tokenValidated"));
+    setActionPending(actionKey, false);
+  }
+
+  async function setDefaultGithubAccount(accountId) {
+    if (desktopRuntime) {
+      try {
+        const accounts = await api.setDefaultGithubAccount(accountId);
+        setGithubAccounts(accounts);
+        setActiveGithubAccountId(accountId);
+        showToast(t("settingsSaved"));
+      } catch (error) {
+        showToast(error.message || t("sourceUnavailableToast"));
+      }
+      return;
+    }
+    setGithubAccounts((items) =>
+      items.map((account) => ({ ...account, isDefault: account.id === accountId })),
+    );
+    setActiveGithubAccountId(accountId);
+  }
+
+  async function deleteGithubAccount(accountId) {
+    const account = githubAccounts.find((item) => item.id === accountId);
+    if (!window.confirm(`${t("deleteAccount")}: ${account?.login || accountId}?`)) return;
+    if (desktopRuntime) {
+      try {
+        const accounts = await api.deleteGithubAccount(accountId);
+        setGithubAccounts(accounts);
+        setGithubRepositories((items) => items.filter((item) => item.accountId !== accountId));
+        const nextDefault = accounts.find((item) => item.isDefault) || accounts[0];
+        setActiveGithubAccountId(nextDefault?.id || "");
         showToast(t("tokenCleared"));
       } catch (error) {
         showToast(error.message || t("sourceUnavailableToast"));
+      }
+      return;
+    }
+    setGithubAccounts((items) => items.filter((item) => item.id !== accountId));
+    setGithubRepositories((items) => items.filter((item) => item.accountId !== accountId));
+  }
+
+  async function toggleGithubStar(repo) {
+    const actionKey = `githubStar:${githubRepoActionKey(repo)}`;
+    if (isPending(actionKey)) return;
+    setActionPending(actionKey, true);
+    if (desktopRuntime) {
+      try {
+        const repos = await api.setGithubStar(repo.accountId, repo.owner, repo.repo, !repo.starred);
+        setGithubRepositories((items) => [
+          ...items.filter((item) => item.accountId !== repo.accountId),
+          ...repos,
+        ]);
+        showToast(!repo.starred ? t("star") : t("unstar"));
+      } catch (error) {
+        showToast(error.message || t("sourceUnavailableToast"));
       } finally {
         setActionPending(actionKey, false);
       }
       return;
     }
-    showToast(t("tokenCleared"));
+    setGithubRepositories((items) =>
+      items.map((item) =>
+        githubRepoActionKey(item) === githubRepoActionKey(repo)
+          ? { ...item, starred: !item.starred }
+          : item,
+      ),
+    );
     setActionPending(actionKey, false);
   }
 
-  async function validateGithubToken() {
-    const actionKey = "validateGithubToken";
+  async function trackGithubRepository(repo) {
+    const actionKey = `githubTrack:${githubRepoActionKey(repo)}`;
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
     if (desktopRuntime) {
       try {
-        const nextSettings = await api.validateGithubToken();
-        applySettings(nextSettings);
-        showToast(t("tokenValidated"));
+        const nextRepos = await api.addRepositoryFromGithub(
+          repo.accountId,
+          repo.owner,
+          repo.repo,
+          repo.defaultBranch || "main",
+        );
+        const [nextSkills, nextTasks, nextCatalog] = await Promise.all([
+          api.listSkills(),
+          api.listTasks(),
+          api.listGithubRepositoryCatalog(repo.accountId),
+        ]);
+        setRepositories(nextRepos);
+        setSkills(nextSkills);
+        setTasks(nextTasks);
+        setGithubRepositories((items) => [
+          ...items.filter((item) => item.accountId !== repo.accountId),
+          ...nextCatalog,
+        ]);
+        showToast(t("repoAddedGeneric"));
       } catch (error) {
-        try {
-          const latestSettings = await api.getSettings();
-          applySettings(latestSettings);
-        } catch {
-          // Keep the previous UI state if settings cannot be reloaded.
-        }
+        showToast(error.message || t("repoExists"));
+      } finally {
+        setActionPending(actionKey, false);
+      }
+      return;
+    }
+    setGithubRepositories((items) =>
+      items.map((item) =>
+        githubRepoActionKey(item) === githubRepoActionKey(repo)
+          ? { ...item, trackedRepoId: `github:${item.fullName}:${item.defaultBranch || "main"}` }
+          : item,
+      ),
+    );
+    setActionPending(actionKey, false);
+  }
+
+  async function untrackGithubRepository(repo) {
+    if (!repo.trackedRepoId) return;
+    if (!window.confirm(`${t("untrack")}: ${repo.fullName}?`)) return;
+    const actionKey = `githubTrack:${githubRepoActionKey(repo)}`;
+    if (isPending(actionKey)) return;
+    setActionPending(actionKey, true);
+    if (desktopRuntime) {
+      try {
+        const nextRepos = await api.removeRepository(repo.trackedRepoId);
+        const [nextSkills, nextTasks, nextCatalog] = await Promise.all([
+          api.listSkills(),
+          api.listTasks(),
+          api.listGithubRepositoryCatalog(repo.accountId),
+        ]);
+        setRepositories(nextRepos);
+        setSkills(nextSkills);
+        setTasks(nextTasks);
+        setGithubRepositories((items) => [
+          ...items.filter((item) => item.accountId !== repo.accountId),
+          ...nextCatalog,
+        ]);
+        showToast(t("settingsSaved"));
+      } catch (error) {
         showToast(error.message || t("sourceUnavailableToast"));
       } finally {
         setActionPending(actionKey, false);
       }
+      return;
     }
-    if (!desktopRuntime) {
-      showToast(t("tokenValidated"));
-      setActionPending(actionKey, false);
-    }
+    setGithubRepositories((items) =>
+      items.map((item) =>
+        githubRepoActionKey(item) === githubRepoActionKey(repo)
+          ? { ...item, trackedRepoId: null }
+          : item,
+      ),
+    );
+    setActionPending(actionKey, false);
   }
 
   async function confirmAddRepo() {
@@ -2585,7 +2876,7 @@ export function App() {
     }
   }
 
-  async function openGithubUrl(url, mode = "embedded", browserId) {
+  async function openGithubUrl(url: string, mode = "embedded", browserId?: string) {
     if (!url) return;
     if (mode === "embedded") {
       setModal({ type: "github-preview", url });
@@ -2745,8 +3036,8 @@ export function App() {
 
       </aside>
 
-      <section className={`workspace ${activeTab === "settings" ? "settings-workspace" : ""}`}>
-        {activeTab !== "settings" && (
+      <section className={`workspace ${activeTab === "settings" || activeTab === "github" ? "settings-workspace" : ""}`}>
+        {activeTab !== "settings" && activeTab !== "github" && (
           <Toolbar
             activeTab={activeTab}
             search={search}
@@ -2791,6 +3082,26 @@ export function App() {
               openAddRepoModal={openAddRepoModal}
               hasRepositories={repositories.length > 0}
               language={language}
+              t={t}
+            />
+          )}
+
+          {activeTab === "github" && (
+            <GitHubWorkbench
+              accounts={githubAccounts}
+              repositories={githubRepositories}
+              activeAccountId={activeGithubAccountId}
+              setActiveAccountId={setActiveGithubAccountId}
+              isPending={isPending}
+              onSaveToken={saveGithubAccountToken}
+              onRefresh={refreshGithubCatalog}
+              onValidateAccount={validateGithubAccount}
+              onSetDefaultAccount={setDefaultGithubAccount}
+              onDeleteAccount={deleteGithubAccount}
+              onToggleStar={toggleGithubStar}
+              onTrackRepository={trackGithubRepository}
+              onUntrackRepository={untrackGithubRepository}
+              onOpenUrl={openGithubUrl}
               t={t}
             />
           )}
@@ -2877,7 +3188,7 @@ export function App() {
           )}
         </div>
 
-        {activeTab !== "settings" && (
+        {activeTab !== "settings" && activeTab !== "github" && (
           <RunningTask tasks={tasks} setActiveTab={setActiveTab} language={language} t={t} />
         )}
       </section>
@@ -4048,8 +4359,6 @@ function PreferencesPanel({
   setOverwriteProtection,
   requireConfirmation,
   setRequireConfirmation,
-  githubToken,
-  setGithubToken,
   githubTokenConfigured,
   githubTokenStatus,
   githubTokenLastVerified,
@@ -4060,10 +4369,8 @@ function PreferencesPanel({
   validateDirectory,
   syncInstalledSkills,
   persistSettings,
-  saveGithubToken,
-  clearGithubToken,
-  validateGithubToken,
   showToast,
+  openGitHubWorkbench,
   desktopRuntime,
   compact,
   isPending,
@@ -4366,36 +4673,10 @@ function PreferencesPanel({
             <span>{t("lastVerified")}</span>
             <strong>{githubTokenLastVerified || t("neverVerified")}</strong>
           </div>
-          <SettingRow controlId="github-token-input" label={t("configureToken")} stacked>
-            <input
-              id="github-token-input"
-              onChange={(event) => setGithubToken(event.target.value)}
-              placeholder={t("tokenPlaceholder")}
-              type="password"
-              value={githubToken}
-            />
-          </SettingRow>
+          <p className="settings-note">{t("githubWorkbenchSettingsText")}</p>
           <div className="row-actions settings-token-actions">
-            <button
-              disabled={isPending("saveGithubToken")}
-              onClick={saveGithubToken}
-              type="button"
-            >
-              {isPending("saveGithubToken") ? t("saving") : t("configureToken")}
-            </button>
-            <button
-              disabled={isPending("validateGithubToken")}
-              onClick={validateGithubToken}
-              type="button"
-            >
-              {isPending("validateGithubToken") ? t("validating") : t("validateToken")}
-            </button>
-            <button
-              disabled={isPending("clearGithubToken")}
-              onClick={clearGithubToken}
-              type="button"
-            >
-              {isPending("clearGithubToken") ? t("clearing") : t("clearToken")}
+            <button onClick={openGitHubWorkbench} type="button">
+              {t("openGithubWorkbench")}
             </button>
           </div>
         </SettingsSection>

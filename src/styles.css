@@ -486,6 +486,18 @@ a {
   grid-column: 1 / -1;
 }
 
+.github-workbench-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 330px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.github-workbench-grid.no-inspector {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .pane-header {
   display: flex;
   gap: 20px;
@@ -540,6 +552,182 @@ a {
 .choice-row button:hover:not(.selected) {
   background: rgba(255, 255, 255, 0.65);
   color: var(--text);
+}
+
+.github-pane {
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
+.github-header {
+  align-items: center;
+}
+
+.github-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.github-account-strip {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  gap: 12px;
+  align-items: center;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #fff;
+}
+
+.account-pill-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.account-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 168px;
+  max-width: 280px;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fbfcfd;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.account-pill > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-pill.selected {
+  border-color: #9bc2ff;
+  background: #f3f8ff;
+  box-shadow: inset 0 0 0 1px rgba(31, 114, 232, 0.14);
+}
+
+.github-empty-inline {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.github-empty-inline strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.token-add-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+}
+
+.token-add-row input {
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid #d1d6de;
+  border-radius: 7px;
+  background: #fff;
+  color: var(--text);
+  outline: none;
+}
+
+.token-add-row input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(31, 114, 232, 0.14);
+}
+
+.github-filter-bar {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  min-width: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+  background: #fbfcfd;
+}
+
+.github-filter-bar .segmented {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.github-search {
+  width: min(320px, 36vw);
+  min-width: 220px;
+}
+
+.github-table-frame {
+  background: #fff;
+}
+
+.github-table th:nth-child(1),
+.github-table td:nth-child(1) {
+  width: 30%;
+}
+
+.github-table th:nth-child(2),
+.github-table td:nth-child(2) {
+  width: 110px;
+}
+
+.github-table th:nth-child(3),
+.github-table td:nth-child(3) {
+  width: 92px;
+}
+
+.github-table th:nth-child(4),
+.github-table td:nth-child(4) {
+  width: 64px;
+}
+
+.github-table th:nth-child(5),
+.github-table td:nth-child(5),
+.github-table th:nth-child(6),
+.github-table td:nth-child(6) {
+  width: 92px;
+}
+
+.github-table th:nth-child(7),
+.github-table td:nth-child(7) {
+  width: 150px;
+}
+
+.github-table td:first-child strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.github-table .row-actions {
+  flex-wrap: nowrap;
+}
+
+.github-empty {
+  min-height: 320px;
+}
+
+.github-inspector .action-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .table-frame {
@@ -1932,6 +2120,9 @@ input[type="checkbox"] {
 .app-shell[data-theme="dark"] .disabled-group,
 .app-shell[data-theme="dark"] .result-box,
 .app-shell[data-theme="dark"] .segmented,
+.app-shell[data-theme="dark"] .github-account-strip,
+.app-shell[data-theme="dark"] .github-filter-bar,
+.app-shell[data-theme="dark"] .github-table-frame,
 .app-shell[data-theme="dark"] .manifest,
 .app-shell[data-theme="dark"] .markdown-preview-block pre,
 .app-shell[data-theme="dark"] .browser-choice p,
@@ -1969,6 +2160,8 @@ input[type="checkbox"] {
 .app-shell[data-theme="dark"] .button,
 .app-shell[data-theme="dark"] .row-actions button,
 .app-shell[data-theme="dark"] .icon-button,
+.app-shell[data-theme="dark"] .account-pill,
+.app-shell[data-theme="dark"] .token-add-row input,
 .app-shell[data-theme="dark"] .form-row input,
 .app-shell[data-theme="dark"] .settings-section input,
 .app-shell[data-theme="dark"] .folder-picker-row button,
@@ -1978,6 +2171,12 @@ input[type="checkbox"] {
   border-color: var(--line);
   background: #202631;
   color: var(--text);
+}
+
+.app-shell[data-theme="dark"] .account-pill.selected {
+  border-color: #4d8ff2;
+  background: #1c2a3d;
+  box-shadow: inset 0 0 0 1px rgba(105, 168, 255, 0.18);
 }
 
 .app-shell[data-theme="dark"] .button:hover:not(:disabled),
@@ -2134,6 +2333,16 @@ input[type="checkbox"] {
     grid-template-columns: minmax(0, 1fr) 330px;
   }
 
+  .github-workbench-grid {
+    grid-template-columns: minmax(0, 1fr);
+    overflow: auto;
+  }
+
+  .github-inspector {
+    border-top: 1px solid var(--line);
+    border-left: 0;
+  }
+
   .toolbar {
     grid-template-columns: minmax(0, 1fr) minmax(180px, auto);
   }
@@ -2164,6 +2373,25 @@ input[type="checkbox"] {
 }
 
 @media (max-width: 980px) {
+  .github-account-strip,
+  .github-filter-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .github-account-strip,
+  .github-filter-bar {
+    display: grid;
+  }
+
+  .github-search {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .token-add-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .settings-main-column,
   .settings-side-column {
     grid-template-columns: minmax(0, 1fr);

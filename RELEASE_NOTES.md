@@ -1,5 +1,17 @@
 # Release Notes
 
+## v1.1.3 - GitHub 私仓与 Star 工作台
+
+这个版本新增独立 GitHub 工作台，用于管理多个 GitHub 账号 token、浏览可访问仓库和 Star 项目，并把私仓按正确账号加入追踪。
+
+- 新增 GitHub 账号档案：SQLite 只保存账号元数据和 keyring 引用，真实 token 仍只进入 macOS Keychain。
+- 新增仓库目录：可刷新个人仓库、私仓、组织可访问仓库和 Starred 仓库，并按全部 / 私有 / Starred / 已追踪筛选。
+- 支持 Star / Unstar、从 GitHub 加入追踪、取消追踪、验证账号、设为默认账号和删除账号。
+- 已追踪仓库会记录首选 GitHub 账号，后续检测、备份、README 和 Skill 读取会优先使用对应账号 token。
+- 设置页保留 GitHub 安全状态和工作台入口，不再把 token 配置做成孤立流程。
+
+下载说明：Apple Silicon，macOS 12+。本地验证产物未 notarize，不作为普通用户公开分发包。
+
 ## v1.1.2 - Skill 同步安全修正版
 
 这个版本延续 v1.1.1 的 Skill 同步安全策略，适用于 Apple Silicon macOS 12+。

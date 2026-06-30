@@ -1,6 +1,8 @@
 use base64::{engine::general_purpose, Engine as _};
 use chrono::{DateTime, Local, Utc};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};
+use reqwest::header::{
+    HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, LINK, USER_AGENT,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -17,9 +19,11 @@ use tauri_plugin_dialog::DialogExt;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.2";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.3";
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
+const LEGACY_GITHUB_ACCOUNT_ID: &str = "github:legacy-default";
+const GITHUB_API_VERSION: &str = "2022-11-28";
 const LOCAL_SKILLS_LIBRARY_NAME: &str = "本地 Skills 库";
 const LEGACY_LOCAL_SKILLS_LIBRARY_NAME: &str = "Local Skills Library";
 const PREVIEW_MAX_CHARS: usize = 120_000;
@@ -140,6 +144,7 @@ impl AppState {
         let had_library_setting = get_setting(&conn, "skill_library_root")?.is_some();
 
         seed_settings(&conn, &home, &default_backup_root, &default_library_root)?;
+        migrate_legacy_github_account(&conn)?;
         migrate_default_sync_targets(&conn, &home)?;
         migrate_independent_skill_library(
             &conn,
@@ -157,11 +162,65 @@ impl AppState {
         })
     }
 
-    fn token(&self) -> Option<String> {
-        keyring::Entry::new(TOKEN_SERVICE, TOKEN_USER)
+    fn token_for_key(&self, token_key: &str) -> Option<String> {
+        keyring::Entry::new(TOKEN_SERVICE, token_key)
             .ok()
             .and_then(|entry| entry.get_password().ok())
             .filter(|token| !token.trim().is_empty())
+    }
+
+    fn legacy_token(&self) -> Option<String> {
+        self.token_for_key(TOKEN_USER)
+    }
+
+    fn default_github_token(&self) -> Option<String> {
+        let token_key = {
+            let db = self.db.lock().ok()?;
+            default_github_account(&db)
+                .ok()
+                .flatten()
+                .map(|account| account.token_key)
+        };
+        token_key
+            .as_deref()
+            .and_then(|key| self.token_for_key(key))
+            .or_else(|| self.legacy_token())
+    }
+
+    fn default_github_token_with_account(&self) -> (Option<String>, Option<String>) {
+        let account = {
+            let db = match self.db.lock() {
+                Ok(db) => db,
+                Err(_) => return (self.legacy_token(), None),
+            };
+            default_github_account(&db).ok().flatten()
+        };
+        match account {
+            Some(account) => (
+                self.token_for_key(&account.token_key)
+                    .or_else(|| self.legacy_token()),
+                Some(account.id),
+            ),
+            None => (self.legacy_token(), None),
+        }
+    }
+
+    fn token_for_account(&self, account_id: &str) -> Option<String> {
+        let token_key = {
+            let db = self.db.lock().ok()?;
+            github_account_by_id(&db, account_id)
+                .ok()
+                .flatten()
+                .map(|account| account.token_key)
+        }?;
+        self.token_for_key(&token_key)
+    }
+
+    fn token_for_repo(&self, repo: &RepoRecord) -> Option<String> {
+        repo.github_account_id
+            .as_deref()
+            .and_then(|account_id| self.token_for_account(account_id))
+            .or_else(|| self.default_github_token())
     }
 }
 
@@ -265,6 +324,44 @@ pub struct BrowserInfo {
     id: String,
     name: String,
     app_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UiGithubAccount {
+    id: String,
+    login: String,
+    display_name: String,
+    avatar_url: Option<String>,
+    status: String,
+    scopes: String,
+    last_verified: Option<String>,
+    is_default: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UiGithubRepository {
+    account_id: String,
+    account_login: String,
+    owner: String,
+    repo: String,
+    full_name: String,
+    html_url: String,
+    description: String,
+    visibility: String,
+    private: bool,
+    fork: bool,
+    archived: bool,
+    default_branch: String,
+    language: String,
+    stargazers_count: i64,
+    starred: bool,
+    tracked_repo_id: Option<String>,
+    pushed_at: Option<String>,
+    updated_at: Option<String>,
+    last_refreshed: Option<String>,
+    permissions: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -434,6 +531,42 @@ pub struct TokenRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GithubAccountTokenRequest {
+    token: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubAccountRequest {
+    account_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubCatalogRequest {
+    account_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubStarRequest {
+    account_id: String,
+    owner: String,
+    repo: String,
+    starred: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddRepositoryFromGithubRequest {
+    account_id: String,
+    owner: String,
+    repo: String,
+    ref_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateSettingsRequest {
     backup_root: Option<String>,
     skills_root: Option<String>,
@@ -490,6 +623,20 @@ struct RepoRecord {
     snapshot_time: Option<String>,
     source_type: String,
     local_path: Option<String>,
+    github_account_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct GithubAccountRecord {
+    id: String,
+    login: String,
+    display_name: String,
+    avatar_url: Option<String>,
+    token_key: String,
+    status: String,
+    scopes: String,
+    last_verified: Option<String>,
+    is_default: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -560,6 +707,7 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           snapshot_time TEXT,
           source_type TEXT NOT NULL DEFAULT 'github',
           local_path TEXT,
+          github_account_id TEXT,
           canonical_name TEXT,
           error TEXT,
           created_at TEXT NOT NULL,
@@ -641,6 +789,44 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           value TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS github_accounts (
+          id TEXT PRIMARY KEY,
+          login TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          avatar_url TEXT,
+          token_key TEXT NOT NULL UNIQUE,
+          status TEXT NOT NULL DEFAULT 'saved_unverified',
+          scopes TEXT NOT NULL DEFAULT '',
+          last_verified TEXT,
+          is_default INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS github_repo_catalog (
+          account_id TEXT NOT NULL,
+          full_name TEXT NOT NULL,
+          owner TEXT NOT NULL,
+          repo TEXT NOT NULL,
+          github_id INTEGER NOT NULL DEFAULT 0,
+          html_url TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          visibility TEXT NOT NULL DEFAULT 'public',
+          private INTEGER NOT NULL DEFAULT 0,
+          fork INTEGER NOT NULL DEFAULT 0,
+          archived INTEGER NOT NULL DEFAULT 0,
+          default_branch TEXT NOT NULL DEFAULT 'main',
+          language TEXT NOT NULL DEFAULT '',
+          stargazers_count INTEGER NOT NULL DEFAULT 0,
+          starred INTEGER NOT NULL DEFAULT 0,
+          permissions TEXT NOT NULL DEFAULT '',
+          pushed_at TEXT,
+          github_updated_at TEXT,
+          last_refreshed TEXT NOT NULL,
+          PRIMARY KEY(account_id, full_name),
+          FOREIGN KEY(account_id) REFERENCES github_accounts(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS backup_manifests (
           id TEXT PRIMARY KEY,
           backup_dir TEXT NOT NULL,
@@ -670,6 +856,12 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
         "repositories",
         "local_path",
         "ALTER TABLE repositories ADD COLUMN local_path TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
+        "repositories",
+        "github_account_id",
+        "ALTER TABLE repositories ADD COLUMN github_account_id TEXT",
     )?;
     add_column_if_missing(
         conn,
@@ -770,6 +962,159 @@ fn seed_settings(
     conn.execute(
         "INSERT OR IGNORE INTO schedules (kind, enabled, interval_minutes, updated_at) VALUES ('backup', 0, 1440, ?1)",
         params![utc_now()],
+    )?;
+    Ok(())
+}
+
+fn github_account_token_key(account_id: &str) -> String {
+    format!("github-account-token:{account_id}")
+}
+
+fn github_account_id_for_login(login: &str) -> String {
+    format!("github:{}", slugify(&login.to_ascii_lowercase()))
+}
+
+fn github_account_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<GithubAccountRecord> {
+    Ok(GithubAccountRecord {
+        id: row.get("id")?,
+        login: row.get("login")?,
+        display_name: row.get("display_name")?,
+        avatar_url: row.get("avatar_url")?,
+        token_key: row.get("token_key")?,
+        status: row.get("status")?,
+        scopes: row.get("scopes")?,
+        last_verified: row.get("last_verified")?,
+        is_default: row.get::<_, i64>("is_default")? == 1,
+    })
+}
+
+fn github_account_by_id(
+    conn: &Connection,
+    account_id: &str,
+) -> Result<Option<GithubAccountRecord>, AppError> {
+    conn.query_row(
+        "SELECT * FROM github_accounts WHERE id = ?1",
+        params![account_id],
+        github_account_from_row,
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+fn default_github_account(conn: &Connection) -> Result<Option<GithubAccountRecord>, AppError> {
+    conn.query_row(
+        "SELECT * FROM github_accounts
+         ORDER BY is_default DESC, updated_at DESC
+         LIMIT 1",
+        [],
+        github_account_from_row,
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+fn github_auth_configured(conn: &Connection) -> bool {
+    conn.query_row("SELECT COUNT(*) FROM github_accounts", [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .map(|count| count > 0)
+    .unwrap_or(false)
+        || parse_bool(get_setting(conn, "github_token_configured").ok().flatten())
+}
+
+fn ui_github_account(account: GithubAccountRecord) -> UiGithubAccount {
+    UiGithubAccount {
+        id: account.id,
+        login: account.login,
+        display_name: account.display_name,
+        avatar_url: account.avatar_url,
+        status: account.status,
+        scopes: account.scopes,
+        last_verified: account
+            .last_verified
+            .map(|value| local_display(Some(&value))),
+        is_default: account.is_default,
+    }
+}
+
+fn load_ui_github_accounts(conn: &Connection) -> Result<Vec<UiGithubAccount>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT * FROM github_accounts
+         ORDER BY is_default DESC, login ASC",
+    )?;
+    let rows = stmt.query_map([], github_account_from_row)?;
+    let mut accounts = Vec::new();
+    for row in rows {
+        accounts.push(ui_github_account(row?));
+    }
+    Ok(accounts)
+}
+
+fn migrate_legacy_github_account(conn: &Connection) -> Result<(), AppError> {
+    let existing_count = conn.query_row("SELECT COUNT(*) FROM github_accounts", [], |row| {
+        row.get::<_, i64>(0)
+    })?;
+    if existing_count > 0 {
+        return Ok(());
+    }
+    if !parse_bool(get_setting(conn, "github_token_configured")?) {
+        return Ok(());
+    }
+    let now = utc_now();
+    conn.execute(
+        "INSERT OR IGNORE INTO github_accounts
+         (id, login, display_name, avatar_url, token_key, status, scopes, last_verified, is_default, created_at, updated_at)
+         VALUES (?1, 'default', 'Default GitHub token', NULL, ?2, ?3, '', ?4, 1, ?5, ?5)",
+        params![
+            LEGACY_GITHUB_ACCOUNT_ID,
+            TOKEN_USER,
+            get_setting(conn, "github_token_status")?
+                .unwrap_or_else(|| "saved_unverified".to_string()),
+            get_setting(conn, "github_token_last_verified")?,
+            now,
+        ],
+    )?;
+    Ok(())
+}
+
+fn upsert_github_account(conn: &Connection, account: &GithubAccountRecord) -> Result<(), AppError> {
+    let now = utc_now();
+    let should_default = if account.is_default {
+        true
+    } else {
+        conn.query_row("SELECT COUNT(*) FROM github_accounts", [], |row| {
+            row.get::<_, i64>(0)
+        })? == 0
+    };
+    if should_default {
+        conn.execute("UPDATE github_accounts SET is_default = 0", [])?;
+    }
+    conn.execute(
+        "INSERT INTO github_accounts
+         (id, login, display_name, avatar_url, token_key, status, scopes, last_verified, is_default, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+         ON CONFLICT(id) DO UPDATE SET
+          login = excluded.login,
+          display_name = excluded.display_name,
+          avatar_url = excluded.avatar_url,
+          token_key = excluded.token_key,
+          status = excluded.status,
+          scopes = excluded.scopes,
+          last_verified = excluded.last_verified,
+          is_default = CASE WHEN excluded.is_default = 1 THEN 1 ELSE github_accounts.is_default END,
+          updated_at = excluded.updated_at",
+        params![
+            account.id,
+            account.login,
+            account.display_name,
+            account.avatar_url,
+            account.token_key,
+            account.status,
+            account.scopes,
+            account.last_verified,
+            if should_default { 1 } else { 0 },
+            now
+        ],
     )?;
     Ok(())
 }
@@ -1141,7 +1486,11 @@ fn settings_from_db(conn: &Connection, token_configured: bool) -> Result<AppSett
         .or(get_setting(conn, "skills_root")?)
         .unwrap_or_else(|| path_string(&default_skill_library_root(&home)));
     let default_sync_targets = sync_targets_from_db(conn)?;
-    let stored_status = get_setting(conn, "github_token_status")?
+    let default_account = default_github_account(conn)?;
+    let stored_status = default_account
+        .as_ref()
+        .map(|account| account.status.clone())
+        .or(get_setting(conn, "github_token_status")?)
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
             if token_configured {
@@ -1181,7 +1530,9 @@ fn settings_from_db(conn: &Connection, token_configured: bool) -> Result<AppSett
             .unwrap_or(20),
         github_token_configured: token_configured,
         github_token_status: token_status,
-        github_token_last_verified: get_setting(conn, "github_token_last_verified")?
+        github_token_last_verified: default_account
+            .and_then(|account| account.last_verified)
+            .or(get_setting(conn, "github_token_last_verified")?)
             .filter(|value| !value.trim().is_empty()),
     })
 }
@@ -1232,6 +1583,7 @@ fn repo_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RepoRecord> {
         snapshot_time: row.get("snapshot_time")?,
         source_type: row.get("source_type")?,
         local_path: row.get("local_path")?,
+        github_account_id: row.get("github_account_id")?,
     })
 }
 
@@ -1501,12 +1853,323 @@ fn headers(token: Option<&str>) -> HeaderMap {
         ACCEPT,
         HeaderValue::from_static("application/vnd.github+json"),
     );
+    headers.insert(
+        HeaderName::from_static("x-github-api-version"),
+        HeaderValue::from_static(GITHUB_API_VERSION),
+    );
     if let Some(token) = token {
         if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
             headers.insert(AUTHORIZATION, value);
         }
     }
     headers
+}
+
+fn scopes_from_headers(headers: &HeaderMap) -> String {
+    headers
+        .get("x-oauth-scopes")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn parse_link_header_next(value: &str) -> Option<String> {
+    value.split(',').find_map(|part| {
+        let section = part.trim();
+        if !section.contains("rel=\"next\"") {
+            return None;
+        }
+        let start = section.find('<')? + 1;
+        let end = section[start..].find('>')? + start;
+        Some(section[start..end].to_string())
+    })
+}
+
+async fn fetch_json_array_paginated(
+    client: &reqwest::Client,
+    first_url: String,
+    token: &str,
+) -> Result<Vec<serde_json::Value>, AppError> {
+    let mut next_url = Some(first_url);
+    let mut values = Vec::new();
+    while let Some(url) = next_url {
+        let response = client
+            .get(&url)
+            .headers(headers(Some(token)))
+            .send()
+            .await
+            .map_err(|err| {
+                AppError::with_details("github_network", "无法访问 GitHub。", err.to_string())
+            })?;
+        match response.status().as_u16() {
+            200 => {}
+            401 | 403 => {
+                return Err(AppError::new(
+                    "github_rate_limited",
+                    "GitHub 拒绝请求，请检查 token 权限、Starring 权限或稍后重试。",
+                ));
+            }
+            status => {
+                return Err(AppError::with_details(
+                    "github_error",
+                    "GitHub 分页响应异常。",
+                    status.to_string(),
+                ));
+            }
+        }
+        next_url = response
+            .headers()
+            .get(LINK)
+            .and_then(|value| value.to_str().ok())
+            .and_then(parse_link_header_next);
+        let page = response.json::<serde_json::Value>().await.map_err(|err| {
+            AppError::with_details("github_error", "GitHub 响应解析失败。", err.to_string())
+        })?;
+        let Some(items) = page.as_array() else {
+            return Err(AppError::new("github_error", "GitHub 响应不是数组。"));
+        };
+        values.extend(items.iter().cloned());
+    }
+    Ok(values)
+}
+
+async fn validate_token_identity(
+    client: &reqwest::Client,
+    token: &str,
+) -> Result<(GithubAccountRecord, String), AppError> {
+    let response = client
+        .get("https://api.github.com/user")
+        .headers(headers(Some(token)))
+        .send()
+        .await
+        .map_err(|err| {
+            AppError::with_details("github_network", "无法验证 GitHub token。", err.to_string())
+        })?;
+    if !response.status().is_success() {
+        return Err(AppError::with_details(
+            "token_invalid",
+            "GitHub token 验证失败。",
+            response.status().to_string(),
+        ));
+    }
+    let scopes = scopes_from_headers(response.headers());
+    let json: serde_json::Value = response.json().await.map_err(|err| {
+        AppError::with_details("github_error", "GitHub 用户响应解析失败。", err.to_string())
+    })?;
+    let login = json
+        .get("login")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| AppError::new("github_error", "GitHub 用户响应缺少 login。"))?
+        .to_string();
+    let display_name = json
+        .get("name")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(&login)
+        .to_string();
+    let id = github_account_id_for_login(&login);
+    let token_key = github_account_token_key(&id);
+    Ok((
+        GithubAccountRecord {
+            id,
+            login,
+            display_name,
+            avatar_url: json
+                .get("avatar_url")
+                .and_then(|value| value.as_str())
+                .map(|value| value.to_string()),
+            token_key,
+            status: "verified".to_string(),
+            scopes,
+            last_verified: Some(utc_now()),
+            is_default: false,
+        },
+        json.to_string(),
+    ))
+}
+
+fn repository_permission_summary(value: &serde_json::Value) -> String {
+    let Some(object) = value.as_object() else {
+        return "".to_string();
+    };
+    ["admin", "maintain", "push", "triage", "pull"]
+        .into_iter()
+        .filter(|key| {
+            object
+                .get(*key)
+                .and_then(|item| item.as_bool())
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn json_string(value: &serde_json::Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn upsert_github_catalog_item(
+    conn: &Connection,
+    account_id: &str,
+    repo: &serde_json::Value,
+    starred: bool,
+) -> Result<(), AppError> {
+    let full_name = json_string(repo, "full_name");
+    let (owner, name) = full_name
+        .split_once('/')
+        .map(|(left, right)| (left.to_string(), right.to_string()))
+        .unwrap_or_else(|| {
+            (
+                repo.get("owner")
+                    .and_then(|owner| owner.get("login"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                json_string(repo, "name"),
+            )
+        });
+    if owner.is_empty() || name.is_empty() {
+        return Ok(());
+    }
+    let visibility = json_string(repo, "visibility");
+    conn.execute(
+        "INSERT INTO github_repo_catalog
+         (account_id, full_name, owner, repo, github_id, html_url, description, visibility,
+          private, fork, archived, default_branch, language, stargazers_count, starred,
+          permissions, pushed_at, github_updated_at, last_refreshed)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+         ON CONFLICT(account_id, full_name) DO UPDATE SET
+          owner = excluded.owner,
+          repo = excluded.repo,
+          github_id = excluded.github_id,
+          html_url = excluded.html_url,
+          description = excluded.description,
+          visibility = excluded.visibility,
+          private = excluded.private,
+          fork = excluded.fork,
+          archived = excluded.archived,
+          default_branch = excluded.default_branch,
+          language = excluded.language,
+          stargazers_count = excluded.stargazers_count,
+          starred = excluded.starred,
+          permissions = excluded.permissions,
+          pushed_at = excluded.pushed_at,
+          github_updated_at = excluded.github_updated_at,
+          last_refreshed = excluded.last_refreshed",
+        params![
+            account_id,
+            if full_name.is_empty() {
+                format!("{owner}/{name}")
+            } else {
+                full_name
+            },
+            owner,
+            name,
+            repo.get("id").and_then(|value| value.as_i64()).unwrap_or(0),
+            json_string(repo, "html_url"),
+            json_string(repo, "description"),
+            if visibility.is_empty() {
+                if repo.get("private").and_then(|value| value.as_bool()).unwrap_or(false) {
+                    "private".to_string()
+                } else {
+                    "public".to_string()
+                }
+            } else {
+                visibility
+            },
+            if repo.get("private").and_then(|value| value.as_bool()).unwrap_or(false) { 1 } else { 0 },
+            if repo.get("fork").and_then(|value| value.as_bool()).unwrap_or(false) { 1 } else { 0 },
+            if repo.get("archived").and_then(|value| value.as_bool()).unwrap_or(false) { 1 } else { 0 },
+            json_string(repo, "default_branch"),
+            json_string(repo, "language"),
+            repo.get("stargazers_count").and_then(|value| value.as_i64()).unwrap_or(0),
+            if starred { 1 } else { 0 },
+            repository_permission_summary(repo.get("permissions").unwrap_or(&serde_json::Value::Null)),
+            repo.get("pushed_at").and_then(|value| value.as_str()),
+            repo.get("updated_at").and_then(|value| value.as_str()),
+            utc_now(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn refresh_tracked_catalog_links(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE github_repo_catalog
+         SET last_refreshed = last_refreshed
+         WHERE full_name IN (SELECT owner || '/' || repo FROM repositories WHERE source_type = 'github')",
+        [],
+    )?;
+    Ok(())
+}
+
+fn load_ui_github_repositories(
+    conn: &Connection,
+    account_id: Option<&str>,
+) -> Result<Vec<UiGithubRepository>, AppError> {
+    let mut sql = String::from(
+        "SELECT c.account_id, a.login, c.owner, c.repo, c.full_name, c.html_url,
+                c.description, c.visibility, c.private, c.fork, c.archived,
+                c.default_branch, c.language, c.stargazers_count, c.starred,
+                c.pushed_at, c.github_updated_at, c.last_refreshed, c.permissions,
+                (SELECT r.id FROM repositories r
+                 WHERE r.source_type = 'github'
+                   AND lower(r.owner) = lower(c.owner)
+                   AND lower(r.repo) = lower(c.repo)
+                 ORDER BY r.updated_at DESC
+                 LIMIT 1) AS tracked_repo_id
+         FROM github_repo_catalog c
+         JOIN github_accounts a ON a.id = c.account_id",
+    );
+    if account_id.is_some() {
+        sql.push_str(" WHERE c.account_id = ?1");
+    }
+    sql.push_str(" ORDER BY c.starred DESC, c.github_updated_at DESC, c.full_name ASC");
+    let mut stmt = conn.prepare(&sql)?;
+    let map_row = |row: &rusqlite::Row<'_>| {
+        Ok(UiGithubRepository {
+            account_id: row.get(0)?,
+            account_login: row.get(1)?,
+            owner: row.get(2)?,
+            repo: row.get(3)?,
+            full_name: row.get(4)?,
+            html_url: row.get(5)?,
+            description: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
+            visibility: row.get(7)?,
+            private: row.get::<_, i64>(8)? == 1,
+            fork: row.get::<_, i64>(9)? == 1,
+            archived: row.get::<_, i64>(10)? == 1,
+            default_branch: row.get(11)?,
+            language: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
+            stargazers_count: row.get(13)?,
+            starred: row.get::<_, i64>(14)? == 1,
+            pushed_at: row
+                .get::<_, Option<String>>(15)?
+                .map(|value| local_display(Some(&value))),
+            updated_at: row
+                .get::<_, Option<String>>(16)?
+                .map(|value| local_display(Some(&value))),
+            last_refreshed: row
+                .get::<_, Option<String>>(17)?
+                .map(|value| local_display(Some(&value))),
+            permissions: row.get::<_, Option<String>>(18)?.unwrap_or_default(),
+            tracked_repo_id: row.get(19)?,
+        })
+    };
+    let rows = if let Some(account_id) = account_id {
+        stmt.query_map(params![account_id], map_row)?
+    } else {
+        stmt.query_map([], map_row)?
+    };
+    let mut repos = Vec::new();
+    for row in rows {
+        repos.push(row?);
+    }
+    Ok(repos)
 }
 
 async fn fetch_remote_info(
@@ -2012,10 +2675,11 @@ fn sync_skills(
     Ok(())
 }
 
-fn save_repository(
+fn save_repository_with_account(
     conn: &Connection,
     remote: &RemoteInfo,
     scans: &[SkillScan],
+    github_account_id: Option<&str>,
 ) -> Result<String, AppError> {
     let id = repo_id(&remote.owner, &remote.repo, &remote.resolved_ref);
     let now = utc_now();
@@ -2042,9 +2706,9 @@ fn save_repository(
         "INSERT INTO repositories
          (id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
           last_backup_sha, last_checked, backup_status, check_status, url, branch,
-          backup_path, snapshot_time, source_type, local_path, canonical_name, error, created_at, updated_at)
+          backup_path, snapshot_time, source_type, local_path, github_account_id, canonical_name, error, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'success', ?12, ?13,
-                 NULL, NULL, 'github', NULL, ?2, NULL, ?10, ?10)
+                 NULL, NULL, 'github', NULL, ?14, ?2, NULL, ?10, ?10)
          ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           owner = excluded.owner,
@@ -2062,6 +2726,7 @@ fn save_repository(
           branch = excluded.branch,
           source_type = 'github',
           local_path = NULL,
+          github_account_id = COALESCE(excluded.github_account_id, repositories.github_account_id),
           canonical_name = excluded.canonical_name,
           error = NULL,
           updated_at = excluded.updated_at",
@@ -2078,7 +2743,8 @@ fn save_repository(
             now,
             backup_status,
             format!("https://github.com/{}", remote.full_name),
-            remote.default_branch
+            remote.default_branch,
+            github_account_id
         ],
     )?;
     sync_skills(conn, remote, &id, scans)?;
@@ -2955,7 +3621,7 @@ async fn get_skill_detail(
                     CASE WHEN s.deleted_at IS NOT NULL THEN 'deleted' ELSE s.status END AS status,
                     s.source_type, s.local_path, s.install_path, s.deleted_path,
                     s.sync_targets_mode, s.sync_targets,
-                    r.owner, r.repo, r.ref_name
+                    r.owner, r.repo, r.ref_name, r.github_account_id
              FROM skills s
              LEFT JOIN repositories r ON r.id = s.repo_id
              WHERE s.id = ?1",
@@ -2996,6 +3662,7 @@ async fn get_skill_detail(
                     row.get::<_, Option<String>>(15)?,
                     row.get::<_, Option<String>>(16)?,
                     row.get::<_, Option<String>>(17)?,
+                    row.get::<_, Option<String>>(18)?,
                 ))
             },
         );
@@ -3010,8 +3677,11 @@ async fn get_skill_detail(
         }
     };
 
-    let (mut detail, deleted_path, owner, repo, repo_ref) = base;
-    let token = state.token();
+    let (mut detail, deleted_path, owner, repo, repo_ref, repo_account_id) = base;
+    let token = repo_account_id
+        .as_deref()
+        .and_then(|account_id| state.token_for_account(account_id))
+        .or_else(|| state.default_github_token());
     let content_result = if let Some(path) = skill_markdown_path(
         detail.local_path.as_deref(),
         detail.install_path.as_deref(),
@@ -3097,7 +3767,7 @@ async fn get_repository_readme(
         };
     }
 
-    let token = state.token();
+    let token = state.token_for_repo(&repo_record);
     match fetch_github_content(
         &state.http,
         &repo_record.owner,
@@ -3132,7 +3802,29 @@ async fn get_github_preview(
         Ok(value) => value,
         Err(error) => return Ok(api_err(error)),
     };
-    let token = state.token();
+    let catalog_account_id = {
+        let db = state.db.lock().expect("db mutex poisoned");
+        match db
+            .query_row(
+                "SELECT c.account_id
+                 FROM github_repo_catalog c
+                 JOIN github_accounts a ON a.id = c.account_id
+                 WHERE lower(c.owner) = lower(?1) AND lower(c.repo) = lower(?2)
+                 ORDER BY a.is_default DESC, c.last_refreshed DESC
+                 LIMIT 1",
+                params![owner, repo],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+        {
+            Ok(value) => value,
+            Err(error) => return Ok(api_err(AppError::from(error))),
+        }
+    };
+    let token = catalog_account_id
+        .as_deref()
+        .and_then(|account_id| state.token_for_account(account_id))
+        .or_else(|| state.default_github_token());
     let remote = match fetch_remote_info(&state.http, &owner, &repo, "", token.as_deref()).await {
         Ok(remote) => remote,
         Err(error) => return Ok(api_err(error)),
@@ -3177,7 +3869,7 @@ fn list_tasks(state: State<'_, AppState>) -> ApiResponse<Vec<UiTask>> {
 #[tauri::command]
 fn get_settings(state: State<'_, AppState>) -> ApiResponse<AppSettings> {
     let db = state.db.lock().expect("db mutex poisoned");
-    match settings_from_db(&db, state.token().is_some()) {
+    match settings_from_db(&db, github_auth_configured(&db)) {
         Ok(settings) => ApiResponse::ok(settings),
         Err(error) => api_err(error),
     }
@@ -3238,7 +3930,7 @@ fn update_settings(
         if let Some(value) = request.cleanup_keep {
             set_setting(&db, "cleanup_keep", value.clamp(1, 200))?;
         }
-        settings_from_db(&db, state.token().is_some())
+        settings_from_db(&db, github_auth_configured(&db))
     })();
     match result {
         Ok(settings) => ApiResponse::ok(settings),
@@ -3303,7 +3995,7 @@ async fn add_repository(
         Ok(parsed) => parsed,
         Err(error) => return Ok(api_err(error)),
     };
-    let token = state.token();
+    let (token, default_account_id) = state.default_github_token_with_account();
     let remote = match fetch_remote_info(
         &state.http,
         &owner,
@@ -3332,7 +4024,7 @@ async fn add_repository(
 
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<UiRepository>, AppError> {
-        let id = save_repository(&db, &remote, &scans)?;
+        let id = save_repository_with_account(&db, &remote, &scans, default_account_id.as_deref())?;
         insert_task(
             &db,
             &format!("scan-{}", Local::now().format("%Y%m%d%H%M%S")),
@@ -3380,12 +4072,12 @@ async fn check_repositories(
             Err(error) => return Ok(api_err(error)),
         }
     };
-    let token = state.token();
     let mut log = Vec::new();
     let mut success = 0;
     let mut failed = 0;
 
     for repo in repos {
+        let token = state.token_for_repo(&repo);
         match fetch_remote_info(
             &state.http,
             &repo.owner,
@@ -3407,7 +4099,12 @@ async fn check_repositories(
                 .unwrap_or_default();
                 let scans = scan_skills_from_zip(&zip, &remote.full_name).unwrap_or_default();
                 let db = state.db.lock().expect("db mutex poisoned");
-                if let Err(error) = save_repository(&db, &remote, &scans) {
+                if let Err(error) = save_repository_with_account(
+                    &db,
+                    &remote,
+                    &scans,
+                    repo.github_account_id.as_deref(),
+                ) {
                     log.push(format_error_for_log(&repo.name, &error));
                     failed += 1;
                 } else {
@@ -3469,7 +4166,7 @@ async fn backup_repositories(
 ) -> CommandResult<Vec<UiTask>> {
     let (repos, settings) = {
         let db = state.db.lock().expect("db mutex poisoned");
-        let settings = match settings_from_db(&db, state.token().is_some()) {
+        let settings = match settings_from_db(&db, github_auth_configured(&db)) {
             Ok(settings) => settings,
             Err(error) => return Ok(api_err(error)),
         };
@@ -3518,13 +4215,13 @@ async fn backup_repositories(
         )));
     }
 
-    let token = state.token();
     let mut manifest_items = Vec::new();
     let mut manifest_failures = Vec::new();
     let mut log = vec![format!("create {}", path_string(&backup_dir))];
     let mut successful_repo_updates = Vec::new();
 
     for repo in &repos {
+        let token = state.token_for_repo(repo);
         match fetch_remote_info(
             &state.http,
             &repo.owner,
@@ -3768,7 +4465,7 @@ async fn update_skill_inner(
             }
             Err(error) => return Ok(api_err(error)),
         };
-        let settings = match settings_from_db(&db, state.token().is_some()) {
+        let settings = match settings_from_db(&db, github_auth_configured(&db)) {
             Ok(settings) => settings,
             Err(error) => return Ok(api_err(error)),
         };
@@ -3794,7 +4491,7 @@ async fn update_skill_inner(
         }
     }
 
-    let token = state.token();
+    let token = state.token_for_repo(&repo);
     let zip = match download_zip(
         &state.http,
         &repo.owner,
@@ -3964,7 +4661,7 @@ async fn resolve_skill_local_conflict(
                 Ok(None) => return Ok(api_err(AppError::new("skill_not_found", "Skill 不存在。"))),
                 Err(error) => return Ok(api_err(error)),
             };
-            let settings = match settings_from_db(&db, state.token().is_some()) {
+            let settings = match settings_from_db(&db, github_auth_configured(&db)) {
                 Ok(settings) => settings,
                 Err(error) => return Ok(api_err(error)),
             };
@@ -3986,7 +4683,7 @@ fn scan_local_skills(
 ) -> ApiResponse<Vec<UiSkill>> {
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<UiSkill>, AppError> {
-        let settings = settings_from_db(&db, state.token().is_some())?;
+        let settings = settings_from_db(&db, github_auth_configured(&db))?;
         let root = request
             .root
             .as_deref()
@@ -4102,7 +4799,7 @@ fn delete_skill(
                 "只有已安装 Skill 支持删除。",
             ));
         }
-        let settings = settings_from_db(&db, state.token().is_some())?;
+        let settings = settings_from_db(&db, github_auth_configured(&db))?;
         let source = skill
             .install_path
             .as_deref()
@@ -4251,7 +4948,7 @@ fn restore_skill(
              WHERE id = ?1",
             params![id, hash, now],
         )?;
-        let settings = settings_from_db(&db, state.token().is_some())?;
+        let settings = settings_from_db(&db, github_auth_configured(&db))?;
         let restored_skill = load_skill_record(&db, &id)?
             .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
         let sync_report = reconcile_skill_sync(&db, &settings, &restored_skill);
@@ -4305,7 +5002,7 @@ fn restore_skill(
 fn sync_installed_skills(state: State<'_, AppState>) -> ApiResponse<Vec<UiSkill>> {
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<UiSkill>, AppError> {
-        let settings = settings_from_db(&db, state.token().is_some())?;
+        let settings = settings_from_db(&db, github_auth_configured(&db))?;
         let mut stmt =
             db.prepare("SELECT id FROM skills WHERE installed = 1 AND deleted_at IS NULL")?;
         let ids = stmt
@@ -4373,7 +5070,7 @@ fn update_skill_sync_targets(
                 utc_now()
             ],
         )?;
-        let settings = settings_from_db(&db, state.token().is_some())?;
+        let settings = settings_from_db(&db, github_auth_configured(&db))?;
         let skill = load_skill_record(&db, &requested_skill_id)?
             .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
         let report = reconcile_skill_sync(&db, &settings, &skill);
@@ -4497,7 +5194,8 @@ fn set_github_token(request: TokenRequest, state: State<'_, AppState>) -> ApiRes
         set_setting(&db, "github_token_configured", "true")?;
         set_setting(&db, "github_token_status", "saved_unverified")?;
         set_setting(&db, "github_token_last_verified", "")?;
-        settings_from_db(&db, true)
+        migrate_legacy_github_account(&db)?;
+        settings_from_db(&db, github_auth_configured(&db))
     })();
     match result {
         Ok(settings) => ApiResponse::ok(settings),
@@ -4515,7 +5213,11 @@ fn clear_github_token(state: State<'_, AppState>) -> ApiResponse<AppSettings> {
         set_setting(&db, "github_token_configured", "false")?;
         set_setting(&db, "github_token_status", "not_configured")?;
         set_setting(&db, "github_token_last_verified", "")?;
-        settings_from_db(&db, false)
+        db.execute(
+            "DELETE FROM github_accounts WHERE token_key = ?1",
+            params![TOKEN_USER],
+        )?;
+        settings_from_db(&db, github_auth_configured(&db))
     })();
     match result {
         Ok(settings) => ApiResponse::ok(settings),
@@ -4525,7 +5227,8 @@ fn clear_github_token(state: State<'_, AppState>) -> ApiResponse<AppSettings> {
 
 #[tauri::command]
 async fn validate_github_token(state: State<'_, AppState>) -> CommandResult<AppSettings> {
-    let token = match state.token() {
+    let (token, account_id) = state.default_github_token_with_account();
+    let token = match token {
         Some(token) => token,
         None => {
             return Ok(api_err(AppError::new(
@@ -4534,50 +5237,461 @@ async fn validate_github_token(state: State<'_, AppState>) -> CommandResult<AppS
             )))
         }
     };
-    let response = state
-        .http
-        .get("https://api.github.com/user")
-        .headers(headers(Some(&token)))
-        .send()
-        .await;
-    match response {
-        Ok(response) if response.status().is_success() => {
+    match validate_token_identity(&state.http, &token).await {
+        Ok((mut account, _)) => {
             let db = state.db.lock().expect("db mutex poisoned");
             let result = (|| -> Result<AppSettings, AppError> {
+                if let Some(existing_id) = account_id.as_deref() {
+                    if let Some(existing) = github_account_by_id(&db, existing_id)? {
+                        account.id = existing.id;
+                        account.token_key = existing.token_key;
+                        account.is_default = existing.is_default;
+                    }
+                } else {
+                    account.token_key = TOKEN_USER.to_string();
+                    account.is_default = true;
+                }
+                upsert_github_account(&db, &account)?;
                 set_setting(&db, "github_token_configured", "true")?;
                 set_setting(&db, "github_token_status", "verified")?;
                 set_setting(&db, "github_token_last_verified", utc_now())?;
-                settings_from_db(&db, true)
+                settings_from_db(&db, github_auth_configured(&db))
             })();
             Ok(match result {
                 Ok(settings) => ApiResponse::ok(settings),
                 Err(error) => api_err(error),
             })
         }
-        Ok(response) => {
+        Err(error) => {
             let db = state.db.lock().expect("db mutex poisoned");
-            let status = if matches!(response.status().as_u16(), 401 | 403) {
+            let status = if error.code == "token_invalid" {
                 "invalid"
             } else {
                 "saved_unverified"
             };
             let _ = set_setting(&db, "github_token_status", status);
-            Ok(api_err(AppError::with_details(
-                "token_invalid",
-                "GitHub token 验证失败。",
-                response.status().to_string(),
-            )))
-        }
-        Err(error) => {
-            let db = state.db.lock().expect("db mutex poisoned");
-            let _ = set_setting(&db, "github_token_status", "saved_unverified");
-            Ok(api_err(AppError::with_details(
-                "github_network",
-                "无法验证 GitHub token。",
-                error.to_string(),
-            )))
+            if let Some(account_id) = account_id {
+                let _ = db.execute(
+                    "UPDATE github_accounts SET status = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![account_id, status, utc_now()],
+                );
+            }
+            Ok(api_err(error))
         }
     }
+}
+
+#[tauri::command]
+fn list_github_accounts(state: State<'_, AppState>) -> ApiResponse<Vec<UiGithubAccount>> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match load_ui_github_accounts(&db) {
+        Ok(accounts) => ApiResponse::ok(accounts),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+async fn save_github_account_token(
+    request: GithubAccountTokenRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<UiGithubAccount>> {
+    let token = request.token.trim().to_string();
+    if token.is_empty() {
+        return Ok(api_err(AppError::new(
+            "token_missing",
+            "请输入 GitHub token。",
+        )));
+    }
+    let (mut account, _) = match validate_token_identity(&state.http, &token).await {
+        Ok(account) => account,
+        Err(error) => return Ok(api_err(error)),
+    };
+    let token_key = account.token_key.clone();
+    let result = keyring::Entry::new(TOKEN_SERVICE, &token_key)
+        .map_err(|err| {
+            AppError::with_details(
+                "token_store_failed",
+                "Token 存储初始化失败。",
+                err.to_string(),
+            )
+        })
+        .and_then(|entry| {
+            entry.set_password(&token).map_err(|err| {
+                AppError::with_details("token_store_failed", "Token 存储失败。", err.to_string())
+            })
+        });
+    if let Err(error) = result {
+        return Ok(api_err(error));
+    }
+
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = (|| -> Result<Vec<UiGithubAccount>, AppError> {
+        account.is_default = default_github_account(&db)?.is_none();
+        upsert_github_account(&db, &account)?;
+        set_setting(&db, "github_token_configured", "true")?;
+        set_setting(&db, "github_token_status", "verified")?;
+        set_setting(
+            &db,
+            "github_token_last_verified",
+            account.last_verified.clone().unwrap_or_default(),
+        )?;
+        load_ui_github_accounts(&db)
+    })();
+    Ok(match result {
+        Ok(accounts) => ApiResponse::ok(accounts),
+        Err(error) => api_err(error),
+    })
+}
+
+#[tauri::command]
+async fn validate_github_account(
+    request: GithubAccountRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<UiGithubAccount>> {
+    let token = match state.token_for_account(&request.account_id) {
+        Some(token) => token,
+        None => {
+            return Ok(api_err(AppError::new(
+                "token_missing",
+                "该 GitHub 账号缺少 token。",
+            )))
+        }
+    };
+    let (mut verified, _) = match validate_token_identity(&state.http, &token).await {
+        Ok(account) => account,
+        Err(error) => return Ok(api_err(error)),
+    };
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = (|| -> Result<Vec<UiGithubAccount>, AppError> {
+        let existing = github_account_by_id(&db, &request.account_id)?
+            .ok_or_else(|| AppError::new("github_account_missing", "GitHub 账号不存在。"))?;
+        verified.id = existing.id;
+        verified.token_key = existing.token_key;
+        verified.is_default = existing.is_default;
+        upsert_github_account(&db, &verified)?;
+        load_ui_github_accounts(&db)
+    })();
+    Ok(match result {
+        Ok(accounts) => ApiResponse::ok(accounts),
+        Err(error) => api_err(error),
+    })
+}
+
+#[tauri::command]
+fn set_default_github_account(
+    request: GithubAccountRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<Vec<UiGithubAccount>> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = (|| -> Result<Vec<UiGithubAccount>, AppError> {
+        let exists = github_account_by_id(&db, &request.account_id)?.is_some();
+        if !exists {
+            return Err(AppError::new(
+                "github_account_missing",
+                "GitHub 账号不存在。",
+            ));
+        }
+        db.execute("UPDATE github_accounts SET is_default = 0", [])?;
+        db.execute(
+            "UPDATE github_accounts SET is_default = 1, updated_at = ?2 WHERE id = ?1",
+            params![request.account_id, utc_now()],
+        )?;
+        load_ui_github_accounts(&db)
+    })();
+    match result {
+        Ok(accounts) => ApiResponse::ok(accounts),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn delete_github_account(
+    request: GithubAccountRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<Vec<UiGithubAccount>> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = (|| -> Result<Vec<UiGithubAccount>, AppError> {
+        let account = github_account_by_id(&db, &request.account_id)?
+            .ok_or_else(|| AppError::new("github_account_missing", "GitHub 账号不存在。"))?;
+        if let Ok(entry) = keyring::Entry::new(TOKEN_SERVICE, &account.token_key) {
+            let _ = entry.delete_credential();
+        }
+        db.execute(
+            "UPDATE repositories SET github_account_id = NULL WHERE github_account_id = ?1",
+            params![request.account_id],
+        )?;
+        db.execute(
+            "DELETE FROM github_repo_catalog WHERE account_id = ?1",
+            params![request.account_id],
+        )?;
+        db.execute(
+            "DELETE FROM github_accounts WHERE id = ?1",
+            params![request.account_id],
+        )?;
+        let has_default = db.query_row(
+            "SELECT COUNT(*) FROM github_accounts WHERE is_default = 1",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
+        if !has_default {
+            if let Some(next_id) = db
+                .query_row(
+                    "SELECT id FROM github_accounts ORDER BY updated_at DESC LIMIT 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?
+            {
+                db.execute(
+                    "UPDATE github_accounts SET is_default = 1 WHERE id = ?1",
+                    params![next_id],
+                )?;
+            }
+        }
+        load_ui_github_accounts(&db)
+    })();
+    match result {
+        Ok(accounts) => ApiResponse::ok(accounts),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn list_github_repository_catalog(
+    request: GithubCatalogRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<Vec<UiGithubRepository>> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match load_ui_github_repositories(&db, request.account_id.as_deref()) {
+        Ok(repos) => ApiResponse::ok(repos),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+async fn refresh_github_repositories(
+    request: GithubCatalogRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<UiGithubRepository>> {
+    let accounts = {
+        let db = state.db.lock().expect("db mutex poisoned");
+        let selected: Result<Vec<GithubAccountRecord>, AppError> =
+            match request.account_id.as_deref() {
+                Some(account_id) => github_account_by_id(&db, account_id)
+                    .map(|account| account.into_iter().collect()),
+                None => (|| -> Result<Vec<GithubAccountRecord>, AppError> {
+                    let mut stmt = db.prepare(
+                        "SELECT * FROM github_accounts ORDER BY is_default DESC, login ASC",
+                    )?;
+                    let rows = stmt.query_map([], github_account_from_row)?;
+                    let mut items = Vec::new();
+                    for row in rows {
+                        items.push(row?);
+                    }
+                    Ok(items)
+                })(),
+            };
+        match selected {
+            Ok(items) => items,
+            Err(error) => return Ok(api_err(error)),
+        }
+    };
+    if accounts.is_empty() {
+        return Ok(api_err(AppError::new(
+            "github_account_missing",
+            "请先添加 GitHub token。",
+        )));
+    }
+
+    for account in &accounts {
+        let Some(token) = state.token_for_key(&account.token_key) else {
+            continue;
+        };
+        let repo_url = "https://api.github.com/user/repos?visibility=all&affiliation=owner,collaborator,organization_member&sort=updated&per_page=100".to_string();
+        let starred_url =
+            "https://api.github.com/user/starred?sort=updated&per_page=100".to_string();
+        let repos = match fetch_json_array_paginated(&state.http, repo_url, &token).await {
+            Ok(repos) => repos,
+            Err(error) => return Ok(api_err(error)),
+        };
+        let starred = match fetch_json_array_paginated(&state.http, starred_url, &token).await {
+            Ok(repos) => repos,
+            Err(error) => return Ok(api_err(error)),
+        };
+        let starred_names = starred
+            .iter()
+            .filter_map(|repo| repo.get("full_name").and_then(|value| value.as_str()))
+            .map(|value| value.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        let db = state.db.lock().expect("db mutex poisoned");
+        let result = (|| -> Result<(), AppError> {
+            db.execute(
+                "UPDATE github_repo_catalog SET starred = 0 WHERE account_id = ?1",
+                params![account.id],
+            )?;
+            for repo in repos.iter().chain(starred.iter()) {
+                let starred = repo
+                    .get("full_name")
+                    .and_then(|value| value.as_str())
+                    .map(|name| starred_names.contains(&name.to_ascii_lowercase()))
+                    .unwrap_or(false);
+                upsert_github_catalog_item(&db, &account.id, repo, starred)?;
+            }
+            refresh_tracked_catalog_links(&db)?;
+            db.execute(
+                "UPDATE github_accounts SET status = 'verified', last_verified = ?2, updated_at = ?2 WHERE id = ?1",
+                params![account.id, utc_now()],
+            )?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            return Ok(api_err(error));
+        }
+    }
+
+    let db = state.db.lock().expect("db mutex poisoned");
+    match load_ui_github_repositories(&db, request.account_id.as_deref()) {
+        Ok(repos) => Ok(ApiResponse::ok(repos)),
+        Err(error) => Ok(api_err(error)),
+    }
+}
+
+#[tauri::command]
+async fn set_github_star(
+    request: GithubStarRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<UiGithubRepository>> {
+    let token = match state.token_for_account(&request.account_id) {
+        Some(token) => token,
+        None => {
+            return Ok(api_err(AppError::new(
+                "token_missing",
+                "该 GitHub 账号缺少 token。",
+            )))
+        }
+    };
+    let url = format!(
+        "https://api.github.com/user/starred/{}/{}",
+        urlencoding::encode(&request.owner),
+        urlencoding::encode(&request.repo)
+    );
+    let builder = if request.starred {
+        state.http.put(&url)
+    } else {
+        state.http.delete(&url)
+    };
+    let response = builder.headers(headers(Some(&token))).send().await;
+    match response {
+        Ok(response) if response.status().as_u16() == 204 => {
+            let db = state.db.lock().expect("db mutex poisoned");
+            let result = (|| -> Result<Vec<UiGithubRepository>, AppError> {
+                db.execute(
+                    "UPDATE github_repo_catalog
+                     SET starred = ?4, last_refreshed = ?5
+                     WHERE account_id = ?1 AND lower(owner) = lower(?2) AND lower(repo) = lower(?3)",
+                    params![
+                        request.account_id,
+                        request.owner,
+                        request.repo,
+                        if request.starred { 1 } else { 0 },
+                        utc_now()
+                    ],
+                )?;
+                load_ui_github_repositories(&db, Some(&request.account_id))
+            })();
+            Ok(match result {
+                Ok(repos) => ApiResponse::ok(repos),
+                Err(error) => api_err(error),
+            })
+        }
+        Ok(response) => Ok(api_err(AppError::with_details(
+            "github_star_failed",
+            "GitHub Star 操作失败，请检查 token 的 Starring 权限。",
+            response.status().to_string(),
+        ))),
+        Err(error) => Ok(api_err(AppError::with_details(
+            "github_network",
+            "GitHub Star 操作无法完成。",
+            error.to_string(),
+        ))),
+    }
+}
+
+#[tauri::command]
+async fn add_repository_from_github(
+    request: AddRepositoryFromGithubRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<UiRepository>> {
+    let token = match state.token_for_account(&request.account_id) {
+        Some(token) => token,
+        None => {
+            return Ok(api_err(AppError::new(
+                "token_missing",
+                "该 GitHub 账号缺少 token。",
+            )))
+        }
+    };
+    let remote = match fetch_remote_info(
+        &state.http,
+        &request.owner,
+        &request.repo,
+        request.ref_name.as_deref().unwrap_or(""),
+        Some(&token),
+    )
+    .await
+    {
+        Ok(remote) => remote,
+        Err(error) => return Ok(api_err(error)),
+    };
+    let zip = download_zip(
+        &state.http,
+        &remote.owner,
+        &remote.repo,
+        &remote.sha,
+        Some(&token),
+    )
+    .await
+    .unwrap_or_default();
+    let scans = scan_skills_from_zip(&zip, &remote.full_name).unwrap_or_default();
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = (|| -> Result<Vec<UiRepository>, AppError> {
+        let id = save_repository_with_account(&db, &remote, &scans, Some(&request.account_id))?;
+        insert_task(
+            &db,
+            &format!("scan-{}", Local::now().format("%Y%m%d%H%M%S")),
+            "Scan repository",
+            &remote.full_name,
+            "1 / 1",
+            "success",
+            if scans.is_empty() {
+                "generic repo, 0 Skills"
+            } else {
+                "Skill recognized"
+            },
+            None,
+            &[
+                format!("normalize {}", remote.full_name),
+                format!("record remote_head_sha {}", remote.sha),
+                if scans.is_empty() {
+                    "no SKILL.md found; keep as generic repo".into()
+                } else {
+                    format!("found {} SKILL.md file(s)", scans.len())
+                },
+            ],
+        )?;
+        db.execute(
+            "UPDATE github_repo_catalog
+             SET last_refreshed = ?4
+             WHERE account_id = ?1 AND lower(owner) = lower(?2) AND lower(repo) = lower(?3)",
+            params![request.account_id, remote.owner, remote.repo, utc_now()],
+        )?;
+        let _ = id;
+        load_ui_repositories(&db)
+    })();
+    Ok(match result {
+        Ok(repos) => ApiResponse::ok(repos),
+        Err(error) => api_err(error),
+    })
 }
 
 #[tauri::command]
@@ -4617,7 +5731,7 @@ fn open_backup_folder(path: Option<String>, state: State<'_, AppState>) -> ApiRe
         Some(path) => expand_tilde(&path),
         None => {
             let db = state.db.lock().expect("db mutex poisoned");
-            let settings = match settings_from_db(&db, state.token().is_some()) {
+            let settings = match settings_from_db(&db, github_auth_configured(&db)) {
                 Ok(settings) => settings,
                 Err(error) => return api_err(error),
             };
@@ -4717,7 +5831,7 @@ fn configure_schedule(
             }
             _ => {}
         }
-        settings_from_db(&db, state.token().is_some())
+        settings_from_db(&db, github_auth_configured(&db))
     })();
     match result {
         Ok(settings) => ApiResponse::ok(settings),
@@ -4766,6 +5880,15 @@ pub fn run() {
             update_settings,
             validate_directory,
             pick_directory,
+            list_github_accounts,
+            save_github_account_token,
+            delete_github_account,
+            validate_github_account,
+            set_default_github_account,
+            refresh_github_repositories,
+            list_github_repository_catalog,
+            set_github_star,
+            add_repository_from_github,
             set_github_token,
             clear_github_token,
             validate_github_token,
@@ -4926,6 +6049,7 @@ mod tests {
             snapshot_time: None,
             source_type: source_type.into(),
             local_path: Some("/tmp/skills".into()),
+            github_account_id: None,
         }
     }
 
@@ -5102,8 +6226,8 @@ mod tests {
             version: "v0.1.0".into(),
         }];
 
-        save_repository(&conn, &remote, &initial_scans).unwrap();
-        save_repository(&conn, &remote, &current_scans).unwrap();
+        save_repository_with_account(&conn, &remote, &initial_scans, None).unwrap();
+        save_repository_with_account(&conn, &remote, &current_scans, None).unwrap();
 
         let repos = load_ui_repositories(&conn).unwrap();
         let repo = repos
@@ -5275,6 +6399,106 @@ mod tests {
     }
 
     #[test]
+    fn builds_stable_github_account_token_keys() {
+        assert_eq!(github_account_id_for_login("Octo-Cat"), "github:octo-cat");
+        assert_eq!(
+            github_account_token_key("github:octo-cat"),
+            "github-account-token:github:octo-cat"
+        );
+    }
+
+    #[test]
+    fn parses_github_next_link_header() {
+        let link = r#"<https://api.github.com/user/repos?page=2>; rel="next", <https://api.github.com/user/repos?page=4>; rel="last""#;
+        assert_eq!(
+            parse_link_header_next(link).as_deref(),
+            Some("https://api.github.com/user/repos?page=2")
+        );
+        assert!(parse_link_header_next(
+            r#"<https://api.github.com/user/repos?page=1>; rel="last""#
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn migrates_legacy_token_metadata_to_default_github_account() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        set_setting(&conn, "github_token_configured", "true").unwrap();
+        set_setting(&conn, "github_token_status", "saved_unverified").unwrap();
+
+        migrate_legacy_github_account(&conn).unwrap();
+
+        let account = default_github_account(&conn).unwrap().unwrap();
+        assert_eq!(account.id, LEGACY_GITHUB_ACCOUNT_ID);
+        assert_eq!(account.token_key, TOKEN_USER);
+        assert!(account.is_default);
+        assert_eq!(account.status, "saved_unverified");
+    }
+
+    #[test]
+    fn upserts_catalog_and_marks_tracked_repositories() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let account = GithubAccountRecord {
+            id: "github:octocat".into(),
+            login: "octocat".into(),
+            display_name: "Octocat".into(),
+            avatar_url: None,
+            token_key: github_account_token_key("github:octocat"),
+            status: "verified".into(),
+            scopes: "repo, user".into(),
+            last_verified: Some(utc_now()),
+            is_default: true,
+        };
+        upsert_github_account(&conn, &account).unwrap();
+        let repo_json = serde_json::json!({
+            "id": 42,
+            "full_name": "octocat/Hello-World",
+            "name": "Hello-World",
+            "owner": { "login": "octocat" },
+            "html_url": "https://github.com/octocat/Hello-World",
+            "description": "A demo repository",
+            "visibility": "private",
+            "private": true,
+            "fork": false,
+            "archived": false,
+            "default_branch": "main",
+            "language": "Rust",
+            "stargazers_count": 7,
+            "permissions": { "pull": true, "push": true },
+            "pushed_at": "2026-06-30T00:00:00Z",
+            "updated_at": "2026-06-30T00:00:00Z"
+        });
+        upsert_github_catalog_item(&conn, &account.id, &repo_json, true).unwrap();
+        let remote = RemoteInfo {
+            owner: "octocat".into(),
+            repo: "Hello-World".into(),
+            full_name: "octocat/Hello-World".into(),
+            default_branch: "main".into(),
+            resolved_ref: "main".into(),
+            sha: "bf4e9ac4d4428bda261afcfe981871ceb92d94e6".into(),
+        };
+        save_repository_with_account(&conn, &remote, &[], Some(&account.id)).unwrap();
+
+        let catalog = load_ui_github_repositories(&conn, Some(&account.id)).unwrap();
+
+        assert_eq!(catalog.len(), 1);
+        assert!(catalog[0].private);
+        assert!(catalog[0].starred);
+        assert_eq!(catalog[0].language, "Rust");
+        assert_eq!(
+            catalog[0].tracked_repo_id.as_deref(),
+            Some(repo_id("octocat", "Hello-World", "main").as_str())
+        );
+        assert!(catalog[0].permissions.contains("push"));
+
+        upsert_github_catalog_item(&conn, &account.id, &repo_json, false).unwrap();
+        let refreshed_catalog = load_ui_github_repositories(&conn, Some(&account.id)).unwrap();
+        assert!(!refreshed_catalog[0].starred);
+    }
+
+    #[test]
     fn migration_adds_local_source_columns() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
@@ -5291,10 +6515,34 @@ mod tests {
         assert!(columns.contains(&"sync_targets_mode".to_string()));
         assert!(columns.contains(&"sync_targets".to_string()));
 
+        let mut stmt = conn.prepare("PRAGMA table_info(repositories)").unwrap();
+        let repo_columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(repo_columns.contains(&"github_account_id".to_string()));
+
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'skill_sync_records'")
             .unwrap();
         let table_name: Option<String> = stmt.query_row([], |row| row.get(0)).optional().unwrap();
         assert_eq!(table_name.as_deref(), Some("skill_sync_records"));
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'github_accounts'",
+            )
+            .unwrap();
+        let account_table: Option<String> =
+            stmt.query_row([], |row| row.get(0)).optional().unwrap();
+        assert_eq!(account_table.as_deref(), Some("github_accounts"));
+
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'github_repo_catalog'")
+            .unwrap();
+        let catalog_table: Option<String> =
+            stmt.query_row([], |row| row.get(0)).optional().unwrap();
+        assert_eq!(catalog_table.as_deref(), Some("github_repo_catalog"));
     }
 }
