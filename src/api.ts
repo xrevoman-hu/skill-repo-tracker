@@ -20,7 +20,6 @@ export type GitHubAccount = {
   status: string;
   scopes: string;
   lastVerified?: string | null;
-  isDefault: boolean;
 };
 
 export type GitHubRepository = {
@@ -105,8 +104,6 @@ export const api = {
     command<GitHubAccount[]>("delete_github_account", { request: { accountId } }),
   validateGithubAccount: (accountId: string) =>
     command<GitHubAccount[]>("validate_github_account", { request: { accountId } }),
-  setDefaultGithubAccount: (accountId: string) =>
-    command<GitHubAccount[]>("set_default_github_account", { request: { accountId } }),
   refreshGithubRepositories: (accountId?: string) =>
     command<GitHubRepository[]>("refresh_github_repositories", { request: { accountId } }),
   listGithubRepositoryCatalog: (accountId?: string) =>

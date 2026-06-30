@@ -22,11 +22,12 @@ Skill Repo Tracker 是一个给 AI Skill 使用者准备的本地桌面工具。
 
 Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再按你的选择发布到工具目录。主库默认在 `~/SkillRepoTracker/skills`，当前默认发布到 Claude Code 和 Codex。Gemini、OpenCode、OpenClaw、Hermes 可以手动勾选，但不会默认打开。
 
-当前版本：`v1.1.3`
+当前版本：`v1.1.4`
 
 ### 它帮你完成什么
 
 - **统一看见来源**：添加 GitHub 仓库后，应用会识别其中的 `SKILL.md`，显示仓库、路径、版本和安装状态。
+- **多账号 GitHub 工作台**：每个 GitHub 账号都通过弹窗手动添加，个人公开仓库、个人私仓、Starred 和已追踪仓库可以在同一个工作台里筛选和操作。
 - **安全安装和更新**：更新 Skill 前会检查本地内容是否被改过，避免静默覆盖你的修改。
 - **一份主库，多处发布**：Skill 永远先写入独立主库，再复制到 Claude Code、Codex 等目标目录。
 - **取消同步可追溯**：取消某个目标后，应用只会处理自己发布过的副本；执行取消同步时会先备份，再从目标工具目录移除。
@@ -47,11 +48,12 @@ Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再
 
 ### 推荐工作流
 
-1. 添加一个包含 `SKILL.md` 的 GitHub 仓库。
-2. 在“技能”页检查识别出的 Skill、来源路径和版本。
-3. 安装 Skill，让它进入 `~/SkillRepoTracker/skills`。
-4. 默认发布到 Claude Code 和 Codex；如果需要其他工具，在设置里勾选目标。
-5. 更新或取消同步前，先看任务日志和备份路径，确认动作可追溯。
+1. 在 GitHub 工作台手动添加需要管理的 GitHub 账号。
+2. 从对应账号的仓库目录或 Starred 列表中追踪仓库；私仓请从持有权限的账号目录加入。
+3. 在“技能”页检查识别出的 Skill、来源路径和版本。
+4. 安装 Skill，让它进入 `~/SkillRepoTracker/skills`。
+5. 默认发布到 Claude Code 和 Codex；如果需要其他工具，在设置里勾选目标。
+6. 更新或取消同步前，先看任务日志和备份路径，确认动作可追溯。
 
 ### 数据位置
 
@@ -103,7 +105,7 @@ npm run tauri build -- --bundles app,dmg
 常见产物位置：
 
 - `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
-- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.3_*.dmg`
+- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.4_*.dmg`
 
 公开发布的 DMG 必须使用 Developer ID 签名并完成 Apple notarization。仅本地构建出的 unsigned 或 ad-hoc signed 产物适合开发验证，不应作为普通用户下载版本发布。
 
@@ -148,11 +150,12 @@ Skill Repo Tracker is a local-first macOS app for people who install, update, an
 
 Instead of treating Claude Code, Codex, Gemini, OpenCode, OpenClaw, or Hermes folders as the source of truth, the app keeps one independent Skill library at `~/SkillRepoTracker/skills`. Skills are installed there first, then copied to selected tool directories.
 
-Current version: `v1.1.3`
+Current version: `v1.1.4`
 
 ### What It Helps With
 
 - Track which GitHub repository, path, and version each Skill came from.
+- Manage multiple manually added GitHub accounts, including personal public repositories, private repositories, Starred repositories, and tracked repositories.
 - Install and update Skills without silently overwriting local edits.
 - Publish the same Skill library to Claude Code and Codex by default.
 - Optionally publish to Gemini, OpenCode, OpenClaw, and Hermes.
@@ -186,7 +189,7 @@ npm run tauri build -- --bundles app,dmg
 Generated artifacts:
 
 - `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
-- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.3_*.dmg`
+- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.4_*.dmg`
 
 Public DMG releases must be signed with Developer ID and notarized by Apple. Unsigned or ad-hoc signed local builds are for development validation only.
 

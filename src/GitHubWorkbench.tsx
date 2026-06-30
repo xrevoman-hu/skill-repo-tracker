@@ -8,10 +8,9 @@ type Props = {
   activeAccountId: string;
   setActiveAccountId: (id: string) => void;
   isPending: (key: string) => boolean;
-  onSaveToken: (token: string) => Promise<void>;
+  onOpenAddAccount: () => void;
   onRefresh: (accountId?: string) => Promise<void>;
   onValidateAccount: (accountId: string) => Promise<void>;
-  onSetDefaultAccount: (accountId: string) => Promise<void>;
   onDeleteAccount: (accountId: string) => Promise<void>;
   onToggleStar: (repo: GitHubRepository) => Promise<void>;
   onTrackRepository: (repo: GitHubRepository) => Promise<void>;
@@ -86,16 +85,19 @@ function repoMatches(repo: GitHubRepository, query: string) {
     .some((value) => value.includes(term));
 }
 
+function isPersonalRepository(repo: GitHubRepository, account?: GitHubAccount) {
+  return Boolean(account?.login) && normalize(repo.owner) === normalize(account.login);
+}
+
 export function GitHubWorkbench({
   accounts,
   repositories,
   activeAccountId,
   setActiveAccountId,
   isPending,
-  onSaveToken,
+  onOpenAddAccount,
   onRefresh,
   onValidateAccount,
-  onSetDefaultAccount,
   onDeleteAccount,
   onToggleStar,
   onTrackRepository,
@@ -105,11 +107,9 @@ export function GitHubWorkbench({
 }: Props) {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
-  const [token, setToken] = useState("");
   const [selectedKey, setSelectedKey] = useState("");
   const activeAccount =
     accounts.find((account) => account.id === activeAccountId) ||
-    accounts.find((account) => account.isDefault) ||
     accounts[0];
 
   useEffect(() => {
@@ -126,14 +126,16 @@ export function GitHubWorkbench({
 
   const filteredRepos = useMemo(() => {
     return activeRepos.filter((repo) => {
+      const personalRepo = isPersonalRepository(repo, activeAccount);
       const filterMatch =
         filter === "all" ||
-        (filter === "private" && repo.private) ||
+        (filter === "personal-public" && personalRepo && !repo.private) ||
+        (filter === "personal-private" && personalRepo && repo.private) ||
         (filter === "starred" && repo.starred) ||
         (filter === "tracked" && repo.trackedRepoId);
       return filterMatch && repoMatches(repo, query);
     });
-  }, [activeRepos, filter, query]);
+  }, [activeRepos, activeAccount?.login, filter, query]);
 
   const selectedRepo =
     filteredRepos.find((repo) => repoKey(repo) === selectedKey) || filteredRepos[0] || null;
@@ -148,20 +150,15 @@ export function GitHubWorkbench({
 
   const counts = {
     all: activeRepos.length,
-    private: activeRepos.filter((repo) => repo.private).length,
+    personalPublic: activeRepos.filter((repo) => isPersonalRepository(repo, activeAccount) && !repo.private)
+      .length,
+    personalPrivate: activeRepos.filter((repo) => isPersonalRepository(repo, activeAccount) && repo.private)
+      .length,
     starred: activeRepos.filter((repo) => repo.starred).length,
     tracked: activeRepos.filter((repo) => repo.trackedRepoId).length,
   };
 
-  async function saveToken() {
-    const value = token.trim();
-    if (!value) return;
-    await onSaveToken(value);
-    setToken("");
-  }
-
   const refreshKey = `githubRefresh:${activeAccount?.id || "all"}`;
-  const savePending = isPending("githubSaveToken");
 
   return (
     <div className={`github-workbench-grid ${selectedRepo ? "has-inspector" : "no-inspector"}`}>
@@ -172,6 +169,9 @@ export function GitHubWorkbench({
             <p>{t("githubSubtitle")}</p>
           </div>
           <div className="github-header-actions">
+            <Button disabled={isPending("githubSaveToken")} onClick={onOpenAddAccount}>
+              {t("addAccount")}
+            </Button>
             <Button
               disabled={!activeAccount || isPending(refreshKey)}
               onClick={() => onRefresh(activeAccount?.id)}
@@ -194,7 +194,6 @@ export function GitHubWorkbench({
                   type="button"
                 >
                   <span>{accountLabel(account)}</span>
-                  {account.isDefault && <Chip tone="source-chip">{t("defaultAccount")}</Chip>}
                   <Chip tone={account.status === "verified" ? "success" : "unknown"}>
                     {t(account.status === "verified" ? "tokenVerified" : "tokenSavedUnverified")}
                   </Chip>
@@ -207,25 +206,14 @@ export function GitHubWorkbench({
               <span>{t("githubNoAccountText")}</span>
             </div>
           )}
-          <div className="token-add-row">
-            <input
-              aria-label={t("tokenPlaceholder")}
-              onChange={(event) => setToken(event.target.value)}
-              placeholder={t("tokenPlaceholder")}
-              type="password"
-              value={token}
-            />
-            <Button disabled={!token.trim() || savePending} onClick={saveToken}>
-              {savePending ? t("saving") : t("addAccount")}
-            </Button>
-          </div>
         </div>
 
         <div className="github-filter-bar">
           <div className="segmented" role="group" aria-label={t("githubTitle")}>
             {[
               ["all", `${t("githubAll")} ${counts.all}`],
-              ["private", `${t("githubPrivate")} ${counts.private}`],
+              ["personal-public", `${t("githubPersonalPublic")} ${counts.personalPublic}`],
+              ["personal-private", `${t("githubPersonalPrivate")} ${counts.personalPrivate}`],
               ["starred", `${t("githubStarred")} ${counts.starred}`],
               ["tracked", `${t("githubTracked")} ${counts.tracked}`],
             ].map(([id, label]) => (
@@ -359,12 +347,6 @@ export function GitHubWorkbench({
                     onClick={() => onValidateAccount(activeAccount.id)}
                   >
                     {isPending(`githubValidate:${activeAccount.id}`) ? t("validating") : t("validateToken")}
-                  </Button>
-                  <Button
-                    disabled={activeAccount.isDefault}
-                    onClick={() => onSetDefaultAccount(activeAccount.id)}
-                  >
-                    {t("makeDefault")}
                   </Button>
                   <Button onClick={() => onDeleteAccount(activeAccount.id)} variant="danger">
                     {t("deleteAccount")}

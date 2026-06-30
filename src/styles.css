@@ -571,8 +571,7 @@ a {
 
 .github-account-strip {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: center;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
@@ -581,13 +580,16 @@ a {
 
 .account-pill-row {
   display: flex;
+  width: 100%;
   gap: 8px;
   min-width: 0;
   overflow-x: auto;
   padding-bottom: 2px;
+  scrollbar-width: thin;
 }
 
 .account-pill {
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -627,29 +629,6 @@ a {
 .github-empty-inline strong {
   color: var(--text);
   font-size: 13px;
-}
-
-.token-add-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  min-width: 0;
-}
-
-.token-add-row input {
-  min-width: 0;
-  height: 32px;
-  padding: 0 10px;
-  border: 1px solid #d1d6de;
-  border-radius: 7px;
-  background: #fff;
-  color: var(--text);
-  outline: none;
-}
-
-.token-add-row input:focus {
-  border-color: var(--blue);
-  box-shadow: 0 0 0 3px rgba(31, 114, 232, 0.14);
 }
 
 .github-filter-bar {
@@ -2010,6 +1989,10 @@ input[type="checkbox"] {
   background: var(--orange-soft);
 }
 
+.github-token-note {
+  margin-top: 4px;
+}
+
 .backup-summary {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2161,7 +2144,6 @@ input[type="checkbox"] {
 .app-shell[data-theme="dark"] .row-actions button,
 .app-shell[data-theme="dark"] .icon-button,
 .app-shell[data-theme="dark"] .account-pill,
-.app-shell[data-theme="dark"] .token-add-row input,
 .app-shell[data-theme="dark"] .form-row input,
 .app-shell[data-theme="dark"] .settings-section input,
 .app-shell[data-theme="dark"] .folder-picker-row button,
@@ -2386,10 +2368,6 @@ input[type="checkbox"] {
   .github-search {
     width: 100%;
     min-width: 0;
-  }
-
-  .token-add-row {
-    grid-template-columns: minmax(0, 1fr);
   }
 
   .settings-main-column,

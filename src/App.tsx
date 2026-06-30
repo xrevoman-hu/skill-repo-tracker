@@ -458,7 +458,6 @@ const initialGithubAccounts: GitHubAccount[] = [
     status: "verified",
     scopes: "repo, user, starring",
     lastVerified: "2026-06-30 10:00",
-    isDefault: true,
   },
 ];
 
@@ -519,7 +518,7 @@ const navItems = [
 
 const APP_METADATA = {
   name: "Skill Repo Tracker",
-  version: "1.1.3",
+  version: "1.1.4",
   projectGithubUrl: "https://github.com/xrevoman-hu/skill-repo-tracker",
   openSource: true,
 };
@@ -842,11 +841,14 @@ const COPY = {
     githubSubtitle: "浏览当前账号可访问仓库、私仓和 Star 项目，并把需要的仓库加入追踪。",
     refreshGithub: "刷新 GitHub",
     refreshing: "刷新中…",
-    defaultAccount: "默认",
     githubNoAccountTitle: "添加 GitHub 账号",
     githubNoAccountText: "粘贴具备仓库读取权限的 token 后，可以查看私仓、Star 项目并加入追踪。",
+    addGithubAccountTitle: "添加 GitHub 账号",
+    githubTokenSecurityNote: "Token 只会保存到系统安全存储，不会写入 SQLite、manifest 或任务日志。",
     addAccount: "添加账号",
     githubAll: "全部",
+    githubPersonalPublic: "个人公开",
+    githubPersonalPrivate: "个人私有",
     githubPrivate: "私有",
     githubPublic: "公开",
     githubStarred: "Starred",
@@ -866,7 +868,6 @@ const COPY = {
     githubAccount: "GitHub 账号",
     account: "账号",
     permissions: "权限",
-    makeDefault: "设为默认",
     deleteAccount: "删除账号",
   },
   en: {
@@ -1186,11 +1187,14 @@ const COPY = {
     githubSubtitle: "Browse accessible repositories, private repositories, and starred projects, then track what matters.",
     refreshGithub: "Refresh GitHub",
     refreshing: "Refreshing...",
-    defaultAccount: "Default",
     githubNoAccountTitle: "Add GitHub account",
     githubNoAccountText: "Paste a token with repository read access to browse private repos, starred projects, and tracked sources.",
+    addGithubAccountTitle: "Add GitHub account",
+    githubTokenSecurityNote: "Tokens are stored only in the secure system store, never in SQLite, manifests, or task logs.",
     addAccount: "Add account",
     githubAll: "All",
+    githubPersonalPublic: "Personal public",
+    githubPersonalPrivate: "Personal private",
     githubPrivate: "Private",
     githubPublic: "Public",
     githubStarred: "Starred",
@@ -1210,7 +1214,6 @@ const COPY = {
     githubAccount: "GitHub account",
     account: "Account",
     permissions: "Permissions",
-    makeDefault: "Make default",
     deleteAccount: "Delete account",
   },
 };
@@ -1695,12 +1698,10 @@ export function App() {
       setTasks(nextTasks);
       setGithubAccounts(nextGithubAccounts);
       setGithubRepositories(nextGithubRepositories);
-      const nextDefaultAccount =
-        nextGithubAccounts.find((account) => account.isDefault) || nextGithubAccounts[0];
       setActiveGithubAccountId((id) =>
         id && nextGithubAccounts.some((account) => account.id === id)
           ? id
-          : nextDefaultAccount?.id || "",
+          : nextGithubAccounts[0]?.id || "",
       );
       applySettings(nextSettings);
       if (!nextRepos.length) {
@@ -2234,24 +2235,25 @@ export function App() {
 
   async function saveGithubAccountToken(token) {
     const actionKey = "githubSaveToken";
-    if (isPending(actionKey)) return;
+    if (isPending(actionKey)) return false;
     setActionPending(actionKey, true);
     if (desktopRuntime) {
       try {
         const accounts = await api.saveGithubAccountToken(token);
         setGithubAccounts(accounts);
-        const nextDefault = accounts.find((account) => account.isDefault) || accounts[0];
-        setActiveGithubAccountId(nextDefault?.id || "");
+        setActiveGithubAccountId(accounts[0]?.id || "");
         showToast(t("tokenValidated"));
+        return true;
       } catch (error) {
         showToast(error.message || t("tokenSavedButValidationFailed"));
+        return false;
       } finally {
         setActionPending(actionKey, false);
       }
-      return;
     }
     showToast(t("tokenValidated"));
     setActionPending(actionKey, false);
+    return true;
   }
 
   async function refreshGithubCatalog(accountId) {
@@ -2303,24 +2305,6 @@ export function App() {
     setActionPending(actionKey, false);
   }
 
-  async function setDefaultGithubAccount(accountId) {
-    if (desktopRuntime) {
-      try {
-        const accounts = await api.setDefaultGithubAccount(accountId);
-        setGithubAccounts(accounts);
-        setActiveGithubAccountId(accountId);
-        showToast(t("settingsSaved"));
-      } catch (error) {
-        showToast(error.message || t("sourceUnavailableToast"));
-      }
-      return;
-    }
-    setGithubAccounts((items) =>
-      items.map((account) => ({ ...account, isDefault: account.id === accountId })),
-    );
-    setActiveGithubAccountId(accountId);
-  }
-
   async function deleteGithubAccount(accountId) {
     const account = githubAccounts.find((item) => item.id === accountId);
     if (!window.confirm(`${t("deleteAccount")}: ${account?.login || accountId}?`)) return;
@@ -2329,8 +2313,7 @@ export function App() {
         const accounts = await api.deleteGithubAccount(accountId);
         setGithubAccounts(accounts);
         setGithubRepositories((items) => items.filter((item) => item.accountId !== accountId));
-        const nextDefault = accounts.find((item) => item.isDefault) || accounts[0];
-        setActiveGithubAccountId(nextDefault?.id || "");
+        setActiveGithubAccountId(accounts[0]?.id || "");
         showToast(t("tokenCleared"));
       } catch (error) {
         showToast(error.message || t("sourceUnavailableToast"));
@@ -2983,17 +2966,19 @@ export function App() {
     return () => window.removeEventListener("keydown", handleEscape);
   }, [modal]);
 
-  function handleContentGridMouseDown(event) {
+  function shouldIgnoreInspectorDismiss(target) {
+    return Boolean(
+      target.closest(".inspector") ||
+        target.closest("button, input, textarea, select, a") ||
+        target.closest(".data-table tbody tr") ||
+        target.closest(".segmented"),
+    );
+  }
+
+  function handleWorkspaceMouseDown(event) {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
-    if (
-      target.closest(".inspector") ||
-      target.closest("button, input, textarea, select, a") ||
-      target.closest(".data-table tbody tr") ||
-      target.closest(".segmented")
-    ) {
-      return;
-    }
+    if (shouldIgnoreInspectorDismiss(target)) return;
     closeActiveInspector();
   }
 
@@ -3036,7 +3021,14 @@ export function App() {
 
       </aside>
 
-      <section className={`workspace ${activeTab === "settings" || activeTab === "github" ? "settings-workspace" : ""}`}>
+      <section
+        className={`workspace ${activeTab === "settings" || activeTab === "github" ? "settings-workspace" : ""}`}
+        onMouseDown={
+          activeTab === "repositories" || activeTab === "skills"
+            ? handleWorkspaceMouseDown
+            : undefined
+        }
+      >
         {activeTab !== "settings" && activeTab !== "github" && (
           <Toolbar
             activeTab={activeTab}
@@ -3065,7 +3057,6 @@ export function App() {
               ? ""
               : "no-inspector"
           }`}
-          onMouseDown={handleContentGridMouseDown}
         >
           {activeTab === "repositories" && (
             <RepositoriesView
@@ -3093,10 +3084,9 @@ export function App() {
               activeAccountId={activeGithubAccountId}
               setActiveAccountId={setActiveGithubAccountId}
               isPending={isPending}
-              onSaveToken={saveGithubAccountToken}
+              onOpenAddAccount={() => setModal({ type: "github-account-token" })}
               onRefresh={refreshGithubCatalog}
               onValidateAccount={validateGithubAccount}
-              onSetDefaultAccount={setDefaultGithubAccount}
               onDeleteAccount={deleteGithubAccount}
               onToggleStar={toggleGithubStar}
               onTrackRepository={trackGithubRepository}
@@ -3239,6 +3229,15 @@ export function App() {
           mode={modal.mode || "updated"}
           pending={isPending(`backup:${modal.mode || "updated"}`)}
           language={language}
+          t={t}
+        />
+      )}
+
+      {modal?.type === "github-account-token" && (
+        <GitHubAccountTokenModal
+          onClose={() => setModal(null)}
+          onSaveToken={saveGithubAccountToken}
+          pending={isPending("githubSaveToken")}
           t={t}
         />
       )}
@@ -4876,6 +4875,61 @@ function AddRepoModal({ newRepo, setNewRepo, onClose, onConfirm, loading, t }: a
       <div className="result-box">
         <strong>{t("detectionPreview")}</strong>
         <p>{t("detectionPreviewText")}</p>
+      </div>
+    </Modal>
+  );
+}
+
+function GitHubAccountTokenModal({ onClose, onSaveToken, pending, t }: any) {
+  const [token, setToken] = useState("");
+
+  async function submitToken() {
+    const value = token.trim();
+    if (!value || pending) return;
+    const saved = await onSaveToken(value);
+    if (saved !== false) {
+      setToken("");
+      onClose();
+    }
+  }
+
+  return (
+    <Modal
+      title={t("addGithubAccountTitle")}
+      onClose={onClose}
+      closeLabel={t("close")}
+      footer={
+        <>
+          <Button onClick={onClose}>{t("cancel")}</Button>
+          <Button
+            variant="primary"
+            onClick={submitToken}
+            disabled={pending || !token.trim()}
+          >
+            {pending ? t("saving") : t("addAccount")}
+          </Button>
+        </>
+      }
+    >
+      <label className="form-row">
+        {t("tokenPlaceholder")}
+        <input
+          autoFocus
+          onChange={(event) => setToken(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              submitToken();
+            }
+          }}
+          placeholder="github_pat_..."
+          type="password"
+          value={token}
+        />
+      </label>
+      <div className="result-box github-token-note">
+        <strong>{t("githubAuthentication")}</strong>
+        <p>{t("githubTokenSecurityNote")}</p>
       </div>
     </Modal>
   );

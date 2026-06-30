@@ -1,12 +1,25 @@
 # Release Notes
 
+## v1.1.4 - 手动 GitHub 账号与私仓健壮性
+
+这个版本移除 GitHub 默认账号和旧全局 token 兜底逻辑。GitHub 账号需要在工作台里逐个手动添加，私仓追踪应从对应账号的仓库目录进入，避免旧 token 或默认账号在后台误用。
+
+- 启动时清理旧版 `default` / `github:legacy-default` 账号、对应 GitHub catalog、旧全局 token 状态，并将相关已追踪仓库的账号绑定置空。
+- GitHub API token 选择只来自显式账号绑定；手动 URL 添加不再借默认 token 访问私仓。
+- GitHub 工作台移除“默认”标记和“设为默认”操作，删除账号后不会自动提升任何账号为默认。
+- 添加账号改为顶部按钮 + 弹窗流程，账号列表可横向滚动，适合管理多个 GitHub 账号。
+- 仓库筛选补齐“个人公开”和“个人私有”，组织/协作仓库不会混入个人仓库筛选。
+- 仓库页支持点击主区域空白收起右侧详情，同时保留行点击、复选框、筛选、搜索和备份按钮的原行为。
+
+下载说明：Apple Silicon，macOS 12+。本地验证产物未 notarize，不作为普通用户公开分发包。
+
 ## v1.1.3 - GitHub 私仓与 Star 工作台
 
 这个版本新增独立 GitHub 工作台，用于管理多个 GitHub 账号 token、浏览可访问仓库和 Star 项目，并把私仓按正确账号加入追踪。
 
 - 新增 GitHub 账号档案：SQLite 只保存账号元数据和 keyring 引用，真实 token 仍只进入 macOS Keychain。
 - 新增仓库目录：可刷新个人仓库、私仓、组织可访问仓库和 Starred 仓库，并按全部 / 私有 / Starred / 已追踪筛选。
-- 支持 Star / Unstar、从 GitHub 加入追踪、取消追踪、验证账号、设为默认账号和删除账号。
+- 支持 Star / Unstar、从 GitHub 加入追踪、取消追踪、验证账号和删除账号。
 - 已追踪仓库会记录首选 GitHub 账号，后续检测、备份、README 和 Skill 读取会优先使用对应账号 token。
 - 设置页保留 GitHub 安全状态和工作台入口，不再把 token 配置做成孤立流程。
 
