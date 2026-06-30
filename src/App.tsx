@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api, isDesktopRuntime } from "./api";
 import type { GitHubAccount, GitHubRepository } from "./api";
 import { GitHubWorkbench } from "./GitHubWorkbench";
+import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
 
 const initialRepos = [
   {
@@ -518,7 +519,7 @@ const navItems = [
 
 const APP_METADATA = {
   name: "Skill Repo Tracker",
-  version: "1.1.4",
+  version: "1.1.5",
   projectGithubUrl: "https://github.com/xrevoman-hu/skill-repo-tracker",
   openSource: true,
 };
@@ -2965,15 +2966,6 @@ export function App() {
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, [modal]);
-
-  function shouldIgnoreInspectorDismiss(target) {
-    return Boolean(
-      target.closest(".inspector") ||
-        target.closest("button, input, textarea, select, a") ||
-        target.closest(".data-table tbody tr") ||
-        target.closest(".segmented"),
-    );
-  }
 
   function handleWorkspaceMouseDown(event) {
     const target = event.target;

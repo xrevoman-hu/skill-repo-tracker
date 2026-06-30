@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import type { GitHubAccount, GitHubRepository } from "./api";
+import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
 
 type Props = {
   accounts: GitHubAccount[];
@@ -137,16 +138,15 @@ export function GitHubWorkbench({
     });
   }, [activeRepos, activeAccount?.login, filter, query]);
 
-  const selectedRepo =
-    filteredRepos.find((repo) => repoKey(repo) === selectedKey) || filteredRepos[0] || null;
+  const selectedRepo = selectedKey
+    ? filteredRepos.find((repo) => repoKey(repo) === selectedKey) || null
+    : null;
 
   useEffect(() => {
-    if (!selectedRepo) {
+    if (selectedKey && !filteredRepos.some((repo) => repoKey(repo) === selectedKey)) {
       setSelectedKey("");
-    } else if (!filteredRepos.some((repo) => repoKey(repo) === selectedKey)) {
-      setSelectedKey(repoKey(selectedRepo));
     }
-  }, [filteredRepos, selectedKey, selectedRepo]);
+  }, [filteredRepos, selectedKey]);
 
   const counts = {
     all: activeRepos.length,
@@ -160,8 +160,18 @@ export function GitHubWorkbench({
 
   const refreshKey = `githubRefresh:${activeAccount?.id || "all"}`;
 
+  function handleWorkbenchMouseDown(event: MouseEvent<HTMLElement>) {
+    const target = event.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (shouldIgnoreInspectorDismiss(target)) return;
+    setSelectedKey("");
+  }
+
   return (
-    <div className={`github-workbench-grid ${selectedRepo ? "has-inspector" : "no-inspector"}`}>
+    <div
+      className={`github-workbench-grid ${selectedRepo ? "has-inspector" : "no-inspector"}`}
+      onMouseDown={handleWorkbenchMouseDown}
+    >
       <section className="main-pane github-pane">
         <div className="pane-header github-header">
           <div>
@@ -331,6 +341,14 @@ export function GitHubWorkbench({
                 {selectedRepo.starred ? t("githubStarred") : t("notStarred")}
               </Chip>
             </div>
+            <button
+              className="icon-button"
+              onClick={() => setSelectedKey("")}
+              type="button"
+              aria-label={t("close")}
+            >
+              x
+            </button>
           </header>
 
           <section className="inspector-section">
