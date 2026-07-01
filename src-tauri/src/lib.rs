@@ -19,7 +19,11 @@ use tauri_plugin_dialog::DialogExt;
 use walkdir::WalkDir;
 use zip::ZipArchive;
 
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.5";
+mod plugins;
+
+use plugins::{scan_plugins_from_directory, scan_plugins_from_zip, sync_plugins, PluginScan};
+
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.6";
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
 const LEGACY_GITHUB_ACCOUNT_ID: &str = "github:legacy-default";
@@ -208,6 +212,7 @@ pub struct UiRepository {
     backup_path: String,
     snapshot_time: String,
     recognized_skills: Vec<RecognizedSkill>,
+    recognized_plugins: Vec<RecognizedPlugin>,
     source_type: String,
     local_path: Option<String>,
 }
@@ -219,6 +224,16 @@ pub struct RecognizedSkill {
     name: String,
     path: String,
     version: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RecognizedPlugin {
+    id: String,
+    name: String,
+    kind: String,
+    install_command: String,
+    skill_count: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -269,8 +284,67 @@ pub struct SkillDetail {
     sync_targets: Vec<String>,
     resolved_sync_targets: Vec<String>,
     published_targets: Vec<String>,
+    plugins: Vec<SkillPluginReference>,
     skill_md: String,
     file_path: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillPluginReference {
+    id: String,
+    name: String,
+    kind: String,
+    install_command: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct UiPlugin {
+    id: String,
+    repo_id: String,
+    repo_name: String,
+    name: String,
+    description: String,
+    kind: String,
+    install_command: String,
+    update_command: Option<String>,
+    source_path: String,
+    source_excerpt: String,
+    status: String,
+    skill_count: i64,
+    detected_sha: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginDetail {
+    id: String,
+    repo_id: String,
+    repo_name: String,
+    name: String,
+    description: String,
+    kind: String,
+    install_command: String,
+    update_command: Option<String>,
+    source_path: String,
+    source_excerpt: String,
+    status: String,
+    skill_count: i64,
+    detected_sha: String,
+    updated_at: String,
+    linked_skills: Vec<PluginSkillSummary>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginSkillSummary {
+    id: String,
+    name: String,
+    path: String,
+    version: String,
+    status: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -420,6 +494,12 @@ pub struct BackupRepositoriesRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SkillActionRequest {
     skill_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginActionRequest {
+    plugin_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -709,6 +789,30 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           content_hash TEXT,
           synced_at TEXT NOT NULL,
           PRIMARY KEY(skill_id, target_id),
+          FOREIGN KEY(skill_id) REFERENCES skills(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS plugins (
+          id TEXT PRIMARY KEY,
+          repo_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          description TEXT NOT NULL DEFAULT '',
+          kind TEXT NOT NULL,
+          install_command TEXT NOT NULL,
+          update_command TEXT,
+          source_path TEXT NOT NULL,
+          source_excerpt TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'detected',
+          detected_sha TEXT NOT NULL DEFAULT 'unknown',
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(repo_id) REFERENCES repositories(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS plugin_skill_links (
+          plugin_id TEXT NOT NULL,
+          skill_id TEXT NOT NULL,
+          PRIMARY KEY(plugin_id, skill_id),
+          FOREIGN KEY(plugin_id) REFERENCES plugins(id) ON DELETE CASCADE,
           FOREIGN KEY(skill_id) REFERENCES skills(id) ON DELETE CASCADE
         );
 
@@ -1599,6 +1703,31 @@ fn recognized_skills(conn: &Connection, repo_id: &str) -> Result<Vec<RecognizedS
     Ok(skills)
 }
 
+fn recognized_plugins(conn: &Connection, repo_id: &str) -> Result<Vec<RecognizedPlugin>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.name, p.kind, p.install_command, COUNT(ps.skill_id) AS skill_count
+         FROM plugins p
+         LEFT JOIN plugin_skill_links ps ON ps.plugin_id = p.id
+         WHERE p.repo_id = ?1 AND p.status != 'source-unavailable'
+         GROUP BY p.id, p.name, p.kind, p.install_command
+         ORDER BY p.kind ASC, p.name ASC",
+    )?;
+    let rows = stmt.query_map(params![repo_id], |row| {
+        Ok(RecognizedPlugin {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            kind: row.get(2)?,
+            install_command: row.get(3)?,
+            skill_count: row.get(4)?,
+        })
+    })?;
+    let mut plugins = Vec::new();
+    for row in rows {
+        plugins.push(row?);
+    }
+    Ok(plugins)
+}
+
 fn ui_repository(conn: &Connection, repo: RepoRecord) -> Result<UiRepository, AppError> {
     Ok(UiRepository {
         id: repo.id.clone(),
@@ -1618,6 +1747,7 @@ fn ui_repository(conn: &Connection, repo: RepoRecord) -> Result<UiRepository, Ap
             .unwrap_or_else(|| "Unavailable".to_string()),
         snapshot_time: local_display(repo.snapshot_time.as_deref()),
         recognized_skills: recognized_skills(conn, &repo.id)?,
+        recognized_plugins: recognized_plugins(conn, &repo.id)?,
         source_type: repo.source_type,
         local_path: repo.local_path,
     })
@@ -1698,6 +1828,101 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
     drop(stmt);
     for skill in &mut skills {
         skill.published_targets = published_target_ids(conn, &skill.id)?;
+    }
+    Ok(skills)
+}
+
+fn load_ui_plugins(conn: &Connection) -> Result<Vec<UiPlugin>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.repo_id, r.name, p.name, p.description, p.kind, p.install_command,
+                p.update_command, p.source_path, p.source_excerpt, p.status,
+                COUNT(ps.skill_id) AS skill_count, p.detected_sha, p.updated_at
+         FROM plugins p
+         JOIN repositories r ON r.id = p.repo_id
+         LEFT JOIN plugin_skill_links ps ON ps.plugin_id = p.id
+         GROUP BY p.id, p.repo_id, r.name, p.name, p.description, p.kind, p.install_command,
+                  p.update_command, p.source_path, p.source_excerpt, p.status,
+                  p.detected_sha, p.updated_at
+         ORDER BY
+           CASE p.status WHEN 'detected' THEN 0 ELSE 1 END,
+           p.kind ASC,
+           p.name ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(UiPlugin {
+            id: row.get(0)?,
+            repo_id: row.get(1)?,
+            repo_name: display_local_library_name(row.get(2)?),
+            name: row.get(3)?,
+            description: row.get(4)?,
+            kind: row.get(5)?,
+            install_command: row.get(6)?,
+            update_command: row.get(7)?,
+            source_path: row.get(8)?,
+            source_excerpt: row.get(9)?,
+            status: row.get(10)?,
+            skill_count: row.get(11)?,
+            detected_sha: row.get(12)?,
+            updated_at: local_display(row.get::<_, Option<String>>(13)?.as_deref()),
+        })
+    })?;
+    let mut plugins = Vec::new();
+    for row in rows {
+        plugins.push(row?);
+    }
+    Ok(plugins)
+}
+
+fn plugin_references_for_skill(
+    conn: &Connection,
+    skill_id_value: &str,
+) -> Result<Vec<SkillPluginReference>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.name, p.kind, p.install_command
+         FROM plugins p
+         JOIN plugin_skill_links ps ON ps.plugin_id = p.id
+         WHERE ps.skill_id = ?1 AND p.status != 'source-unavailable'
+         ORDER BY p.kind ASC, p.name ASC",
+    )?;
+    let rows = stmt.query_map(params![skill_id_value], |row| {
+        Ok(SkillPluginReference {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            kind: row.get(2)?,
+            install_command: row.get(3)?,
+        })
+    })?;
+    let mut plugins = Vec::new();
+    for row in rows {
+        plugins.push(row?);
+    }
+    Ok(plugins)
+}
+
+fn plugin_linked_skills(
+    conn: &Connection,
+    plugin_id_value: &str,
+) -> Result<Vec<PluginSkillSummary>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.name, s.path, s.remote_version,
+                CASE WHEN s.deleted_at IS NOT NULL THEN 'deleted' ELSE s.status END AS status
+         FROM skills s
+         JOIN plugin_skill_links ps ON ps.skill_id = s.id
+         WHERE ps.plugin_id = ?1
+         ORDER BY s.name ASC",
+    )?;
+    let rows = stmt.query_map(params![plugin_id_value], |row| {
+        Ok(PluginSkillSummary {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            path: row.get(2)?,
+            version: row.get(3)?,
+            status: row.get(4)?,
+        })
+    })?;
+    let mut skills = Vec::new();
+    for row in rows {
+        skills.push(row?);
     }
     Ok(skills)
 }
@@ -2292,7 +2517,7 @@ fn scan_skills_from_zip(bytes: &[u8], repo_name: &str) -> Result<Vec<SkillScan>,
             skill_path
         };
         let mut contents = String::new();
-        let _ = file.read_to_string(&mut contents);
+        file.read_to_string(&mut contents)?;
         let fallback = skill_path
             .rsplit('/')
             .next()
@@ -2627,6 +2852,18 @@ fn sync_skills(
     Ok(())
 }
 
+fn save_repository_with_plugins(
+    conn: &Connection,
+    remote: &RemoteInfo,
+    scans: &[SkillScan],
+    plugins: &[PluginScan],
+    github_account_id: Option<&str>,
+) -> Result<String, AppError> {
+    let id = save_repository_with_account(conn, remote, scans, github_account_id)?;
+    sync_plugins(conn, &id, &remote.full_name, &remote.sha, scans, plugins)?;
+    Ok(id)
+}
+
 fn save_repository_with_account(
     conn: &Connection,
     remote: &RemoteInfo,
@@ -2797,6 +3034,16 @@ fn save_local_repository(
     scans: &[SkillScan],
     installed_library: bool,
 ) -> Result<String, AppError> {
+    save_local_repository_with_plugins(conn, root, scans, &[], installed_library)
+}
+
+fn save_local_repository_with_plugins(
+    conn: &Connection,
+    root: &Path,
+    scans: &[SkillScan],
+    plugins: &[PluginScan],
+    installed_library: bool,
+) -> Result<String, AppError> {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let id = if installed_library {
         installed_root_repo_id(&canonical_root)
@@ -2867,6 +3114,7 @@ fn save_local_repository(
         },
         installed_library,
     )?;
+    sync_plugins(conn, &id, &name, &local_sha, scans, plugins)?;
     Ok(id)
 }
 
@@ -3560,6 +3808,65 @@ fn list_skills(state: State<'_, AppState>) -> ApiResponse<Vec<UiSkill>> {
 }
 
 #[tauri::command]
+fn list_plugins(state: State<'_, AppState>) -> ApiResponse<Vec<UiPlugin>> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match load_ui_plugins(&db) {
+        Ok(items) => ApiResponse::ok(items),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn get_plugin_detail(
+    request: PluginActionRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<PluginDetail> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = db
+        .query_row(
+            "SELECT p.id, p.repo_id, r.name, p.name, p.description, p.kind, p.install_command,
+                    p.update_command, p.source_path, p.source_excerpt, p.status,
+                    COUNT(ps.skill_id) AS skill_count, p.detected_sha, p.updated_at
+             FROM plugins p
+             JOIN repositories r ON r.id = p.repo_id
+             LEFT JOIN plugin_skill_links ps ON ps.plugin_id = p.id
+             WHERE p.id = ?1
+             GROUP BY p.id, p.repo_id, r.name, p.name, p.description, p.kind, p.install_command,
+                      p.update_command, p.source_path, p.source_excerpt, p.status,
+                      p.detected_sha, p.updated_at",
+            params![request.plugin_id],
+            |row| {
+                Ok(PluginDetail {
+                    id: row.get(0)?,
+                    repo_id: row.get(1)?,
+                    repo_name: display_local_library_name(row.get(2)?),
+                    name: row.get(3)?,
+                    description: row.get(4)?,
+                    kind: row.get(5)?,
+                    install_command: row.get(6)?,
+                    update_command: row.get(7)?,
+                    source_path: row.get(8)?,
+                    source_excerpt: row.get(9)?,
+                    status: row.get(10)?,
+                    skill_count: row.get(11)?,
+                    detected_sha: row.get(12)?,
+                    updated_at: local_display(row.get::<_, Option<String>>(13)?.as_deref()),
+                    linked_skills: Vec::new(),
+                })
+            },
+        )
+        .optional();
+    match result {
+        Ok(Some(mut detail)) => {
+            detail.linked_skills = plugin_linked_skills(&db, &detail.id).unwrap_or_default();
+            Ok(ApiResponse::ok(detail))
+        }
+        Ok(None) => Ok(api_err(AppError::new("plugin_not_found", "插件不存在。"))),
+        Err(error) => Ok(api_err(AppError::from(error))),
+    }
+}
+
+#[tauri::command]
 async fn get_skill_detail(
     request: SkillActionRequest,
     state: State<'_, AppState>,
@@ -3607,6 +3914,7 @@ async fn get_skill_detail(
                         ),
                         sync_targets,
                         published_targets: Vec::new(),
+                        plugins: Vec::new(),
                         skill_md: String::new(),
                         file_path: None,
                     },
@@ -3622,6 +3930,7 @@ async fn get_skill_detail(
             Ok(Some(mut value)) => {
                 value.0.published_targets =
                     published_target_ids(&db, &value.0.id).unwrap_or_default();
+                value.0.plugins = plugin_references_for_skill(&db, &value.0.id).unwrap_or_default();
                 value
             }
             Ok(None) => return Ok(api_err(AppError::new("skill_not_found", "Skill 不存在。"))),
@@ -3953,13 +4262,20 @@ async fn add_repository(
     let zip = match download_zip(&state.http, &remote.owner, &remote.repo, &remote.sha, None).await
     {
         Ok(zip) => zip,
-        Err(_) => Vec::new(),
+        Err(error) => return Ok(api_err(error)),
     };
-    let scans = scan_skills_from_zip(&zip, &remote.full_name).unwrap_or_default();
+    let scans = match scan_skills_from_zip(&zip, &remote.full_name) {
+        Ok(scans) => scans,
+        Err(error) => return Ok(api_err(error)),
+    };
+    let plugins = match scan_plugins_from_zip(&zip, &remote.full_name, &scans) {
+        Ok(plugins) => plugins,
+        Err(error) => return Ok(api_err(error)),
+    };
 
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<UiRepository>, AppError> {
-        let id = save_repository_with_account(&db, &remote, &scans, None)?;
+        let id = save_repository_with_plugins(&db, &remote, &scans, &plugins, None)?;
         insert_task(
             &db,
             &format!("scan-{}", Local::now().format("%Y%m%d%H%M%S")),
@@ -4023,7 +4339,7 @@ async fn check_repositories(
         .await
         {
             Ok(remote) => {
-                let zip = download_zip(
+                let zip = match download_zip(
                     &state.http,
                     &remote.owner,
                     &remote.repo,
@@ -4031,13 +4347,42 @@ async fn check_repositories(
                     token.as_deref(),
                 )
                 .await
-                .unwrap_or_default();
-                let scans = scan_skills_from_zip(&zip, &remote.full_name).unwrap_or_default();
+                {
+                    Ok(zip) => zip,
+                    Err(error) => {
+                        let db = state.db.lock().expect("db mutex poisoned");
+                        let _ = mark_repo_check_failed(&db, &repo.id, &error);
+                        log.push(format_error_for_log(&repo.name, &error));
+                        failed += 1;
+                        continue;
+                    }
+                };
+                let scans = match scan_skills_from_zip(&zip, &remote.full_name) {
+                    Ok(scans) => scans,
+                    Err(error) => {
+                        let db = state.db.lock().expect("db mutex poisoned");
+                        let _ = mark_repo_check_failed(&db, &repo.id, &error);
+                        log.push(format_error_for_log(&repo.name, &error));
+                        failed += 1;
+                        continue;
+                    }
+                };
+                let plugins = match scan_plugins_from_zip(&zip, &remote.full_name, &scans) {
+                    Ok(plugins) => plugins,
+                    Err(error) => {
+                        let db = state.db.lock().expect("db mutex poisoned");
+                        let _ = mark_repo_check_failed(&db, &repo.id, &error);
+                        log.push(format_error_for_log(&repo.name, &error));
+                        failed += 1;
+                        continue;
+                    }
+                };
                 let db = state.db.lock().expect("db mutex poisoned");
-                if let Err(error) = save_repository_with_account(
+                if let Err(error) = save_repository_with_plugins(
                     &db,
                     &remote,
                     &scans,
+                    &plugins,
                     repo.github_account_id.as_deref(),
                 ) {
                     log.push(format_error_for_log(&repo.name, &error));
@@ -4685,7 +5030,8 @@ fn add_local_repository(
             .unwrap_or("Local Repository")
             .to_string();
         let scans = scan_skills_from_directory(&root, &name)?;
-        save_local_repository(&db, &root, &scans, false)?;
+        let plugins = scan_plugins_from_directory(&root, &name, &scans)?;
+        save_local_repository_with_plugins(&db, &root, &scans, &plugins, false)?;
         insert_task(
             &db,
             &format!("local-repo-{}", Local::now().format("%Y%m%d%H%M%S")),
@@ -5449,7 +5795,7 @@ async fn add_repository_from_github(
         Ok(remote) => remote,
         Err(error) => return Ok(api_err(error)),
     };
-    let zip = download_zip(
+    let zip = match download_zip(
         &state.http,
         &remote.owner,
         &remote.repo,
@@ -5457,11 +5803,27 @@ async fn add_repository_from_github(
         Some(&token),
     )
     .await
-    .unwrap_or_default();
-    let scans = scan_skills_from_zip(&zip, &remote.full_name).unwrap_or_default();
+    {
+        Ok(zip) => zip,
+        Err(error) => return Ok(api_err(error)),
+    };
+    let scans = match scan_skills_from_zip(&zip, &remote.full_name) {
+        Ok(scans) => scans,
+        Err(error) => return Ok(api_err(error)),
+    };
+    let plugins = match scan_plugins_from_zip(&zip, &remote.full_name, &scans) {
+        Ok(plugins) => plugins,
+        Err(error) => return Ok(api_err(error)),
+    };
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<UiRepository>, AppError> {
-        let id = save_repository_with_account(&db, &remote, &scans, Some(&request.account_id))?;
+        let id = save_repository_with_plugins(
+            &db,
+            &remote,
+            &scans,
+            &plugins,
+            Some(&request.account_id),
+        )?;
         insert_task(
             &db,
             &format!("scan-{}", Local::now().format("%Y%m%d%H%M%S")),
@@ -5666,6 +6028,8 @@ pub fn run() {
             backup_repositories,
             remove_repository,
             list_skills,
+            list_plugins,
+            get_plugin_detail,
             get_skill_detail,
             get_repository_readme,
             get_github_preview,
@@ -5709,8 +6073,27 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    use crate::plugins::{scan_plugins_from_zip, scan_readme_plugin_commands};
+
     use super::*;
-    use std::fs;
+    use std::{
+        fs,
+        io::{Cursor, Write},
+    };
+    use zip::{write::SimpleFileOptions, ZipWriter};
+
+    fn zip_with_file(path: &str, bytes: &[u8]) -> Vec<u8> {
+        let mut buffer = Cursor::new(Vec::new());
+        {
+            let mut writer = ZipWriter::new(&mut buffer);
+            writer
+                .start_file(path, SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(bytes).unwrap();
+            writer.finish().unwrap();
+        }
+        buffer.into_inner()
+    }
 
     #[test]
     fn parses_github_urls() {
@@ -5974,6 +6357,151 @@ mod tests {
         assert_eq!(scans[0].name, "demo-skill");
         assert_eq!(scans[0].path, "demo-skill");
         assert_eq!(scans[0].version, "v1.2.3");
+    }
+
+    #[test]
+    fn detects_baoyu_style_plugin_entries_from_readme() {
+        let skills = vec![
+            SkillScan {
+                name: "baoyu-image-gen".into(),
+                description: "image".into(),
+                path: "skills/baoyu-image-gen".into(),
+                version: "v1.0.0".into(),
+            },
+            SkillScan {
+                name: "baoyu-research".into(),
+                description: "research".into(),
+                path: "skills/baoyu-research".into(),
+                version: "v1.0.0".into(),
+            },
+        ];
+        let readme = r#"
+# Baoyu Skills
+
+```bash
+npx skills add jimliu/baoyu-skills
+/plugin marketplace add JimLiu/baoyu-skills
+/plugin install baoyu-skills@baoyu-skills
+clawhub install baoyu-image-gen
+```
+"#;
+
+        let plugins = scan_readme_plugin_commands(readme, "README.zh.md", &skills);
+
+        assert_eq!(
+            plugins
+                .iter()
+                .filter(|plugin| plugin.kind == "codex-marketplace")
+                .count(),
+            1
+        );
+        let marketplace = plugins
+            .iter()
+            .find(|plugin| plugin.kind == "codex-marketplace")
+            .unwrap();
+        assert_eq!(marketplace.name, "baoyu-skills");
+        assert_eq!(
+            marketplace.install_command,
+            "/plugin install baoyu-skills@baoyu-skills"
+        );
+        assert_eq!(marketplace.linked_skill_paths.len(), 2);
+
+        let clawhub = plugins
+            .iter()
+            .find(|plugin| plugin.kind == "clawhub-skill")
+            .unwrap();
+        assert_eq!(clawhub.name, "baoyu-image-gen");
+        assert_eq!(
+            clawhub.linked_skill_paths,
+            vec!["skills/baoyu-image-gen".to_string()]
+        );
+        assert!(plugins.iter().any(|plugin| plugin.kind == "skills-cli"));
+    }
+
+    #[test]
+    fn plain_readme_without_plugin_commands_does_not_create_plugins() {
+        let plugins = scan_readme_plugin_commands(
+            "# Demo\n\nThis repository contains one SKILL.md file.",
+            "README.md",
+            &[],
+        );
+
+        assert!(plugins.is_empty());
+    }
+
+    #[test]
+    fn invalid_zip_does_not_become_empty_plugin_scan() {
+        let scans = vec![SkillScan {
+            name: "demo-skill".into(),
+            description: "demo".into(),
+            path: "skills/demo-skill".into(),
+            version: "v1.0.0".into(),
+        }];
+        assert!(scan_plugins_from_zip(b"not a zip", "example/demo", &scans).is_err());
+    }
+
+    #[test]
+    fn invalid_plugin_manifest_does_not_become_empty_plugin_scan() {
+        let zip = zip_with_file("example-demo/plugin.json", br#"{"plugins": ["#);
+        let error = scan_plugins_from_zip(&zip, "example/demo", &[]).unwrap_err();
+        assert_eq!(error.code, "plugin_manifest_invalid");
+    }
+
+    #[test]
+    fn invalid_skill_markdown_in_zip_does_not_become_fallback_skill() {
+        let zip = zip_with_file("example-demo/skills/demo/SKILL.md", &[0xff, 0xfe, 0xfd]);
+        assert!(scan_skills_from_zip(&zip, "example/demo").is_err());
+    }
+
+    #[test]
+    fn saves_plugin_entries_and_skill_links() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let remote = RemoteInfo {
+            owner: "JimLiu".into(),
+            repo: "baoyu-skills".into(),
+            full_name: "JimLiu/baoyu-skills".into(),
+            default_branch: "main".into(),
+            resolved_ref: "main".into(),
+            sha: "bf4e9ac4d4428bda261afcfe981871ceb92d94e6".into(),
+        };
+        let scans = vec![SkillScan {
+            name: "baoyu-image-gen".into(),
+            description: "image".into(),
+            path: "skills/baoyu-image-gen".into(),
+            version: "v1.0.0".into(),
+        }];
+        let plugins = vec![PluginScan {
+            name: "baoyu-skills".into(),
+            description: "Codex plugin marketplace entry".into(),
+            kind: "codex-marketplace".into(),
+            install_command: "/plugin install baoyu-skills@baoyu-skills".into(),
+            update_command: None,
+            source_path: "README.zh.md".into(),
+            source_excerpt: "/plugin install baoyu-skills@baoyu-skills".into(),
+            linked_skill_paths: vec!["skills/baoyu-image-gen".into()],
+        }];
+
+        let repo_id_value =
+            save_repository_with_plugins(&conn, &remote, &scans, &plugins, None).unwrap();
+        let repo = load_ui_repositories(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == repo_id_value)
+            .unwrap();
+        assert_eq!(repo.recognized_plugins.len(), 1);
+        assert_eq!(repo.recognized_plugins[0].skill_count, 1);
+
+        let plugin = load_ui_plugins(&conn).unwrap().pop().unwrap();
+        assert_eq!(plugin.name, "baoyu-skills");
+        assert_eq!(plugin.skill_count, 1);
+        let linked = plugin_linked_skills(&conn, &plugin.id).unwrap();
+        assert_eq!(linked.len(), 1);
+        assert_eq!(linked[0].name, "baoyu-image-gen");
+        let skill_plugins =
+            plugin_references_for_skill(&conn, &skill_id(&repo_id_value, "skills/baoyu-image-gen"))
+                .unwrap();
+        assert_eq!(skill_plugins.len(), 1);
     }
 
     #[test]
@@ -6427,5 +6955,20 @@ mod tests {
         let catalog_table: Option<String> =
             stmt.query_row([], |row| row.get(0)).optional().unwrap();
         assert_eq!(catalog_table.as_deref(), Some("github_repo_catalog"));
+
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'plugins'")
+            .unwrap();
+        let plugin_table: Option<String> = stmt.query_row([], |row| row.get(0)).optional().unwrap();
+        assert_eq!(plugin_table.as_deref(), Some("plugins"));
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'plugin_skill_links'",
+            )
+            .unwrap();
+        let plugin_link_table: Option<String> =
+            stmt.query_row([], |row| row.get(0)).optional().unwrap();
+        assert_eq!(plugin_link_table.as_deref(), Some("plugin_skill_links"));
     }
 }

@@ -3,6 +3,7 @@ import { api, isDesktopRuntime } from "./api";
 import type { GitHubAccount, GitHubRepository } from "./api";
 import { GitHubWorkbench } from "./GitHubWorkbench";
 import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
+import { PluginInspector, PluginsView } from "./PluginsView";
 
 const initialRepos = [
   {
@@ -24,6 +25,22 @@ const initialRepos = [
       { name: "content-skill-core", version: "v1.2.0" },
       { name: "content-skill-plugins", version: "v1.1.1" },
       { name: "content-skill-utils", version: "v0.9.3" },
+    ],
+    recognizedPlugins: [
+      {
+        id: "plugin-content-marketplace",
+        name: "content-skill-kit",
+        kind: "codex-marketplace",
+        installCommand: "/plugin install content-skill-kit@content-skill-kit",
+        skillCount: 1,
+      },
+      {
+        id: "plugin-content-clawhub",
+        name: "content-skill-core",
+        kind: "clawhub-skill",
+        installCommand: "clawhub install content-skill-core",
+        skillCount: 1,
+      },
     ],
   },
   {
@@ -365,6 +382,20 @@ const initialSkills = [
     status: "update-available",
     installed: true,
     updatedAt: "2026-06-12 09:00",
+    plugins: [
+      {
+        id: "plugin-content-marketplace",
+        name: "content-skill-kit",
+        kind: "codex-marketplace",
+        installCommand: "/plugin install content-skill-kit@content-skill-kit",
+      },
+      {
+        id: "plugin-content-clawhub",
+        name: "content-skill-core",
+        kind: "clawhub-skill",
+        installCommand: "clawhub install content-skill-core",
+      },
+    ],
   },
   {
     id: "scene",
@@ -393,6 +424,59 @@ const initialSkills = [
     status: "source-unavailable",
     installed: true,
     updatedAt: "2026-06-01 11:34",
+  },
+];
+
+const initialPlugins = [
+  {
+    id: "plugin-content-marketplace",
+    repoId: "content",
+    repoName: "example-org/content-skill-kit",
+    name: "content-skill-kit",
+    description: "Codex plugin marketplace entry for the content skill kit.",
+    kind: "codex-marketplace",
+    installCommand: "/plugin install content-skill-kit@content-skill-kit",
+    updateCommand: null,
+    sourcePath: "README.md",
+    sourceExcerpt: "/plugin marketplace add example-org/content-skill-kit\n/plugin install content-skill-kit@content-skill-kit",
+    status: "detected",
+    skillCount: 1,
+    detectedSha: "a1b2c3d",
+    updatedAt: "2026-06-14 10:18",
+    linkedSkills: [
+      {
+        id: "content-core",
+        name: "content-skill-core",
+        path: "skills/content-skill-core",
+        version: "a1b2c3d",
+        status: "update-available",
+      },
+    ],
+  },
+  {
+    id: "plugin-content-clawhub",
+    repoId: "content",
+    repoName: "example-org/content-skill-kit",
+    name: "content-skill-core",
+    description: "ClawHub single-Skill install entry.",
+    kind: "clawhub-skill",
+    installCommand: "clawhub install content-skill-core",
+    updateCommand: null,
+    sourcePath: "README.md",
+    sourceExcerpt: "clawhub install content-skill-core",
+    status: "detected",
+    skillCount: 1,
+    detectedSha: "a1b2c3d",
+    updatedAt: "2026-06-14 10:18",
+    linkedSkills: [
+      {
+        id: "content-core",
+        name: "content-skill-core",
+        path: "skills/content-skill-core",
+        version: "a1b2c3d",
+        status: "update-available",
+      },
+    ],
   },
 ];
 
@@ -513,13 +597,14 @@ const navItems = [
   { id: "github", labelKey: "nav.github" },
   { id: "repositories", labelKey: "nav.repositories" },
   { id: "skills", labelKey: "nav.skills" },
+  { id: "plugins", labelKey: "nav.plugins" },
   { id: "tasks", labelKey: "nav.tasks" },
   { id: "settings", labelKey: "nav.settings" },
 ];
 
 const APP_METADATA = {
   name: "Skill Repo Tracker",
-  version: "1.1.5",
+  version: "1.1.6",
   projectGithubUrl: "https://github.com/xrevoman-hu/skill-repo-tracker",
   openSource: true,
 };
@@ -529,6 +614,7 @@ const COPY = {
     "nav.repositories": "仓库",
     "nav.github": "GitHub",
     "nav.skills": "技能",
+    "nav.plugins": "插件",
     "nav.tasks": "任务",
     "nav.settings": "设置",
     localCare: "本地仓库管理",
@@ -551,6 +637,7 @@ const COPY = {
     search: "搜索",
     searchRepositories: "搜索仓库...",
     searchSkills: "搜索 Skill...",
+    searchPlugins: "搜索插件...",
     sourceRepositoryFilter: "来源仓库",
     allRepositories: "全部仓库",
     searchRepository: "搜索仓库",
@@ -602,6 +689,9 @@ const COPY = {
     manifestPath: "manifest 路径",
     backupHistory: "查看备份历史",
     recognizedSkills: "已识别技能",
+    recognizedPlugins: "已识别插件",
+    noPluginsFound: "未发现插件安装入口。",
+    openPluginsManager: "在插件视图中打开",
     noSkillsFound: "未发现 Skill。该仓库仍可作为普通仓库备份。",
     openSkillsManager: "在技能管理器中打开",
     quickActions: "快捷操作",
@@ -615,6 +705,8 @@ const COPY = {
     systemBrowser: "系统浏览器",
     openUrlFailed: "无法打开链接。",
     urlCopied: "链接已复制。",
+    installCommandCopied: "安装入口命令已复制。",
+    copyUnavailable: "当前环境无法复制到剪贴板。",
     githubPreviewTitle: "GitHub 预览",
     githubPreviewSubtitle: "应用内预览仓库信息和 README；完整页面可用系统浏览器打开。",
     githubPreviewLoading: "正在读取 GitHub 仓库信息...",
@@ -631,11 +723,25 @@ const COPY = {
     noDescription: "暂无介绍。",
     noSkillMarkdown: "未找到 SKILL.md 内容。",
     skillDetailUnavailable: "Skill 详情暂不可用。",
+    pluginDetailUnavailable: "插件详情暂不可用。",
     extractSkills: "提取技能",
     recheckRepository: "重新检测仓库",
     manifestPreview: "Manifest 摘要",
     skillsTitle: "技能",
     skillsSubtitle: "安装和更新已识别 Skill，不会触发仓库备份。",
+    pluginsTitle: "插件",
+    pluginsSubtitle: "查看仓库暴露的 marketplace、CLI 和单 Skill 安装入口；这里负责识别入口，不执行安装。",
+    pluginInstallEntryHint: "这是安装入口识别记录，不代表已执行安装或安全审计通过。",
+    plugin: "插件",
+    plugins: "插件",
+    pluginKind: "插件类型",
+    installCommand: "安装命令",
+    updateCommand: "更新命令",
+    sourceExcerpt: "来源片段",
+    linkedSkills: "关联技能",
+    pluginOverview: "插件概览",
+    pluginInstallEntries: "插件安装入口",
+    pluginSource: "插件来源",
     skillSources: "Skill 来源",
     rescanSources: "重新检测来源",
     scanLocalSkills: "扫描本地 Skills",
@@ -799,6 +905,10 @@ const COPY = {
     firstSkillText: "从仓库扫描到 SKILL.md 后，这里会展示安装、更新和本地修改风险。",
     noFilteredSkillsTitle: "没有匹配的 Skill",
     noFilteredSkillsText: "切换状态筛选或重新检测来源仓库。",
+    firstPluginTitle: "还没有发现插件安装入口",
+    firstPluginText: "重新检测仓库后，README 或插件清单里的常见安装入口会集中显示在这里。",
+    noFilteredPluginsTitle: "没有匹配的插件入口",
+    noFilteredPluginsText: "调整搜索词，或回到仓库页重新检测来源。",
     firstTaskTitle: "还没有任务记录",
     firstTaskText: "检测远端、备份源码 ZIP、安装或更新 Skill 后，任务日志会出现在这里。",
     noFilteredTasksTitle: "没有匹配的任务",
@@ -875,6 +985,7 @@ const COPY = {
     "nav.repositories": "Repositories",
     "nav.github": "GitHub",
     "nav.skills": "Skills",
+    "nav.plugins": "Plugins",
     "nav.tasks": "Tasks",
     "nav.settings": "Settings",
     localCare: "Local repository care",
@@ -897,6 +1008,7 @@ const COPY = {
     search: "Search",
     searchRepositories: "Search repositories...",
     searchSkills: "Search Skills...",
+    searchPlugins: "Search plugins...",
     sourceRepositoryFilter: "Source repository",
     allRepositories: "All repositories",
     searchRepository: "Search repositories",
@@ -948,6 +1060,9 @@ const COPY = {
     manifestPath: "Manifest path",
     backupHistory: "View backup history",
     recognizedSkills: "Recognized Skills",
+    recognizedPlugins: "Recognized Plugins",
+    noPluginsFound: "No plugin install entries found.",
+    openPluginsManager: "Open in Plugins",
     noSkillsFound: "No Skills found. This repository remains backup eligible.",
     openSkillsManager: "Open in Skills Manager",
     quickActions: "Quick actions",
@@ -961,6 +1076,8 @@ const COPY = {
     systemBrowser: "System Browser",
     openUrlFailed: "Could not open link.",
     urlCopied: "Link copied.",
+    installCommandCopied: "Install entry command copied.",
+    copyUnavailable: "Clipboard copy is unavailable in this environment.",
     githubPreviewTitle: "GitHub Preview",
     githubPreviewSubtitle: "Preview repository metadata and README in app; open the full page in a browser.",
     githubPreviewLoading: "Loading GitHub repository information...",
@@ -977,11 +1094,25 @@ const COPY = {
     noDescription: "No description.",
     noSkillMarkdown: "SKILL.md content not found.",
     skillDetailUnavailable: "Skill detail is unavailable.",
+    pluginDetailUnavailable: "Plugin detail is unavailable.",
     extractSkills: "Extract Skills",
     recheckRepository: "Re-check Repository",
     manifestPreview: "Manifest summary",
     skillsTitle: "Skills",
     skillsSubtitle: "Install and update extracted Skills without triggering repository backups.",
+    pluginsTitle: "Plugins",
+    pluginsSubtitle: "Inspect marketplace, CLI, and single-Skill install entries exposed by repositories. This identifies entries; it does not install them.",
+    pluginInstallEntryHint: "This is an install-entry recognition record, not proof that installation ran or passed a security review.",
+    plugin: "Plugin",
+    plugins: "Plugins",
+    pluginKind: "Plugin type",
+    installCommand: "Install command",
+    updateCommand: "Update command",
+    sourceExcerpt: "Source excerpt",
+    linkedSkills: "Linked Skills",
+    pluginOverview: "Plugin overview",
+    pluginInstallEntries: "Plugin install entries",
+    pluginSource: "Plugin source",
     skillSources: "Skill sources",
     rescanSources: "Re-check sources",
     scanLocalSkills: "Scan Local Skills",
@@ -1145,6 +1276,10 @@ const COPY = {
     firstSkillText: "When a repository scan finds SKILL.md, install, update, and local-change risk controls appear here.",
     noFilteredSkillsTitle: "No matching Skills",
     noFilteredSkillsText: "Change the status filter or re-check source repositories.",
+    firstPluginTitle: "No plugin install entries yet",
+    firstPluginText: "After a repository re-check, common README or plugin-manifest install entries appear here.",
+    noFilteredPluginsTitle: "No matching plugin entries",
+    noFilteredPluginsText: "Adjust the search or return to repositories to re-check sources.",
     firstTaskTitle: "No task records yet",
     firstTaskText: "Remote checks, ZIP backups, and Skill installs or updates will be logged here.",
     noFilteredTasksTitle: "No matching tasks",
@@ -1239,6 +1374,11 @@ const STATUS_LABELS = {
     unknown: "未知",
     "skill repo": "技能仓库",
     "generic repo": "普通仓库",
+    detected: "已识别",
+    "codex-marketplace": "Codex 插件市场",
+    "skills-cli": "Skills CLI",
+    "clawhub-skill": "ClawHub 单技能",
+    "structured-plugin": "结构化插件",
     local: "本地",
   },
   en: {
@@ -1260,6 +1400,11 @@ const STATUS_LABELS = {
     unknown: "unknown",
     "skill repo": "skill repo",
     "generic repo": "generic repo",
+    detected: "detected",
+    "codex-marketplace": "Codex marketplace",
+    "skills-cli": "Skills CLI",
+    "clawhub-skill": "ClawHub single Skill",
+    "structured-plugin": "structured plugin",
     local: "local",
   },
 };
@@ -1496,6 +1641,11 @@ function initialParam(name, fallback, allowed) {
   return allowed.includes(value) ? value : fallback;
 }
 
+function initialFreeParam(name, fallback = "") {
+  if (typeof window === "undefined") return fallback;
+  return new URLSearchParams(window.location.search).get(name) || fallback;
+}
+
 function parseRepoName(raw) {
   const trimmed = raw.trim();
   if (!trimmed) return "example/new-repository";
@@ -1560,20 +1710,29 @@ function Modal({ title, children, footer, onClose, closeLabel = "Close" }: any) 
 }
 
 export function App() {
-  const [activeTab, setActiveTab] = useState("repositories");
+  const demoMode = initialParam("demo", "default", ["default", "empty-plugins"]);
+  const demoFocus = initialParam("focus", "none", ["none", "plugin-row"]);
+  const initialTab = initialParam("tab", "repositories", navItems.map((item) => item.id));
+  const [activeTab, setActiveTab] = useState(initialTab);
   const [language, setLanguage] = useState(() => initialParam("lang", "zh", ["zh", "en"]));
   const [theme, setTheme] = useState(() => initialParam("theme", "light", ["light", "dark"]));
   const [density, setDensity] = useState("comfortable");
   const [repositories, setRepositories] = useState(initialRepos);
   const [skills, setSkills] = useState(initialSkills);
+  const [plugins, setPlugins] = useState(() => (demoMode === "empty-plugins" ? [] : initialPlugins));
   const [tasks, setTasks] = useState(initialTasks);
   const [selectedRepoId, setSelectedRepoId] = useState("content");
-  const [inspectorRepoId, setInspectorRepoId] = useState("");
-  const [selectedSkillId, setSelectedSkillId] = useState("");
+  const [inspectorRepoId, setInspectorRepoId] = useState(() => initialFreeParam("inspectorRepo"));
+  const [selectedSkillId, setSelectedSkillId] = useState(() => initialFreeParam("selectedSkill"));
   const [skillDetail, setSkillDetail] = useState(null);
   const [skillDetailLoading, setSkillDetailLoading] = useState(false);
   const [skillDetailError, setSkillDetailError] = useState("");
   const skillDetailRequestRef = useRef("");
+  const [selectedPluginId, setSelectedPluginId] = useState(() => initialFreeParam("selectedPlugin"));
+  const [pluginDetail, setPluginDetail] = useState(null);
+  const [pluginDetailLoading, setPluginDetailLoading] = useState(false);
+  const [pluginDetailError, setPluginDetailError] = useState("");
+  const pluginDetailRequestRef = useRef("");
   const [selectedRows, setSelectedRows] = useState(["content"]);
   const [repoFilter, setRepoFilter] = useState("all");
   const [skillFilter, setSkillFilter] = useState("all");
@@ -1581,6 +1740,7 @@ export function App() {
   const [taskFilter, setTaskFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [skillSearch, setSkillSearch] = useState("");
+  const [pluginSearch, setPluginSearch] = useState(() => initialFreeParam("pluginSearch"));
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState("");
   const toastTimerRef = useRef<number | undefined>(undefined);
@@ -1682,6 +1842,7 @@ export function App() {
       const [
         nextRepos,
         nextSkills,
+        nextPlugins,
         nextTasks,
         nextSettings,
         nextGithubAccounts,
@@ -1689,6 +1850,7 @@ export function App() {
       ] = await Promise.all([
         api.listRepositories(),
         api.listSkills(),
+        api.listPlugins(),
         api.listTasks(),
         api.getSettings(),
         api.listGithubAccounts(),
@@ -1696,6 +1858,7 @@ export function App() {
       ]);
       setRepositories(nextRepos);
       setSkills(nextSkills);
+      setPlugins(nextPlugins);
       setTasks(nextTasks);
       setGithubAccounts(nextGithubAccounts);
       setGithubRepositories(nextGithubRepositories);
@@ -1779,6 +1942,7 @@ export function App() {
 
   const inspectorRepo = repositories.find((repo) => repo.id === inspectorRepoId);
   const selectedSkill = skills.find((skill) => skill.id === selectedSkillId);
+  const selectedPlugin = plugins.find((plugin) => plugin.id === selectedPluginId);
 
   const counts = useMemo(() => {
     return {
@@ -1846,6 +2010,24 @@ export function App() {
     return matchesSearch && matchesRepo && visibleByFilter;
   });
 
+  const filteredPlugins = plugins.filter((plugin) =>
+    fuzzyMatch(
+      [
+        plugin.name,
+        plugin.description,
+        plugin.kind,
+        statusLabel(plugin.kind, language),
+        plugin.repoName,
+        displayRepoName(plugin.repoName, language),
+        plugin.installCommand,
+        plugin.updateCommand,
+        plugin.sourcePath,
+        plugin.status,
+      ],
+      pluginSearch,
+    ),
+  );
+
   const filteredTasks = tasks.filter((task) => {
     return taskFilter === "all" || task.status === taskFilter;
   });
@@ -1860,6 +2042,17 @@ export function App() {
       setSkillDetailLoading(false);
     }
   }, [filteredSkills, selectedSkillId]);
+
+  useEffect(() => {
+    if (!selectedPluginId) return;
+    if (!filteredPlugins.some((plugin) => plugin.id === selectedPluginId)) {
+      setSelectedPluginId("");
+      pluginDetailRequestRef.current = "";
+      setPluginDetail(null);
+      setPluginDetailError("");
+      setPluginDetailLoading(false);
+    }
+  }, [filteredPlugins, selectedPluginId]);
 
   function backupTargetRepos(mode = "updated", repoIds = []) {
     if (mode === "selected") {
@@ -1897,6 +2090,11 @@ export function App() {
     setSkillDetail(null);
     setSkillDetailError("");
     setSkillDetailLoading(false);
+    setSelectedPluginId("");
+    pluginDetailRequestRef.current = "";
+    setPluginDetail(null);
+    setPluginDetailError("");
+    setPluginDetailLoading(false);
   }
 
   function toggleRow(repoId) {
@@ -1923,9 +2121,14 @@ export function App() {
     if (desktopRuntime) {
       try {
         const nextRepos = await api.checkRepositories();
-        const [nextSkills, nextTasks] = await Promise.all([api.listSkills(), api.listTasks()]);
+        const [nextSkills, nextPlugins, nextTasks] = await Promise.all([
+          api.listSkills(),
+          api.listPlugins(),
+          api.listTasks(),
+        ]);
         setRepositories(nextRepos);
         setSkills(nextSkills);
+        setPlugins(nextPlugins);
         setTasks(nextTasks);
         showToast(t("remoteRefreshed"));
       } catch (error) {
@@ -2009,8 +2212,13 @@ export function App() {
     if (desktopRuntime) {
       try {
         const nextSkills = await api.scanLocalSkills(skillsRoot);
-        const [nextRepos, nextTasks] = await Promise.all([api.listRepositories(), api.listTasks()]);
+        const [nextRepos, nextPlugins, nextTasks] = await Promise.all([
+          api.listRepositories(),
+          api.listPlugins(),
+          api.listTasks(),
+        ]);
         setSkills(nextSkills);
+        setPlugins(nextPlugins);
         setRepositories(nextRepos);
         setTasks(nextTasks);
         showToast(t("localSkillsScanned"));
@@ -2108,9 +2316,14 @@ export function App() {
         log: [`scan ${path}`],
       });
       const nextRepos = await api.addLocalRepository(path);
-      const [nextSkills, nextTasks] = await Promise.all([api.listSkills(), api.listTasks()]);
+      const [nextSkills, nextPlugins, nextTasks] = await Promise.all([
+        api.listSkills(),
+        api.listPlugins(),
+        api.listTasks(),
+      ]);
       setRepositories(nextRepos);
       setSkills(nextSkills);
+      setPlugins(nextPlugins);
       setTasks(nextTasks);
       const added = nextRepos.find((repo) => repo.localPath === path) || nextRepos[0];
       if (added) {
@@ -2366,13 +2579,15 @@ export function App() {
           repo.repo,
           repo.defaultBranch || "main",
         );
-        const [nextSkills, nextTasks, nextCatalog] = await Promise.all([
+        const [nextSkills, nextPlugins, nextTasks, nextCatalog] = await Promise.all([
           api.listSkills(),
+          api.listPlugins(),
           api.listTasks(),
           api.listGithubRepositoryCatalog(repo.accountId),
         ]);
         setRepositories(nextRepos);
         setSkills(nextSkills);
+        setPlugins(nextPlugins);
         setTasks(nextTasks);
         setGithubRepositories((items) => [
           ...items.filter((item) => item.accountId !== repo.accountId),
@@ -2405,13 +2620,15 @@ export function App() {
     if (desktopRuntime) {
       try {
         const nextRepos = await api.removeRepository(repo.trackedRepoId);
-        const [nextSkills, nextTasks, nextCatalog] = await Promise.all([
+        const [nextSkills, nextPlugins, nextTasks, nextCatalog] = await Promise.all([
           api.listSkills(),
+          api.listPlugins(),
           api.listTasks(),
           api.listGithubRepositoryCatalog(repo.accountId),
         ]);
         setRepositories(nextRepos);
         setSkills(nextSkills);
+        setPlugins(nextPlugins);
         setTasks(nextTasks);
         setGithubRepositories((items) => [
           ...items.filter((item) => item.accountId !== repo.accountId),
@@ -2454,9 +2671,14 @@ export function App() {
           url: newRepo.url,
           refName: newRepo.ref || "main",
         });
-        const [nextSkills, nextTasks] = await Promise.all([api.listSkills(), api.listTasks()]);
+        const [nextSkills, nextPlugins, nextTasks] = await Promise.all([
+          api.listSkills(),
+          api.listPlugins(),
+          api.listTasks(),
+        ]);
         setRepositories(nextRepos);
         setSkills(nextSkills);
+        setPlugins(nextPlugins);
         setTasks(nextTasks);
         const added = nextRepos[0];
         if (added) {
@@ -2860,6 +3082,42 @@ export function App() {
     }
   }
 
+  async function openPluginDetail(plugin) {
+    const requestedPluginId = plugin.id;
+    pluginDetailRequestRef.current = requestedPluginId;
+    setSelectedPluginId(plugin.id);
+    setPluginDetail(null);
+    setPluginDetailError("");
+    if (!desktopRuntime) {
+      setPluginDetail({
+        ...plugin,
+        linkedSkills: plugin.linkedSkills || skills.filter((skill) => skill.repoId === plugin.repoId),
+      });
+      return;
+    }
+    setPluginDetailLoading(true);
+    try {
+      const detail = await api.getPluginDetail(plugin.id);
+      if (pluginDetailRequestRef.current === requestedPluginId) {
+        setPluginDetail(detail);
+      }
+    } catch (error) {
+      if (pluginDetailRequestRef.current === requestedPluginId) {
+        setPluginDetailError(error.message || t("pluginDetailUnavailable"));
+      }
+    } finally {
+      if (pluginDetailRequestRef.current === requestedPluginId) {
+        setPluginDetailLoading(false);
+      }
+    }
+  }
+
+  function openPluginEntry(plugin) {
+    const fullPlugin = plugins.find((item) => item.id === plugin.id) || plugin;
+    setActiveTab("plugins");
+    openPluginDetail(fullPlugin);
+  }
+
   async function openGithubUrl(url: string, mode = "embedded", browserId?: string) {
     if (!url) return;
     if (mode === "embedded") {
@@ -2896,13 +3154,30 @@ export function App() {
     showToast(t("urlCopied"));
   }
 
+  async function copyInstallCommand(command) {
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("clipboard unavailable");
+      }
+      await navigator.clipboard.writeText(command);
+      showToast(t("installCommandCopied"));
+    } catch {
+      showToast(t("copyUnavailable"));
+    }
+  }
+
   async function runScheduledCheck() {
     if (desktopRuntime) {
       try {
         const nextRepos = await api.checkRepositories();
-        const [nextSkills, nextTasks] = await Promise.all([api.listSkills(), api.listTasks()]);
+        const [nextSkills, nextPlugins, nextTasks] = await Promise.all([
+          api.listSkills(),
+          api.listPlugins(),
+          api.listTasks(),
+        ]);
         setRepositories(nextRepos);
         setSkills(nextSkills);
+        setPlugins(nextPlugins);
         setTasks(nextTasks);
       } catch (error) {
         showToast(error.message || t("sourceUnavailableToast"));
@@ -3016,7 +3291,7 @@ export function App() {
       <section
         className={`workspace ${activeTab === "settings" || activeTab === "github" ? "settings-workspace" : ""}`}
         onMouseDown={
-          activeTab === "repositories" || activeTab === "skills"
+          activeTab === "repositories" || activeTab === "skills" || activeTab === "plugins"
             ? handleWorkspaceMouseDown
             : undefined
         }
@@ -3028,12 +3303,15 @@ export function App() {
             setSearch={setSearch}
             skillSearch={skillSearch}
             setSkillSearch={setSkillSearch}
+            pluginSearch={pluginSearch}
+            setPluginSearch={setPluginSearch}
             checkAllRepos={checkAllRepos}
             setModal={setModal}
             openAddRepoModal={openAddRepoModal}
             selectedRows={selectedRows}
             repositories={repositories}
             skills={skills}
+            plugins={plugins}
             tasks={tasks}
             scanLocalSkills={scanLocalSkills}
             addLocalRepositoryFromPicker={addLocalRepositoryFromPicker}
@@ -3045,7 +3323,9 @@ export function App() {
 
         <div
           className={`content-grid ${
-            (activeTab === "repositories" && inspectorRepo) || (activeTab === "skills" && selectedSkill)
+            (activeTab === "repositories" && inspectorRepo) ||
+            (activeTab === "skills" && selectedSkill) ||
+            (activeTab === "plugins" && selectedPlugin)
               ? ""
               : "no-inspector"
           }`}
@@ -3113,6 +3393,27 @@ export function App() {
             />
           )}
 
+          {activeTab === "plugins" && (
+            <PluginsView
+              plugins={filteredPlugins}
+              openPluginDetail={openPluginDetail}
+              setActiveTab={setActiveTab}
+              setSelectedRepoId={setSelectedRepoId}
+              setInspectorRepoId={setInspectorRepoId}
+              hasPlugins={plugins.length > 0}
+              hasInspector={Boolean(selectedPlugin)}
+              selectedPluginId={selectedPluginId}
+              focusPluginRow={demoFocus === "plugin-row"}
+              language={language}
+              t={t}
+              Tag={Tag}
+              EmptyState={EmptyState}
+              displayRepoName={displayRepoName}
+              displayValue={displayValue}
+              manifestShaPreview={manifestShaPreview}
+            />
+          )}
+
           {activeTab === "tasks" && (
             <TasksView
               tasks={filteredTasks}
@@ -3145,6 +3446,7 @@ export function App() {
               openGithubUrl={openGithubUrl}
               chooseBrowserForUrl={chooseBrowserForUrl}
               copyUrl={copyUrl}
+              openPluginDetail={openPluginEntry}
               language={language}
               t={t}
             />
@@ -3164,8 +3466,34 @@ export function App() {
               defaultSyncTargets={defaultSyncTargets}
               updateSkillSyncTargets={updateSkillSyncTargets}
               isPending={isPending}
+              openPluginDetail={openPluginEntry}
               language={language}
               t={t}
+            />
+          )}
+          {activeTab === "plugins" && selectedPlugin && (
+            <PluginInspector
+              plugin={selectedPlugin}
+              detail={pluginDetail}
+              loading={pluginDetailLoading}
+              error={pluginDetailError}
+              onClose={closeActiveInspector}
+              setActiveTab={setActiveTab}
+              setSelectedRepoId={setSelectedRepoId}
+              setInspectorRepoId={setInspectorRepoId}
+              openSkillDetail={openSkillDetail}
+              copyInstallCommand={copyInstallCommand}
+              skills={skills}
+              repositories={repositories}
+              language={language}
+              t={t}
+              Tag={Tag}
+              Button={Button}
+              Section={Section}
+              Detail={Detail}
+              displayRepoName={displayRepoName}
+              displayValue={displayValue}
+              statusLabel={statusLabel}
             />
           )}
         </div>
@@ -3329,12 +3657,15 @@ function Toolbar({
   setSearch,
   skillSearch,
   setSkillSearch,
+  pluginSearch,
+  setPluginSearch,
   checkAllRepos,
   setModal,
   openAddRepoModal,
   selectedRows,
   repositories,
   skills,
+  plugins,
   tasks,
   scanLocalSkills,
   addLocalRepositoryFromPicker,
@@ -3350,6 +3681,7 @@ function Toolbar({
   const updatedSkills = skills.filter((skill) =>
     ["update-available", "local-modified", "source-unavailable"].includes(skill.status),
   ).length;
+  const detectedPlugins = plugins.filter((plugin) => plugin.status === "detected").length;
   const failedTasks = tasks.filter((task) => ["failed", "interrupted", "partial-success"].includes(task.status)).length;
 
   return (
@@ -3403,6 +3735,17 @@ function Toolbar({
           <Button onClick={openAddRepoModal}>{t("addRepository")}</Button>
         </div>
       )}
+      {activeTab === "plugins" && (
+        <div className="toolbar-group">
+          <Button
+            onClick={checkAllRepos}
+            pending={isPending("checkAllRepos")}
+            pendingLabel={t("checking")}
+          >
+            {t("rescanSources")}
+          </Button>
+        </div>
+      )}
       {activeTab === "tasks" && (
         <div className="toolbar-group muted-toolbar">
           <span>{t("taskAudit")}</span>
@@ -3417,6 +3760,7 @@ function Toolbar({
             {isPending("scanLocalSkills") ? t("scanning") : `${updatedSkills} ${t("updateAvailable")}`}
           </span>
         )}
+        {activeTab === "plugins" && <span>{detectedPlugins} {t("pluginInstallEntries")}</span>}
         {activeTab === "tasks" && <span>{failedTasks} {t("failed")}</span>}
       </div>
       {activeTab === "repositories" && (
@@ -3436,6 +3780,16 @@ function Toolbar({
             value={skillSearch}
             onChange={(event) => setSkillSearch(event.target.value)}
             placeholder={t("searchSkills")}
+          />
+        </label>
+      )}
+      {activeTab === "plugins" && (
+        <label className="search-field">
+          <span>{t("search")}</span>
+          <input
+            value={pluginSearch}
+            onChange={(event) => setPluginSearch(event.target.value)}
+            placeholder={t("searchPlugins")}
           />
         </label>
       )}
@@ -3611,6 +3965,7 @@ function Inspector({
   openGithubUrl,
   chooseBrowserForUrl,
   copyUrl,
+  openPluginDetail,
   language,
   t,
 }: any) {
@@ -3711,6 +4066,30 @@ function Inspector({
         )}
         <Button variant="wide" onClick={() => setActiveTab("skills")}>
           {t("openSkillsManager")}
+        </Button>
+      </Section>
+
+      <Section title={`${t("recognizedPlugins")} (${(repo.recognizedPlugins || []).length})`}>
+        {(repo.recognizedPlugins || []).length ? (
+          <div className="skill-list-mini">
+            {(repo.recognizedPlugins || []).map((plugin) => (
+              <button
+                className="mini-skill mini-skill-button"
+                key={plugin.id}
+                onClick={() => openPluginDetail(plugin)}
+                type="button"
+              >
+                <span className="health-dot" />
+                <span>{plugin.name}</span>
+                <code>{statusLabel(plugin.kind, language)}</code>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-note">{t("noPluginsFound")}</p>
+        )}
+        <Button variant="wide" onClick={() => setActiveTab("plugins")}>
+          {t("openPluginsManager")}
         </Button>
       </Section>
 
@@ -3984,6 +4363,7 @@ function SkillInspector({
   defaultSyncTargets,
   updateSkillSyncTargets,
   isPending,
+  openPluginDetail,
   language,
   t,
 }: any) {
@@ -4086,6 +4466,27 @@ function SkillInspector({
 
       <Section title={t("description")}>
         <p className="detail-copy">{skillDescription(activeDetail, language) || t("noDescription")}</p>
+      </Section>
+
+      <Section title={`${t("pluginInstallEntries")} (${(activeDetail.plugins || []).length})`}>
+        {(activeDetail.plugins || []).length ? (
+          <div className="skill-list-mini">
+            {(activeDetail.plugins || []).map((plugin) => (
+              <button
+                className="mini-skill mini-skill-button"
+                key={plugin.id}
+                onClick={() => openPluginDetail(plugin)}
+                type="button"
+              >
+                <span className="health-dot" />
+                <span>{plugin.name}</span>
+                <code>{statusLabel(plugin.kind, language)}</code>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="empty-note">{t("noPluginsFound")}</p>
+        )}
       </Section>
 
       <Section title="SKILL.md">

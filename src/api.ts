@@ -45,6 +45,43 @@ export type GitHubRepository = {
   permissions: string;
 };
 
+export type PluginSkillSummary = {
+  id: string;
+  name: string;
+  path: string;
+  version: string;
+  status: string;
+};
+
+export type SkillPluginReference = {
+  id: string;
+  name: string;
+  kind: string;
+  installCommand: string;
+};
+
+export type UiPlugin = {
+  id: string;
+  repoId: string;
+  repoName: string;
+  name: string;
+  description: string;
+  kind: string;
+  installCommand: string;
+  updateCommand?: string | null;
+  sourcePath: string;
+  sourceExcerpt: string;
+  status: string;
+  skillCount: number;
+  detectedSha: string;
+  updatedAt: string;
+  linkedSkills?: PluginSkillSummary[];
+};
+
+export type PluginDetail = UiPlugin & {
+  linkedSkills: PluginSkillSummary[];
+};
+
 const runningInTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
 async function command<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -65,7 +102,9 @@ export const isDesktopRuntime = runningInTauri;
 export const api = {
   listRepositories: () => command<any[]>("list_repositories"),
   listSkills: () => command<any[]>("list_skills"),
+  listPlugins: () => command<UiPlugin[]>("list_plugins"),
   getSkillDetail: (skillId: string) => command<any>("get_skill_detail", { request: { skillId } }),
+  getPluginDetail: (pluginId: string) => command<PluginDetail>("get_plugin_detail", { request: { pluginId } }),
   getRepositoryReadme: (repoId: string) =>
     command<any>("get_repository_readme", { request: { repoId } }),
   getGithubPreview: (url: string) => command<any>("get_github_preview", { request: { url } }),

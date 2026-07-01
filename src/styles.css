@@ -196,6 +196,24 @@ a {
   background: currentColor;
 }
 
+.nav-mark-plugins::before {
+  left: 3px;
+  top: 3px;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+}
+
+.nav-mark-plugins::after {
+  right: 2px;
+  bottom: 2px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 .nav-mark-tasks::before {
   left: 3px;
   top: 3px;
@@ -760,6 +778,18 @@ a {
   background: #f7faff;
 }
 
+.data-table tbody tr[role="button"]:focus-visible {
+  outline: 2px solid rgba(27, 114, 232, 0.38);
+  outline-offset: -2px;
+  background: #f7faff;
+}
+
+.data-table .keyboard-focus-row {
+  outline: 2px solid rgba(27, 114, 232, 0.38);
+  outline-offset: -2px;
+  background: #f7faff;
+}
+
 .data-table .active-row {
   background: #eef5ff;
 }
@@ -885,6 +915,62 @@ a {
 .skills-table th:nth-child(7),
 .skills-table td:nth-child(7) {
   width: 188px;
+}
+
+.plugins-table th:nth-child(1),
+.plugins-table td:nth-child(1) {
+  width: 24%;
+}
+
+.plugins-table th:nth-child(2),
+.plugins-table td:nth-child(2) {
+  width: 28%;
+}
+
+.plugins-table th:nth-child(3),
+.plugins-table td:nth-child(3) {
+  width: 20%;
+}
+
+.plugins-table th:nth-child(4),
+.plugins-table td:nth-child(4) {
+  width: 64px;
+}
+
+.plugins-table th:nth-child(5),
+.plugins-table td:nth-child(5) {
+  width: 116px;
+}
+
+.plugins-table th:nth-child(6),
+.plugins-table td:nth-child(6) {
+  width: 92px;
+}
+
+.plugins-table th:nth-child(7),
+.plugins-table td:nth-child(7) {
+  width: 132px;
+}
+
+.plugins-table .subtext {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.plugins-table .subtext > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plugin-command-inline {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  color: #3f4650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .source-repo-cell {
@@ -1034,8 +1120,8 @@ input[type="checkbox"] {
 
 .row-actions button,
 .icon-button {
-  min-height: 26px;
-  padding: 0 8px;
+  min-height: 32px;
+  padding: 0 10px;
   border: 1px solid #d3d7df;
   border-radius: 6px;
   background: #fff;
@@ -1179,6 +1265,28 @@ input[type="checkbox"] {
   font-size: 12px;
 }
 
+.mini-skill-button {
+  width: 100%;
+  min-height: 34px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.mini-skill-button:hover,
+.mini-skill-button:focus-visible {
+  background: #f5f7fa;
+  outline: 0;
+}
+
+.mini-skill-button:hover span:not(.health-dot),
+.mini-skill-button:focus-visible span:not(.health-dot) {
+  color: var(--blue);
+}
+
 .mini-skill code {
   padding: 2px 6px;
   border: 1px solid var(--line);
@@ -1218,6 +1326,55 @@ input[type="checkbox"] {
 
 .muted-copy {
   color: var(--muted);
+}
+
+.command-row {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 34px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.command-row-value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+}
+
+.command-row-value code {
+  min-width: 0;
+  padding: 7px 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: #2c333d;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-copy-button {
+  min-width: 52px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #d3d7df;
+  border-radius: 6px;
+  background: #fff;
+  color: #3a424e;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.command-copy-button:hover,
+.command-copy-button:focus-visible {
+  border-color: #b8c0ca;
+  background: #f5f7fa;
+  outline: 0;
 }
 
 .markdown-preview-block {
@@ -2136,12 +2293,21 @@ input[type="checkbox"] {
   background: #1c2531;
 }
 
+.app-shell[data-theme="dark"] .data-table tbody tr[role="button"]:focus-visible {
+  background: #1c2531;
+}
+
+.app-shell[data-theme="dark"] .data-table .keyboard-focus-row {
+  background: #1c2531;
+}
+
 .app-shell[data-theme="dark"] .data-table .active-row {
   background: #1f2d40;
 }
 
 .app-shell[data-theme="dark"] .button,
 .app-shell[data-theme="dark"] .row-actions button,
+.app-shell[data-theme="dark"] .command-copy-button,
 .app-shell[data-theme="dark"] .icon-button,
 .app-shell[data-theme="dark"] .account-pill,
 .app-shell[data-theme="dark"] .form-row input,
@@ -2149,6 +2315,7 @@ input[type="checkbox"] {
 .app-shell[data-theme="dark"] .folder-picker-row button,
 .app-shell[data-theme="dark"] .search-field input,
 .app-shell[data-theme="dark"] .mini-search-field input,
+.app-shell[data-theme="dark"] .command-row-value code,
 .app-shell[data-theme="dark"] .mini-skill code {
   border-color: var(--line);
   background: #202631;
@@ -2163,6 +2330,8 @@ input[type="checkbox"] {
 
 .app-shell[data-theme="dark"] .button:hover:not(:disabled),
 .app-shell[data-theme="dark"] .row-actions button:hover:not(:disabled),
+.app-shell[data-theme="dark"] .command-copy-button:hover,
+.app-shell[data-theme="dark"] .command-copy-button:focus-visible,
 .app-shell[data-theme="dark"] .icon-button:hover {
   background: #27303d;
   border-color: #465164;
@@ -2209,7 +2378,9 @@ input[type="checkbox"] {
 }
 
 .app-shell[data-theme="dark"] .segmented button:hover:not(.selected),
-.app-shell[data-theme="dark"] .choice-row button:hover:not(.selected) {
+.app-shell[data-theme="dark"] .choice-row button:hover:not(.selected),
+.app-shell[data-theme="dark"] .mini-skill-button:hover,
+.app-shell[data-theme="dark"] .mini-skill-button:focus-visible {
   background: #242c38;
   color: var(--text);
 }
@@ -2225,6 +2396,7 @@ input[type="checkbox"] {
 .app-shell[data-theme="dark"] .inspector-section h3,
 .app-shell[data-theme="dark"] .log-panel h2,
 .app-shell[data-theme="dark"] .settings-section-header h2,
+.app-shell[data-theme="dark"] .plugin-command-inline,
 .app-shell[data-theme="dark"] .mini-skill,
 .app-shell[data-theme="dark"] .modal-copy,
 .app-shell[data-theme="dark"] .target-list li,
