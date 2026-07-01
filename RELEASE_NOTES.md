@@ -1,5 +1,14 @@
 # Release Notes
 
+## v1.1.7 - 非宣传物料本地验证包
+
+这个版本不合入公众号推文、宣传截图或两版宣传视频，只发布可验证的软件包记录。它延续 v1.1.6 的插件入口识别与失败态收口能力，并把本地 `.app` / `.dmg` 产物验证、版本号和校验和单独对齐。
+
+- 版本号统一更新到 `1.1.7`，覆盖前端显示、Tauri 配置、Cargo 元数据、package metadata 和 Rust GitHub user-agent。
+- README 中的当前版本和本地 DMG 产物路径更新到 `v1.1.7`。
+- 新增 `docs/release-checksums-v1.1.7.txt`，记录本地验证 DMG 的路径、大小和 SHA-256。
+- 本地验证产物仍未 notarize，不作为普通用户公开分发包；公开发布 DMG 仍需要 Developer ID 签名和 Apple notarization。
+
 ## v1.1.6 - 插件入口识别与失败态收口
 
 这个版本把插件安装入口从 README/插件清单里的零散命令收拢到独立插件页，同时修正扫描失败时静默保存为“0 Skills / 0 Plugins”的误导状态。它解决的是“先看清来源和风险，再决定是否行动”，不是完整插件市场，也不会自动执行插件安装。

@@ -23,7 +23,7 @@ mod plugins;
 
 use plugins::{scan_plugins_from_directory, scan_plugins_from_zip, sync_plugins, PluginScan};
 
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.6";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.7";
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
 const LEGACY_GITHUB_ACCOUNT_ID: &str = "github:legacy-default";
