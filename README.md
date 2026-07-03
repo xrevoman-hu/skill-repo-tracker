@@ -8,7 +8,32 @@
 ![Rust](https://img.shields.io/badge/Rust-backend-orange)
 ![macOS](https://img.shields.io/badge/macOS-12%2B-lightgrey)
 
-![Skill Repo Tracker 界面截图](docs/images/skill-repo-tracker-v1.1.1.png)
+<p align="center">
+  <img src="docs/promo/v1.1.8/product-logo.png" alt="Skill Repo Tracker Logo" width="96" />
+</p>
+
+<p align="center">
+  <img src="docs/promo/v1.1.8/article-assets/10-github-workbench.png" alt="Skill Repo Tracker v1.1.8 GitHub 实机界面" width="820" />
+</p>
+
+## 界面预览 / Interface Preview
+
+以下为 v1.1.8 实机截图。These are real v1.1.8 app screenshots.
+
+<table>
+  <tr>
+    <td><strong>GitHub</strong><br /><img src="docs/promo/v1.1.8/article-assets/10-github-workbench.png" alt="GitHub page" width="420" /></td>
+    <td><strong>仓库 / Repositories</strong><br /><img src="docs/promo/v1.1.8/article-assets/11-repositories-note.png" alt="Repositories page" width="420" /></td>
+  </tr>
+  <tr>
+    <td><strong>技能 / Skills</strong><br /><img src="docs/promo/v1.1.8/article-assets/12-skills.png" alt="Skills page" width="420" /></td>
+    <td><strong>插件 / Plugins</strong><br /><img src="docs/promo/v1.1.8/article-assets/13-plugins.png" alt="Plugins page" width="420" /></td>
+  </tr>
+  <tr>
+    <td><strong>任务 / Tasks</strong><br /><img src="docs/promo/v1.1.8/article-assets/14-tasks.png" alt="Tasks page" width="420" /></td>
+    <td><strong>设置 / Settings</strong><br /><img src="docs/promo/v1.1.8/article-assets/15-settings-migration.png" alt="Settings page" width="420" /></td>
+  </tr>
+</table>
 
 ## 中文
 
@@ -123,6 +148,14 @@ codesign --force --sign - "src-tauri/target/release/bundle/dmg/Skill Repo Tracke
 
 这种包可以挂载、复制到 `/Applications` 并本机验证，但不是 Apple notarized 公开安装包。首次打开时，macOS 可能提示无法验证开发者；测试用户需要右键打开，或在“系统设置 -> 隐私与安全性”里选择“仍要打开”。技术用户也可以对下载后的 `.app` 执行：
 
+安装测试包时请注意：
+
+1. 从 GitHub Release 下载 `Skill.Repo.Tracker_1.1.8_aarch64.dmg`。
+2. 双击打开 DMG，把 `Skill Repo Tracker.app` 拖入 `/Applications`。
+3. 首次启动如果提示“无法验证开发者”或类似安全提示，请在 Finder 里右键这个 App，选择“打开”，再在弹窗中确认“打开”。
+4. 如果右键打开仍被拦截，请进入“系统设置 -> 隐私与安全性”，在底部找到被拦截的 Skill Repo Tracker，点击“仍要打开”。
+5. 技术用户也可以清除下载隔离属性：
+
 ```bash
 xattr -cr "/Applications/Skill Repo Tracker.app"
 ```
@@ -222,6 +255,18 @@ codesign --force --sign - "src-tauri/target/release/bundle/dmg/Skill Repo Tracke
 ```
 
 This is suitable for GitHub Release test assets that users manually allow through Gatekeeper. It is not an Apple-notarized public installer. A no-warning public DMG still requires Developer ID signing and notarization.
+
+Install notes for the downloaded DMG:
+
+1. Download `Skill.Repo.Tracker_1.1.8_aarch64.dmg` from GitHub Releases.
+2. Open the DMG and drag `Skill Repo Tracker.app` into `/Applications`.
+3. On first launch, macOS may block the app because it is ad-hoc signed. Control-click the app in Finder, choose Open, then confirm Open.
+4. If it is still blocked, open System Settings -> Privacy & Security and choose Open Anyway for Skill Repo Tracker.
+5. Technical users can clear the quarantine attribute:
+
+```bash
+xattr -cr "/Applications/Skill Repo Tracker.app"
+```
 
 ### License
 
