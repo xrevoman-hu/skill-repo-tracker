@@ -9,11 +9,11 @@
 ![macOS](https://img.shields.io/badge/macOS-12%2B-lightgrey)
 
 <p align="center">
-  <img src="docs/promo/v1.1.8/product-logo.png" alt="Skill Repo Tracker Logo" width="96" />
+  <img src="docs/images/v1.1.8/product-logo.png" alt="Skill Repo Tracker Logo" width="96" />
 </p>
 
 <p align="center">
-  <img src="docs/promo/v1.1.8/article-assets/10-github-workbench.png" alt="Skill Repo Tracker v1.1.8 GitHub 实机界面" width="820" />
+  <img src="docs/images/v1.1.8/01-github-workbench.png" alt="Skill Repo Tracker v1.1.8 GitHub 实机界面" width="820" />
 </p>
 
 ## 界面预览 / Interface Preview
@@ -22,16 +22,16 @@
 
 <table>
   <tr>
-    <td><strong>GitHub</strong><br /><img src="docs/promo/v1.1.8/article-assets/10-github-workbench.png" alt="GitHub page" width="420" /></td>
-    <td><strong>仓库 / Repositories</strong><br /><img src="docs/promo/v1.1.8/article-assets/11-repositories-note.png" alt="Repositories page" width="420" /></td>
+    <td><strong>GitHub</strong><br /><img src="docs/images/v1.1.8/01-github-workbench.png" alt="GitHub page" width="420" /></td>
+    <td><strong>仓库 / Repositories</strong><br /><img src="docs/images/v1.1.8/02-repositories-note.png" alt="Repositories page" width="420" /></td>
   </tr>
   <tr>
-    <td><strong>技能 / Skills</strong><br /><img src="docs/promo/v1.1.8/article-assets/12-skills.png" alt="Skills page" width="420" /></td>
-    <td><strong>插件 / Plugins</strong><br /><img src="docs/promo/v1.1.8/article-assets/13-plugins.png" alt="Plugins page" width="420" /></td>
+    <td><strong>技能 / Skills</strong><br /><img src="docs/images/v1.1.8/03-skills.png" alt="Skills page" width="420" /></td>
+    <td><strong>插件 / Plugins</strong><br /><img src="docs/images/v1.1.8/04-plugins.png" alt="Plugins page" width="420" /></td>
   </tr>
   <tr>
-    <td><strong>任务 / Tasks</strong><br /><img src="docs/promo/v1.1.8/article-assets/14-tasks.png" alt="Tasks page" width="420" /></td>
-    <td><strong>设置 / Settings</strong><br /><img src="docs/promo/v1.1.8/article-assets/15-settings-migration.png" alt="Settings page" width="420" /></td>
+    <td><strong>任务 / Tasks</strong><br /><img src="docs/images/v1.1.8/05-tasks.png" alt="Tasks page" width="420" /></td>
+    <td><strong>设置 / Settings</strong><br /><img src="docs/images/v1.1.8/06-settings-migration.png" alt="Settings page" width="420" /></td>
   </tr>
 </table>
 

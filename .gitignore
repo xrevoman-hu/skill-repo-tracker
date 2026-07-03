@@ -2,6 +2,10 @@ prototype/.npm-cache/
 prototype/dist/
 prototype/node_modules/
 docs/promo/
+docs/internal/
+docs/images/skill-repo-tracker-v1.1.1.png
+assets/brand/
+assets/skill-repo-tracker-v1-1-6-illustrations/
 node_modules/
 dist/
 src-tauri/target/
