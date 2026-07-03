@@ -112,7 +112,22 @@ npm run tauri build -- --bundles app,dmg
 - `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
 - `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.8_*.dmg`
 
-公开发布的 DMG 必须使用 Developer ID 签名并完成 Apple notarization。仅本地构建出的 unsigned 或 ad-hoc signed 产物适合开发验证，不应作为普通用户下载版本发布。
+#### 免费分发测试包
+
+没有 Apple Developer ID 时，可以对 `.app` 和 `.dmg` 做 ad-hoc 自签名，用作零成本 GitHub Release 测试包：
+
+```bash
+codesign --force --deep --sign - "src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
+codesign --force --sign - "src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.8_aarch64.dmg"
+```
+
+这种包可以挂载、复制到 `/Applications` 并本机验证，但不是 Apple notarized 公开安装包。首次打开时，macOS 可能提示无法验证开发者；测试用户需要右键打开，或在“系统设置 -> 隐私与安全性”里选择“仍要打开”。技术用户也可以对下载后的 `.app` 执行：
+
+```bash
+xattr -cr "/Applications/Skill Repo Tracker.app"
+```
+
+如果要做到普通用户双击下载后无安全提示，仍然需要 Developer ID 签名并完成 Apple notarization。
 
 发布前建议运行：
 
@@ -199,7 +214,14 @@ Generated artifacts:
 - `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
 - `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.8_*.dmg`
 
-Public DMG releases must be signed with Developer ID and notarized by Apple. Unsigned or ad-hoc signed local builds are for development validation only.
+Free test distribution without an Apple Developer ID can use ad-hoc signing for both the `.app` and the `.dmg`:
+
+```bash
+codesign --force --deep --sign - "src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
+codesign --force --sign - "src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.8_aarch64.dmg"
+```
+
+This is suitable for GitHub Release test assets that users manually allow through Gatekeeper. It is not an Apple-notarized public installer. A no-warning public DMG still requires Developer ID signing and notarization.
 
 ### License
 

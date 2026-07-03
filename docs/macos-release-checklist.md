@@ -1,6 +1,32 @@
 # macOS Release Checklist
 
-This checklist is for public macOS DMG releases of Skill Repo Tracker. Do not publish a DMG from GitHub Releases unless the signing, notarization, Gatekeeper, and install-path checks pass.
+This checklist has two lanes:
+
+- Zero-cost test distribution: ad-hoc signed `.app` and `.dmg`, published with
+  clear manual Gatekeeper instructions.
+- Public no-warning distribution: Developer ID signed and Apple notarized DMG.
+
+Do not describe an ad-hoc package as notarized or no-warning.
+
+## Zero-Cost Test Distribution
+
+Use this lane when no Apple Developer ID signing identity is available.
+
+```bash
+APP="src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
+DMG="src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.8_aarch64.dmg"
+
+codesign --force --deep --sign - "$APP"
+codesign --force --sign - "$DMG"
+codesign --verify --deep --strict --verbose=4 "$APP"
+codesign --verify --verbose=4 "$DMG"
+hdiutil verify "$DMG"
+```
+
+Release notes must tell users that first launch may require Control-click/Open,
+Privacy & Security -> Open Anyway, or `xattr -cr` after download.
+
+## Public No-Warning Distribution
 
 ## Required Signing Inputs
 
@@ -29,7 +55,7 @@ The Tauri config enables hardened runtime and uses `src-tauri/entitlements.plist
 
 ```bash
 APP="src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-DMG="src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.2_aarch64.dmg"
+DMG="src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.8_aarch64.dmg"
 
 hdiutil verify "$DMG"
 hdiutil imageinfo "$DMG"
@@ -64,12 +90,12 @@ hdiutil detach "$MOUNT_DIR"
 
 The app must launch without the macOS "damaged" warning.
 
-## Publish Gate
+## Public No-Warning Publish Gate
 
-Stop before GitHub Release publication when any of these are true:
+Stop before publishing a no-warning public DMG when any of these are true:
 
 - No valid Developer ID identity is installed.
 - Notarization credentials are unavailable.
-- The built app is unsigned or ad-hoc signed.
+- The built app is unsigned or only ad-hoc signed.
 - `codesign`, `spctl`, or `stapler` validation fails.
 - The app has not been launched from the copied `/Applications` path.
