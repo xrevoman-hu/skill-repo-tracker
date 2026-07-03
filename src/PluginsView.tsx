@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { ComponentType, KeyboardEvent, ReactNode } from "react";
 import type { PluginDetail, PluginSkillSummary, UiPlugin } from "./api";
 
@@ -82,6 +83,8 @@ type PluginInspectorProps = {
   setInspectorRepoId: IdSetter;
   openSkillDetail: (skill: SkillSummary) => void;
   copyInstallCommand: (command: string) => void;
+  onSaveNote: (plugin: UiPlugin, note: string) => Promise<void>;
+  isPending: (key: string) => boolean;
   skills: SkillSummary[];
   repositories: RepositorySummary[];
   language: string;
@@ -174,6 +177,7 @@ export function PluginsView({
                       <Tag value={plugin.kind || "unknown"} tone="source-chip" language={language} />
                       <span>{plugin.description || t("pluginInstallEntryHint")}</span>
                     </span>
+                    {plugin.note && <span className="subtext note-preview">{plugin.note}</span>}
                   </td>
                   <td>
                     <code className="plugin-command-inline">{plugin.installCommand || t("unknown")}</code>
@@ -272,6 +276,8 @@ export function PluginInspector({
   setInspectorRepoId,
   openSkillDetail,
   copyInstallCommand,
+  onSaveNote,
+  isPending,
   skills,
   repositories,
   language,
@@ -286,6 +292,11 @@ export function PluginInspector({
 }: PluginInspectorProps) {
   const activeDetail = detail || plugin;
   const linkedSkills = activeDetail.linkedSkills || plugin.linkedSkills || [];
+  const [noteDraft, setNoteDraft] = useState(activeDetail.note || "");
+
+  useEffect(() => {
+    setNoteDraft(activeDetail.note || "");
+  }, [activeDetail.id, activeDetail.note]);
 
   function jumpToRepo() {
     const repo =
@@ -347,6 +358,34 @@ export function PluginInspector({
           copyInstallCommand={copyInstallCommand}
           t={t}
         />
+      </Section>
+
+      <Section title={t("note")}>
+        <div className="note-editor">
+          <textarea
+            onChange={(event) => setNoteDraft(event.target.value)}
+            placeholder={t("notePlaceholder")}
+            value={noteDraft}
+          />
+          <div className="inline-action-row">
+            <Button
+              disabled={isPending(`note:plugin:${plugin.id}`)}
+              onClick={() => onSaveNote(plugin, noteDraft)}
+              variant="primary"
+            >
+              {isPending(`note:plugin:${plugin.id}`) ? t("saving") : t("saveNote")}
+            </Button>
+            <Button
+              disabled={!noteDraft || isPending(`note:plugin:${plugin.id}`)}
+              onClick={() => {
+                setNoteDraft("");
+                onSaveNote(plugin, "");
+              }}
+            >
+              {t("clearNote")}
+            </Button>
+          </div>
+        </div>
       </Section>
 
       <Section title={`${t("linkedSkills")} (${linkedSkills.length || activeDetail.skillCount || 0})`}>

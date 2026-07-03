@@ -43,6 +43,7 @@ export type GitHubRepository = {
   updatedAt?: string | null;
   lastRefreshed?: string | null;
   permissions: string;
+  note: string;
 };
 
 export type PluginSkillSummary = {
@@ -76,10 +77,23 @@ export type UiPlugin = {
   detectedSha: string;
   updatedAt: string;
   linkedSkills?: PluginSkillSummary[];
+  note: string;
 };
 
 export type PluginDetail = UiPlugin & {
   linkedSkills: PluginSkillSummary[];
+};
+
+export type MigrationPackageSummary = {
+  path?: string | null;
+  cancelled: boolean;
+  githubAccounts: number;
+  githubRepositories: number;
+  repositories: number;
+  skills: number;
+  plugins: number;
+  userNotes: number;
+  message: string;
 };
 
 const runningInTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
@@ -103,6 +117,13 @@ export const api = {
   listRepositories: () => command<any[]>("list_repositories"),
   listSkills: () => command<any[]>("list_skills"),
   listPlugins: () => command<UiPlugin[]>("list_plugins"),
+  updateItemNote: (request: {
+    target: string;
+    id?: string;
+    accountId?: string;
+    fullName?: string;
+    note: string;
+  }) => command<any>("update_item_note", { request }),
   getSkillDetail: (skillId: string) => command<any>("get_skill_detail", { request: { skillId } }),
   getPluginDetail: (pluginId: string) => command<PluginDetail>("get_plugin_detail", { request: { pluginId } }),
   getRepositoryReadme: (repoId: string) =>
@@ -114,7 +135,7 @@ export const api = {
   validateDirectory: (kind: string, path: string) =>
     command<any>("validate_directory", { request: { kind, path } }),
   updateSettings: (request: Record<string, unknown>) => command<any>("update_settings", { request }),
-  addRepository: (request: { url: string; refName: string }) =>
+  addRepository: (request: { url: string; refName: string; note?: string }) =>
     command<any[]>("add_repository", { request }),
   addLocalRepository: (path: string) => command<any[]>("add_local_repository", { request: { path } }),
   checkRepositories: (repoIds?: string[]) =>
@@ -155,6 +176,8 @@ export const api = {
   clearGithubToken: () => command<any>("clear_github_token"),
   validateGithubToken: () => command<any>("validate_github_token"),
   listBackupHistory: () => command<any[]>("list_backup_history"),
+  exportMigrationPackage: () => command<MigrationPackageSummary>("export_migration_package"),
+  importMigrationPackage: () => command<MigrationPackageSummary>("import_migration_package"),
   openBackupFolder: (path?: string) => command<string>("open_backup_folder", { path }),
   openUrl: (url: string, mode = "embedded", browserId?: string) =>
     command<string>("open_url", { request: { url, mode, browserId } }),

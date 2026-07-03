@@ -1,6 +1,7 @@
 prototype/.npm-cache/
 prototype/dist/
 prototype/node_modules/
+docs/promo/
 node_modules/
 dist/
 src-tauri/target/

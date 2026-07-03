@@ -1324,6 +1324,43 @@ input[type="checkbox"] {
   line-height: 1.55;
 }
 
+.note-preview {
+  color: #3d6f9f;
+}
+
+.note-editor {
+  display: grid;
+  gap: 8px;
+}
+
+.note-editor textarea {
+  min-height: 92px;
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  padding: 9px 10px;
+  border: 1px solid #d1d6de;
+  border-radius: 6px;
+  background: #fff;
+  color: #2c333d;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  outline: none;
+}
+
+.note-editor textarea:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(30, 111, 229, 0.12);
+}
+
+.migration-status {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--pane-soft);
+}
+
 .muted-copy {
   color: var(--muted);
 }
@@ -2315,6 +2352,8 @@ input[type="checkbox"] {
 .app-shell[data-theme="dark"] .folder-picker-row button,
 .app-shell[data-theme="dark"] .search-field input,
 .app-shell[data-theme="dark"] .mini-search-field input,
+.app-shell[data-theme="dark"] .note-editor textarea,
+.app-shell[data-theme="dark"] .migration-status,
 .app-shell[data-theme="dark"] .command-row-value code,
 .app-shell[data-theme="dark"] .mini-skill code {
   border-color: var(--line);

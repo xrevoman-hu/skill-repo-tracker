@@ -17,6 +17,7 @@ type Props = {
   onTrackRepository: (repo: GitHubRepository) => Promise<void>;
   onUntrackRepository: (repo: GitHubRepository) => Promise<void>;
   onOpenUrl: (url: string, mode?: string) => Promise<void>;
+  onSaveNote: (repo: GitHubRepository, note: string) => Promise<void>;
   t: (key: string) => string;
 };
 
@@ -81,6 +82,7 @@ function repoMatches(repo: GitHubRepository, query: string) {
     repo.visibility,
     repo.accountLogin,
     repo.permissions,
+    repo.note,
   ]
     .map((value) => normalize(String(value || "")))
     .some((value) => value.includes(term));
@@ -104,6 +106,7 @@ export function GitHubWorkbench({
   onTrackRepository,
   onUntrackRepository,
   onOpenUrl,
+  onSaveNote,
   t,
 }: Props) {
   const [filter, setFilter] = useState("all");
@@ -141,12 +144,17 @@ export function GitHubWorkbench({
   const selectedRepo = selectedKey
     ? filteredRepos.find((repo) => repoKey(repo) === selectedKey) || null
     : null;
+  const [noteDraft, setNoteDraft] = useState("");
 
   useEffect(() => {
     if (selectedKey && !filteredRepos.some((repo) => repoKey(repo) === selectedKey)) {
       setSelectedKey("");
     }
   }, [filteredRepos, selectedKey]);
+
+  useEffect(() => {
+    setNoteDraft(selectedRepo?.note || "");
+  }, [selectedRepo ? repoKey(selectedRepo) : "", selectedRepo?.note]);
 
   const counts = {
     all: activeRepos.length,
@@ -274,6 +282,7 @@ export function GitHubWorkbench({
                       <td>
                         <strong>{repo.fullName}</strong>
                         <span className="subtext">{repo.description || t("noDescription")}</span>
+                        {repo.note && <span className="subtext note-preview">{repo.note}</span>}
                       </td>
                       <td>{repo.accountLogin}</td>
                       <td>
@@ -409,6 +418,35 @@ export function GitHubWorkbench({
           <section className="inspector-section">
             <h3>{t("description")}</h3>
             <p className="detail-copy">{selectedRepo.description || t("noDescription")}</p>
+          </section>
+
+          <section className="inspector-section">
+            <h3>{t("note")}</h3>
+            <div className="note-editor">
+              <textarea
+                onChange={(event) => setNoteDraft(event.target.value)}
+                placeholder={t("notePlaceholder")}
+                value={noteDraft}
+              />
+              <div className="inline-action-row">
+                <Button
+                  disabled={isPending(`note:githubRepository:${repoKey(selectedRepo)}`)}
+                  onClick={() => onSaveNote(selectedRepo, noteDraft)}
+                  variant="primary"
+                >
+                  {isPending(`note:githubRepository:${repoKey(selectedRepo)}`) ? t("saving") : t("saveNote")}
+                </Button>
+                <Button
+                  disabled={!noteDraft || isPending(`note:githubRepository:${repoKey(selectedRepo)}`)}
+                  onClick={() => {
+                    setNoteDraft("");
+                    onSaveNote(selectedRepo, "");
+                  }}
+                >
+                  {t("clearNote")}
+                </Button>
+              </div>
+            </div>
           </section>
         </aside>
       )}

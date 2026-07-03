@@ -568,6 +568,7 @@ const initialGithubRepositories: GitHubRepository[] = [
     updatedAt: "2026-06-29 18:00",
     lastRefreshed: "2026-06-30 10:00",
     permissions: "pull, push",
+    note: "",
   },
   {
     accountId: "github:demo",
@@ -590,6 +591,7 @@ const initialGithubRepositories: GitHubRepository[] = [
     updatedAt: "2026-06-28 11:00",
     lastRefreshed: "2026-06-30 10:00",
     permissions: "pull",
+    note: "",
   },
 ];
 
@@ -604,7 +606,7 @@ const navItems = [
 
 const APP_METADATA = {
   name: "Skill Repo Tracker",
-  version: "1.1.7",
+  version: "1.1.8",
   projectGithubUrl: "https://github.com/xrevoman-hu/skill-repo-tracker",
   openSource: true,
 };
@@ -895,6 +897,22 @@ const COPY = {
     repositoryInput: "仓库 URL 或 owner/repo",
     note: "备注",
     optionalNote: "可选本地备注",
+    notePlaceholder: "记录用途、场景、安装注意事项或迁移说明。",
+    saveNote: "保存备注",
+    clearNote: "清空备注",
+    noteSaved: "备注已保存。",
+    noteSaveFailed: "备注保存失败。",
+    notesCount: "条备注",
+    dataMigration: "数据迁移",
+    dataMigrationHelp: "导出 GitHub 元数据、仓库、技能、插件和备注，用于不同机器之间迁移或分享。",
+    exportData: "导出数据",
+    importData: "导入数据",
+    exporting: "导出中…",
+    importing: "导入中…",
+    migrationTokenNote: "迁移包不包含 GitHub token、Keychain 密钥、本地 Skill 文件、源码 ZIP 或任务日志；新机器需要重新添加 token。",
+    migrationExported: "迁移包已导出。",
+    migrationImported: "迁移包已导入。",
+    migrationFailed: "迁移操作失败。",
     detectionPreview: "检测预览",
     detectionPreviewText: "公开仓库，main ref；只有检测到 SKILL.md 时才会识别为技能仓库。",
     firstRepositoryTitle: "添加第一个仓库开始追踪",
@@ -1266,6 +1284,22 @@ const COPY = {
     repositoryInput: "Repository URL or owner/repo",
     note: "Note",
     optionalNote: "Optional local note",
+    notePlaceholder: "Record purpose, context, install notes, or migration notes.",
+    saveNote: "Save Note",
+    clearNote: "Clear Note",
+    noteSaved: "Note saved.",
+    noteSaveFailed: "Could not save note.",
+    notesCount: "notes",
+    dataMigration: "Data Migration",
+    dataMigrationHelp: "Export GitHub metadata, repositories, Skills, plugins, and notes for machine migration or sharing.",
+    exportData: "Export Data",
+    importData: "Import Data",
+    exporting: "Exporting...",
+    importing: "Importing...",
+    migrationTokenNote: "Migration packages do not include GitHub tokens, Keychain secrets, local Skill files, source ZIPs, or task logs. Add tokens again on the new machine.",
+    migrationExported: "Migration package exported.",
+    migrationImported: "Migration package imported.",
+    migrationFailed: "Migration operation failed.",
     detectionPreview: "Detection preview",
     detectionPreviewText: "Public repository, ref main, no Skill found unless SKILL.md is detected.",
     firstRepositoryTitle: "Add your first repository",
@@ -1592,7 +1626,27 @@ function repositorySearchValues(repo, language = "zh") {
     repo.localPath,
     repo.type,
     repo.sourceType,
+    repo.note,
   ];
+}
+
+function githubRepositoryNoteKey(repo) {
+  return `github:${String(repo.owner || "").toLowerCase()}/${String(repo.repo || "").toLowerCase()}`;
+}
+
+function trackedRepositoryNoteKey(repo) {
+  if (repo?.sourceType === "github" && typeof repo.name === "string" && repo.name.includes("/")) {
+    return `github:${repo.name.toLowerCase()}`;
+  }
+  return `local:${repo?.id || ""}`;
+}
+
+function noteActionKey(target, item) {
+  if (target === "githubRepository") return `note:githubRepository:${item.accountId}:${item.fullName}`;
+  if (target === "repository") return `note:repository:${item.id}`;
+  if (target === "skill") return `note:skill:${item.id}`;
+  if (target === "plugin") return `note:plugin:${item.id}`;
+  return `note:${target}`;
 }
 
 function skillRepoId(skill) {
@@ -1767,6 +1821,7 @@ export function App() {
   const [activeGithubAccountId, setActiveGithubAccountId] = useState("github:demo");
   const [isAddingRepo, setIsAddingRepo] = useState(false);
   const addRepoRequestRef = useRef(0);
+  const [migrationStatus, setMigrationStatus] = useState("");
   const [nextAutoCheckAt, setNextAutoCheckAt] = useState(null);
   const [nextAutoBackupAt, setNextAutoBackupAt] = useState(null);
   const [newRepo, setNewRepo] = useState({
@@ -1927,6 +1982,7 @@ export function App() {
     nextAutoCheckAt,
     nextAutoBackupAt,
     directoryStatus,
+    migrationStatus,
     isPending,
     desktopRuntime,
     refreshDesktopState,
@@ -1936,6 +1992,8 @@ export function App() {
     persistSettings,
     updateSkillSyncTargets,
     showToast,
+    exportMigrationPackage,
+    importMigrationPackage,
     openGitHubWorkbench: () => setActiveTab("github"),
     t,
   };
@@ -1979,6 +2037,7 @@ export function App() {
         skill.sourceType,
         skill.localPath,
         skill.installPath,
+        skill.note,
       ],
       skillSearch,
     );
@@ -2000,6 +2059,7 @@ export function App() {
         sourceRepo?.type,
         sourceRepo ? statusLabel(sourceRepo.type, language) : "",
         sourceRepo?.sourceType,
+        sourceRepo?.note,
       ],
       skillRepoQuery,
     );
@@ -2023,6 +2083,7 @@ export function App() {
         plugin.updateCommand,
         plugin.sourcePath,
         plugin.status,
+        plugin.note,
       ],
       pluginSearch,
     ),
@@ -2298,6 +2359,109 @@ export function App() {
     );
     showToast(t("syncTargetsSaved"));
     setActionPending(actionKey, false);
+  }
+
+  function applyNoteUpdate(target, entityKey, note, id) {
+    if (target === "repository" || target === "githubRepository") {
+      setRepositories((items) =>
+        items.map((item) =>
+          trackedRepositoryNoteKey(item) === entityKey ? { ...item, note } : item,
+        ),
+      );
+      setGithubRepositories((items) =>
+        items.map((item) =>
+          githubRepositoryNoteKey(item) === entityKey ? { ...item, note } : item,
+        ),
+      );
+      return;
+    }
+    if (target === "skill") {
+      setSkills((items) => items.map((item) => (item.id === id ? { ...item, note } : item)));
+      setSkillDetail((detail) => (detail && detail.id === id ? { ...detail, note } : detail));
+      return;
+    }
+    if (target === "plugin") {
+      setPlugins((items) => items.map((item) => (item.id === id ? { ...item, note } : item)));
+      setPluginDetail((detail) => (detail && detail.id === id ? { ...detail, note } : detail));
+    }
+  }
+
+  async function saveItemNote(target, item, note) {
+    const actionKey = noteActionKey(target, item);
+    if (isPending(actionKey)) return;
+    setActionPending(actionKey, true);
+    const request =
+      target === "githubRepository"
+        ? {
+            target,
+            accountId: item.accountId,
+            fullName: item.fullName,
+            note,
+          }
+        : {
+            target,
+            id: item.id,
+            note,
+          };
+    try {
+      const result = desktopRuntime
+        ? await api.updateItemNote(request)
+        : {
+            entityKey:
+              target === "githubRepository"
+                ? githubRepositoryNoteKey(item)
+                : target === "repository"
+                  ? trackedRepositoryNoteKey(item)
+                  : item.id,
+            note,
+          };
+      applyNoteUpdate(target, result.entityKey, result.note, item.id);
+      showToast(t("noteSaved"));
+    } catch (error) {
+      showToast(error.message || t("noteSaveFailed"));
+    } finally {
+      setActionPending(actionKey, false);
+    }
+  }
+
+  function migrationSummaryText(summary, actionLabel) {
+    if (!summary || summary.cancelled) return summary?.message || "";
+    return `${actionLabel}: ${summary.repositories} ${t("repositoriesTitle")}, ${summary.skills} ${t("skillsTitle")}, ${summary.plugins} ${t("pluginsTitle")}, ${summary.userNotes} ${t("notesCount")}`;
+  }
+
+  async function exportMigrationPackage() {
+    const actionKey = "exportMigrationPackage";
+    if (isPending(actionKey)) return;
+    setActionPending(actionKey, true);
+    try {
+      const summary = await api.exportMigrationPackage();
+      const message = migrationSummaryText(summary, t("exportData")) || summary.message;
+      setMigrationStatus(message);
+      showToast(summary.cancelled ? summary.message : t("migrationExported"));
+    } catch (error) {
+      showToast(error.message || t("migrationFailed"));
+    } finally {
+      setActionPending(actionKey, false);
+    }
+  }
+
+  async function importMigrationPackage() {
+    const actionKey = "importMigrationPackage";
+    if (isPending(actionKey)) return;
+    setActionPending(actionKey, true);
+    try {
+      const summary = await api.importMigrationPackage();
+      if (!summary.cancelled) {
+        await refreshDesktopState();
+      }
+      const message = migrationSummaryText(summary, t("importData")) || summary.message;
+      setMigrationStatus(message);
+      showToast(summary.cancelled ? summary.message : t("migrationImported"));
+    } catch (error) {
+      showToast(error.message || t("migrationFailed"));
+    } finally {
+      setActionPending(actionKey, false);
+    }
   }
 
   async function addLocalRepositoryFromPicker() {
@@ -2670,6 +2834,7 @@ export function App() {
         const nextRepos = await api.addRepository({
           url: newRepo.url,
           refName: newRepo.ref || "main",
+          note: newRepo.note,
         });
         const [nextSkills, nextPlugins, nextTasks] = await Promise.all([
           api.listSkills(),
@@ -2729,6 +2894,7 @@ export function App() {
       backupPath: `${backupRoot}/${name}`,
       snapshotTime: "Never",
       recognizedSkills: isSkillRepo ? [{ name: name.split("/")[1], version: "v0.1.0" }] : [],
+      note: newRepo.note,
     };
     setRepositories((repos) => [repo, ...repos]);
     setSelectedRepoId(id);
@@ -3364,6 +3530,7 @@ export function App() {
               onTrackRepository={trackGithubRepository}
               onUntrackRepository={untrackGithubRepository}
               onOpenUrl={openGithubUrl}
+              onSaveNote={(repo, note) => saveItemNote("githubRepository", repo, note)}
               t={t}
             />
           )}
@@ -3447,6 +3614,8 @@ export function App() {
               chooseBrowserForUrl={chooseBrowserForUrl}
               copyUrl={copyUrl}
               openPluginDetail={openPluginEntry}
+              onSaveNote={(repo, note) => saveItemNote("repository", repo, note)}
+              isPending={isPending}
               language={language}
               t={t}
             />
@@ -3467,6 +3636,7 @@ export function App() {
               updateSkillSyncTargets={updateSkillSyncTargets}
               isPending={isPending}
               openPluginDetail={openPluginEntry}
+              onSaveNote={(skill, note) => saveItemNote("skill", skill, note)}
               language={language}
               t={t}
             />
@@ -3483,6 +3653,8 @@ export function App() {
               setInspectorRepoId={setInspectorRepoId}
               openSkillDetail={openSkillDetail}
               copyInstallCommand={copyInstallCommand}
+              onSaveNote={(plugin, note) => saveItemNote("plugin", plugin, note)}
+              isPending={isPending}
               skills={skills}
               repositories={repositories}
               language={language}
@@ -3895,6 +4067,7 @@ function RepositoriesView({
                     </td>
                     <td title={repoName}>
                       <strong>{repoName}</strong>
+                      {repo.note && <span className="subtext note-preview">{repo.note}</span>}
                     </td>
                     <td>
                       <Tag value={repo.type} language={language} />
@@ -3966,6 +4139,8 @@ function Inspector({
   chooseBrowserForUrl,
   copyUrl,
   openPluginDetail,
+  onSaveNote,
+  isPending,
   language,
   t,
 }: any) {
@@ -3974,6 +4149,7 @@ function Inspector({
   const [readme, setReadme] = useState(null);
   const [readmeLoading, setReadmeLoading] = useState(false);
   const [readmeError, setReadmeError] = useState("");
+  const [noteDraft, setNoteDraft] = useState(repo.note || "");
   const hasManifest =
     repo.lastBackupSha &&
     !["none", "unknown"].includes(repo.lastBackupSha) &&
@@ -3988,7 +4164,12 @@ function Inspector({
     setReadmeOpen(false);
     setReadme(null);
     setReadmeError("");
+    setNoteDraft(repo.note || "");
   }, [repo.id]);
+
+  useEffect(() => {
+    setNoteDraft(repo.note || "");
+  }, [repo.note]);
 
   async function loadReadme() {
     setReadmeOpen(true);
@@ -4067,6 +4248,21 @@ function Inspector({
         <Button variant="wide" onClick={() => setActiveTab("skills")}>
           {t("openSkillsManager")}
         </Button>
+      </Section>
+
+      <Section title={t("note")}>
+        <NoteEditor
+          actionKey={`note:repository:${repo.id}`}
+          isPending={isPending}
+          note={noteDraft}
+          onChange={setNoteDraft}
+          onClear={() => {
+            setNoteDraft("");
+            onSaveNote(repo, "");
+          }}
+          onSave={() => onSaveNote(repo, noteDraft)}
+          t={t}
+        />
       </Section>
 
       <Section title={`${t("recognizedPlugins")} (${(repo.recognizedPlugins || []).length})`}>
@@ -4149,6 +4345,27 @@ function Detail({ label, value, mono, link }: any) {
       ) : (
         <strong>{value}</strong>
       )}
+    </div>
+  );
+}
+
+function NoteEditor({ actionKey, isPending, note, onChange, onClear, onSave, t }: any) {
+  const pending = isPending?.(actionKey);
+  return (
+    <div className="note-editor">
+      <textarea
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={t("notePlaceholder")}
+        value={note}
+      />
+      <div className="inline-action-row">
+        <Button disabled={pending} onClick={onSave} variant="primary">
+          {pending ? t("saving") : t("saveNote")}
+        </Button>
+        <Button disabled={!note || pending} onClick={onClear}>
+          {t("clearNote")}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -4274,6 +4491,7 @@ function SkillsView({
                     <td>
                       <strong>{skill.name}</strong>
                       <span className="subtext">{skillDescription(skill, language)}</span>
+                      {skill.note && <span className="subtext note-preview">{skill.note}</span>}
                       <span className="subtext">
                         {t("syncTargets")}: {syncTargetSummary(skill.resolvedSyncTargets || [], availableSyncTargets, language)}
                       </span>
@@ -4364,6 +4582,7 @@ function SkillInspector({
   updateSkillSyncTargets,
   isPending,
   openPluginDetail,
+  onSaveNote,
   language,
   t,
 }: any) {
@@ -4373,6 +4592,11 @@ function SkillInspector({
   const resolvedTargets = activeDetail.resolvedSyncTargets || skill.resolvedSyncTargets || [];
   const publishedTargets = activeDetail.publishedTargets || skill.publishedTargets || [];
   const syncPending = isPending?.(`syncTargets:${skill.id}`);
+  const [noteDraft, setNoteDraft] = useState(activeDetail.note || "");
+
+  useEffect(() => {
+    setNoteDraft(activeDetail.note || "");
+  }, [activeDetail.id, activeDetail.note]);
   function jumpToRepo() {
     const repo = repositories.find(
       (item) => displayRepoName(item.name, language) === displayRepoName(skill.repo, language),
@@ -4466,6 +4690,21 @@ function SkillInspector({
 
       <Section title={t("description")}>
         <p className="detail-copy">{skillDescription(activeDetail, language) || t("noDescription")}</p>
+      </Section>
+
+      <Section title={t("note")}>
+        <NoteEditor
+          actionKey={`note:skill:${skill.id}`}
+          isPending={isPending}
+          note={noteDraft}
+          onChange={setNoteDraft}
+          onClear={() => {
+            setNoteDraft("");
+            onSaveNote(skill, "");
+          }}
+          onSave={() => onSaveNote(skill, noteDraft)}
+          t={t}
+        />
       </Section>
 
       <Section title={`${t("pluginInstallEntries")} (${(activeDetail.plugins || []).length})`}>
@@ -4757,11 +4996,14 @@ function PreferencesPanel({
   nextAutoCheckAt,
   nextAutoBackupAt,
   directoryStatus,
+  migrationStatus,
   chooseDirectory,
   validateDirectory,
   syncInstalledSkills,
   persistSettings,
   showToast,
+  exportMigrationPackage,
+  importMigrationPackage,
   openGitHubWorkbench,
   desktopRuntime,
   compact,
@@ -5071,6 +5313,27 @@ function PreferencesPanel({
               {t("openGithubWorkbench")}
             </button>
           </div>
+        </SettingsSection>
+
+        <SettingsSection title={t("dataMigration")} note={t("dataMigrationHelp")}>
+          <div className="action-grid">
+            <Button
+              onClick={exportMigrationPackage}
+              pending={isPending("exportMigrationPackage")}
+              pendingLabel={t("exporting")}
+            >
+              {t("exportData")}
+            </Button>
+            <Button
+              onClick={importMigrationPackage}
+              pending={isPending("importMigrationPackage")}
+              pendingLabel={t("importing")}
+            >
+              {t("importData")}
+            </Button>
+          </div>
+          <p className="settings-note">{t("migrationTokenNote")}</p>
+          {migrationStatus && <p className="settings-note migration-status">{migrationStatus}</p>}
         </SettingsSection>
 
         <AboutPanel

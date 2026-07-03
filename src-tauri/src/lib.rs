@@ -23,7 +23,9 @@ mod plugins;
 
 use plugins::{scan_plugins_from_directory, scan_plugins_from_zip, sync_plugins, PluginScan};
 
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.7";
+const APP_VERSION: &str = "1.1.8";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.8";
+const MIGRATION_SCHEMA_VERSION: i64 = 1;
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
 const LEGACY_GITHUB_ACCOUNT_ID: &str = "github:legacy-default";
@@ -215,6 +217,7 @@ pub struct UiRepository {
     recognized_plugins: Vec<RecognizedPlugin>,
     source_type: String,
     local_path: Option<String>,
+    note: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -262,6 +265,7 @@ pub struct UiSkill {
     published_targets: Vec<String>,
     can_restore: bool,
     can_delete: bool,
+    note: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -287,6 +291,7 @@ pub struct SkillDetail {
     plugins: Vec<SkillPluginReference>,
     skill_md: String,
     file_path: Option<String>,
+    note: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -315,6 +320,7 @@ pub struct UiPlugin {
     skill_count: i64,
     detected_sha: String,
     updated_at: String,
+    note: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -335,6 +341,7 @@ pub struct PluginDetail {
     detected_sha: String,
     updated_at: String,
     linked_skills: Vec<PluginSkillSummary>,
+    note: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -399,6 +406,7 @@ pub struct UiGithubRepository {
     updated_at: Option<String>,
     last_refreshed: Option<String>,
     permissions: String,
+    note: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -469,12 +477,176 @@ pub struct BackupHistory {
     summary: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationPackage {
+    schema_version: i64,
+    app_version: String,
+    exported_at: String,
+    github_accounts: Vec<MigrationGithubAccount>,
+    github_repositories: Vec<MigrationGithubRepository>,
+    repositories: Vec<MigrationRepository>,
+    skills: Vec<MigrationSkill>,
+    plugins: Vec<MigrationPlugin>,
+    user_notes: Vec<MigrationUserNote>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationGithubAccount {
+    id: String,
+    login: String,
+    display_name: String,
+    avatar_url: Option<String>,
+    status: String,
+    scopes: String,
+    last_verified: Option<String>,
+    is_default: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationGithubRepository {
+    account_id: String,
+    full_name: String,
+    owner: String,
+    repo: String,
+    github_id: i64,
+    html_url: String,
+    description: String,
+    visibility: String,
+    private: bool,
+    fork: bool,
+    archived: bool,
+    default_branch: String,
+    language: String,
+    stargazers_count: i64,
+    starred: bool,
+    permissions: String,
+    pushed_at: Option<String>,
+    github_updated_at: Option<String>,
+    last_refreshed: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationRepository {
+    id: String,
+    name: String,
+    owner: String,
+    repo: String,
+    ref_name: String,
+    repo_type: String,
+    skills_count: i64,
+    remote_sha: String,
+    last_backup_sha: Option<String>,
+    last_checked: Option<String>,
+    backup_status: String,
+    check_status: String,
+    url: String,
+    branch: String,
+    backup_path: Option<String>,
+    snapshot_time: Option<String>,
+    source_type: String,
+    local_path: Option<String>,
+    github_account_id: Option<String>,
+    canonical_name: Option<String>,
+    error: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationSkill {
+    id: String,
+    repo_id: String,
+    name: String,
+    description: String,
+    repo_name: String,
+    path: String,
+    ref_name: String,
+    local_version: Option<String>,
+    remote_version: String,
+    status: String,
+    installed: bool,
+    updated_at: Option<String>,
+    installed_hash: Option<String>,
+    source_type: String,
+    local_path: Option<String>,
+    install_path: Option<String>,
+    deleted_at: Option<String>,
+    deleted_path: Option<String>,
+    sync_targets_mode: String,
+    sync_targets: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationPlugin {
+    id: String,
+    repo_id: String,
+    name: String,
+    description: String,
+    kind: String,
+    install_command: String,
+    update_command: Option<String>,
+    source_path: String,
+    source_excerpt: String,
+    status: String,
+    detected_sha: String,
+    updated_at: String,
+    linked_skill_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationUserNote {
+    scope: String,
+    entity_key: String,
+    note: String,
+    updated_at: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AddRepositoryRequest {
     url: String,
     #[serde(default = "default_ref")]
     ref_name: String,
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateNoteRequest {
+    target: String,
+    id: Option<String>,
+    account_id: Option<String>,
+    full_name: Option<String>,
+    note: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct NoteUpdateResult {
+    target: String,
+    entity_key: String,
+    note: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationPackageSummary {
+    path: Option<String>,
+    cancelled: bool,
+    github_accounts: usize,
+    github_repositories: usize,
+    repositories: usize,
+    skills: usize,
+    plugins: usize,
+    user_notes: usize,
+    message: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -814,6 +986,14 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           PRIMARY KEY(plugin_id, skill_id),
           FOREIGN KEY(plugin_id) REFERENCES plugins(id) ON DELETE CASCADE,
           FOREIGN KEY(skill_id) REFERENCES skills(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS user_notes (
+          scope TEXT NOT NULL,
+          entity_key TEXT NOT NULL,
+          note TEXT NOT NULL DEFAULT '',
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(scope, entity_key)
         );
 
         CREATE TABLE IF NOT EXISTS backup_jobs (
@@ -1619,6 +1799,61 @@ fn skill_id(repo_id: &str, path: &str) -> String {
     format!("{repo_id}:skill:{encoded}")
 }
 
+fn github_repository_note_key(owner: &str, repo: &str) -> String {
+    format!(
+        "github:{}/{}",
+        owner.trim().to_ascii_lowercase(),
+        repo.trim().to_ascii_lowercase()
+    )
+}
+
+fn repository_note_key(source_type: &str, id: &str, owner: &str, repo: &str) -> String {
+    if source_type == "github" && !owner.trim().is_empty() && !repo.trim().is_empty() {
+        github_repository_note_key(owner, repo)
+    } else {
+        format!("local:{id}")
+    }
+}
+
+fn repository_note_key_for_record(repo: &RepoRecord) -> String {
+    repository_note_key(&repo.source_type, &repo.id, &repo.owner, &repo.repo)
+}
+
+fn load_user_note(conn: &Connection, scope: &str, entity_key: &str) -> Result<String, AppError> {
+    conn.query_row(
+        "SELECT note FROM user_notes WHERE scope = ?1 AND entity_key = ?2",
+        params![scope, entity_key],
+        |row| row.get::<_, String>(0),
+    )
+    .optional()
+    .map(|value| value.unwrap_or_default())
+    .map_err(AppError::from)
+}
+
+fn save_user_note(
+    conn: &Connection,
+    scope: &str,
+    entity_key: &str,
+    note: &str,
+) -> Result<(), AppError> {
+    if note.is_empty() {
+        conn.execute(
+            "DELETE FROM user_notes WHERE scope = ?1 AND entity_key = ?2",
+            params![scope, entity_key],
+        )?;
+        return Ok(());
+    }
+    conn.execute(
+        "INSERT INTO user_notes (scope, entity_key, note, updated_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(scope, entity_key) DO UPDATE SET
+          note = excluded.note,
+          updated_at = excluded.updated_at",
+        params![scope, entity_key, note, utc_now()],
+    )?;
+    Ok(())
+}
+
 fn repo_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RepoRecord> {
     Ok(RepoRecord {
         id: row.get("id")?,
@@ -1729,6 +1964,7 @@ fn recognized_plugins(conn: &Connection, repo_id: &str) -> Result<Vec<Recognized
 }
 
 fn ui_repository(conn: &Connection, repo: RepoRecord) -> Result<UiRepository, AppError> {
+    let note = load_user_note(conn, "repository", &repository_note_key_for_record(&repo))?;
     Ok(UiRepository {
         id: repo.id.clone(),
         name: display_local_library_name(repo.name),
@@ -1750,6 +1986,7 @@ fn ui_repository(conn: &Connection, repo: RepoRecord) -> Result<UiRepository, Ap
         recognized_plugins: recognized_plugins(conn, &repo.id)?,
         source_type: repo.source_type,
         local_path: repo.local_path,
+        note,
     })
 }
 
@@ -1793,8 +2030,10 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
         } else {
             row.get(9)?
         };
+        let id: String = row.get(0)?;
+        let note = load_user_note(conn, "skill", &id).unwrap_or_default();
         Ok(UiSkill {
-            id: row.get(0)?,
+            id,
             repo_id: row.get(1)?,
             name: row.get(2)?,
             description: row.get(3)?,
@@ -1818,6 +2057,7 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
             published_targets: Vec::new(),
             can_restore: deleted_at.is_some() && deleted_path.is_some(),
             can_delete: installed && deleted_at.is_none(),
+            note,
         })
     })?;
 
@@ -1849,8 +2089,10 @@ fn load_ui_plugins(conn: &Connection) -> Result<Vec<UiPlugin>, AppError> {
            p.name ASC",
     )?;
     let rows = stmt.query_map([], |row| {
+        let id: String = row.get(0)?;
+        let note = load_user_note(conn, "plugin", &id).unwrap_or_default();
         Ok(UiPlugin {
-            id: row.get(0)?,
+            id,
             repo_id: row.get(1)?,
             repo_name: display_local_library_name(row.get(2)?),
             name: row.get(3)?,
@@ -1864,6 +2106,7 @@ fn load_ui_plugins(conn: &Connection) -> Result<Vec<UiPlugin>, AppError> {
             skill_count: row.get(11)?,
             detected_sha: row.get(12)?,
             updated_at: local_display(row.get::<_, Option<String>>(13)?.as_deref()),
+            note,
         })
     })?;
     let mut plugins = Vec::new();
@@ -2335,6 +2578,12 @@ fn load_ui_github_repositories(
                 .map(|value| local_display(Some(&value))),
             permissions: row.get::<_, Option<String>>(18)?.unwrap_or_default(),
             tracked_repo_id: row.get(19)?,
+            note: load_user_note(
+                conn,
+                "repository",
+                &github_repository_note_key(&row.get::<_, String>(2)?, &row.get::<_, String>(3)?),
+            )
+            .unwrap_or_default(),
         })
     };
     let rows = if let Some(account_id) = account_id {
@@ -3816,6 +4065,107 @@ fn list_plugins(state: State<'_, AppState>) -> ApiResponse<Vec<UiPlugin>> {
     }
 }
 
+fn resolve_note_target(
+    conn: &Connection,
+    request: &UpdateNoteRequest,
+) -> Result<(&'static str, String), AppError> {
+    match request.target.as_str() {
+        "repository" => {
+            let id = request
+                .id
+                .as_deref()
+                .ok_or_else(|| AppError::new("note_target_missing", "缺少仓库 ID。"))?;
+            let repo = load_repository(conn, id)?.ok_or_else(|| {
+                AppError::new("repository_not_found", "仓库不存在，无法保存备注。")
+            })?;
+            Ok(("repository", repository_note_key_for_record(&repo)))
+        }
+        "githubRepository" => {
+            let account_id = request
+                .account_id
+                .as_deref()
+                .ok_or_else(|| AppError::new("note_target_missing", "缺少 GitHub 账号。"))?;
+            let full_name = request
+                .full_name
+                .as_deref()
+                .ok_or_else(|| AppError::new("note_target_missing", "缺少 GitHub 仓库。"))?;
+            let (owner, repo) = conn
+                .query_row(
+                    "SELECT owner, repo FROM github_repo_catalog
+                     WHERE account_id = ?1 AND lower(full_name) = lower(?2)",
+                    params![account_id, full_name],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?
+                .ok_or_else(|| {
+                    AppError::new(
+                        "github_repository_not_found",
+                        "GitHub 仓库不存在，无法保存备注。",
+                    )
+                })?;
+            Ok(("repository", github_repository_note_key(&owner, &repo)))
+        }
+        "skill" => {
+            let id = request
+                .id
+                .as_deref()
+                .ok_or_else(|| AppError::new("note_target_missing", "缺少 Skill ID。"))?;
+            let exists: Option<String> = conn
+                .query_row("SELECT id FROM skills WHERE id = ?1", params![id], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            if exists.is_none() {
+                return Err(AppError::new(
+                    "skill_not_found",
+                    "Skill 不存在，无法保存备注。",
+                ));
+            }
+            Ok(("skill", id.to_string()))
+        }
+        "plugin" => {
+            let id = request
+                .id
+                .as_deref()
+                .ok_or_else(|| AppError::new("note_target_missing", "缺少插件 ID。"))?;
+            let exists: Option<String> = conn
+                .query_row("SELECT id FROM plugins WHERE id = ?1", params![id], |row| {
+                    row.get(0)
+                })
+                .optional()?;
+            if exists.is_none() {
+                return Err(AppError::new(
+                    "plugin_not_found",
+                    "插件不存在，无法保存备注。",
+                ));
+            }
+            Ok(("plugin", id.to_string()))
+        }
+        _ => Err(AppError::new("note_target_invalid", "不支持的备注对象。")),
+    }
+}
+
+#[tauri::command]
+fn update_item_note(
+    request: UpdateNoteRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<NoteUpdateResult> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = (|| -> Result<NoteUpdateResult, AppError> {
+        let (scope, entity_key) = resolve_note_target(&db, &request)?;
+        save_user_note(&db, scope, &entity_key, &request.note)?;
+        Ok(NoteUpdateResult {
+            target: request.target,
+            entity_key,
+            note: request.note,
+        })
+    })();
+    match result {
+        Ok(result) => ApiResponse::ok(result),
+        Err(error) => api_err(error),
+    }
+}
+
 #[tauri::command]
 fn get_plugin_detail(
     request: PluginActionRequest,
@@ -3852,6 +4202,7 @@ fn get_plugin_detail(
                     detected_sha: row.get(12)?,
                     updated_at: local_display(row.get::<_, Option<String>>(13)?.as_deref()),
                     linked_skills: Vec::new(),
+                    note: String::new(),
                 })
             },
         )
@@ -3859,6 +4210,7 @@ fn get_plugin_detail(
     match result {
         Ok(Some(mut detail)) => {
             detail.linked_skills = plugin_linked_skills(&db, &detail.id).unwrap_or_default();
+            detail.note = load_user_note(&db, "plugin", &detail.id).unwrap_or_default();
             Ok(ApiResponse::ok(detail))
         }
         Ok(None) => Ok(api_err(AppError::new("plugin_not_found", "插件不存在。"))),
@@ -3917,6 +4269,7 @@ async fn get_skill_detail(
                         plugins: Vec::new(),
                         skill_md: String::new(),
                         file_path: None,
+                        note: String::new(),
                     },
                     row.get::<_, Option<String>>(12)?,
                     row.get::<_, Option<String>>(15)?,
@@ -3931,6 +4284,7 @@ async fn get_skill_detail(
                 value.0.published_targets =
                     published_target_ids(&db, &value.0.id).unwrap_or_default();
                 value.0.plugins = plugin_references_for_skill(&db, &value.0.id).unwrap_or_default();
+                value.0.note = load_user_note(&db, "skill", &value.0.id).unwrap_or_default();
                 value
             }
             Ok(None) => return Ok(api_err(AppError::new("skill_not_found", "Skill 不存在。"))),
@@ -4276,6 +4630,14 @@ async fn add_repository(
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<UiRepository>, AppError> {
         let id = save_repository_with_plugins(&db, &remote, &scans, &plugins, None)?;
+        if let Some(note) = request.note.as_deref() {
+            save_user_note(
+                &db,
+                "repository",
+                &github_repository_note_key(&remote.owner, &remote.repo),
+                note,
+            )?;
+        }
         insert_task(
             &db,
             &format!("scan-{}", Local::now().format("%Y%m%d%H%M%S")),
@@ -5451,6 +5813,644 @@ fn copy_task_summary(request: TaskRequest, state: State<'_, AppState>) -> ApiRes
     }
 }
 
+fn plugin_link_ids(conn: &Connection, plugin_id: &str) -> Result<Vec<String>, AppError> {
+    let mut stmt = conn.prepare(
+        "SELECT skill_id FROM plugin_skill_links
+         WHERE plugin_id = ?1
+         ORDER BY skill_id ASC",
+    )?;
+    let rows = stmt.query_map(params![plugin_id], |row| row.get::<_, String>(0))?;
+    let mut ids = Vec::new();
+    for row in rows {
+        ids.push(row?);
+    }
+    Ok(ids)
+}
+
+fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppError> {
+    let mut github_accounts = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT id, login, display_name, avatar_url, status, scopes, last_verified, is_default
+         FROM github_accounts
+         ORDER BY login ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(MigrationGithubAccount {
+            id: row.get(0)?,
+            login: row.get(1)?,
+            display_name: row.get(2)?,
+            avatar_url: row.get(3)?,
+            status: row.get(4)?,
+            scopes: row.get(5)?,
+            last_verified: row.get(6)?,
+            is_default: row.get::<_, i64>(7)? == 1,
+        })
+    })?;
+    for row in rows {
+        github_accounts.push(row?);
+    }
+    drop(stmt);
+
+    let mut github_repositories = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT account_id, full_name, owner, repo, github_id, html_url, description, visibility,
+                private, fork, archived, default_branch, language, stargazers_count, starred,
+                permissions, pushed_at, github_updated_at, last_refreshed
+         FROM github_repo_catalog
+         ORDER BY account_id ASC, full_name ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(MigrationGithubRepository {
+            account_id: row.get(0)?,
+            full_name: row.get(1)?,
+            owner: row.get(2)?,
+            repo: row.get(3)?,
+            github_id: row.get(4)?,
+            html_url: row.get(5)?,
+            description: row.get(6)?,
+            visibility: row.get(7)?,
+            private: row.get::<_, i64>(8)? == 1,
+            fork: row.get::<_, i64>(9)? == 1,
+            archived: row.get::<_, i64>(10)? == 1,
+            default_branch: row.get(11)?,
+            language: row.get(12)?,
+            stargazers_count: row.get(13)?,
+            starred: row.get::<_, i64>(14)? == 1,
+            permissions: row.get(15)?,
+            pushed_at: row.get(16)?,
+            github_updated_at: row.get(17)?,
+            last_refreshed: row.get(18)?,
+        })
+    })?;
+    for row in rows {
+        github_repositories.push(row?);
+    }
+    drop(stmt);
+
+    let mut repositories = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
+                last_backup_sha, last_checked, backup_status, check_status, url, branch,
+                backup_path, snapshot_time, source_type, local_path, github_account_id,
+                canonical_name, error, created_at, updated_at
+         FROM repositories
+         ORDER BY updated_at DESC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(MigrationRepository {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            owner: row.get(2)?,
+            repo: row.get(3)?,
+            ref_name: row.get(4)?,
+            repo_type: row.get(5)?,
+            skills_count: row.get(6)?,
+            remote_sha: row.get(7)?,
+            last_backup_sha: row.get(8)?,
+            last_checked: row.get(9)?,
+            backup_status: row.get(10)?,
+            check_status: row.get(11)?,
+            url: row.get(12)?,
+            branch: row.get(13)?,
+            backup_path: row.get(14)?,
+            snapshot_time: row.get(15)?,
+            source_type: row.get(16)?,
+            local_path: row.get(17)?,
+            github_account_id: row.get(18)?,
+            canonical_name: row.get(19)?,
+            error: row.get(20)?,
+            created_at: row.get(21)?,
+            updated_at: row.get(22)?,
+        })
+    })?;
+    for row in rows {
+        repositories.push(row?);
+    }
+    drop(stmt);
+
+    let mut skills = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT id, repo_id, name, description, repo_name, path, ref_name, local_version,
+                remote_version, status, installed, updated_at, installed_hash, source_type,
+                local_path, install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets
+         FROM skills
+         ORDER BY repo_name ASC, name ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(MigrationSkill {
+            id: row.get(0)?,
+            repo_id: row.get(1)?,
+            name: row.get(2)?,
+            description: row.get(3)?,
+            repo_name: row.get(4)?,
+            path: row.get(5)?,
+            ref_name: row.get(6)?,
+            local_version: row.get(7)?,
+            remote_version: row.get(8)?,
+            status: row.get(9)?,
+            installed: row.get::<_, i64>(10)? == 1,
+            updated_at: row.get(11)?,
+            installed_hash: row.get(12)?,
+            source_type: row.get(13)?,
+            local_path: row.get(14)?,
+            install_path: row.get(15)?,
+            deleted_at: row.get(16)?,
+            deleted_path: row.get(17)?,
+            sync_targets_mode: row.get(18)?,
+            sync_targets: row.get(19)?,
+        })
+    })?;
+    for row in rows {
+        skills.push(row?);
+    }
+    drop(stmt);
+
+    let mut plugins = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT id, repo_id, name, description, kind, install_command, update_command,
+                source_path, source_excerpt, status, detected_sha, updated_at
+         FROM plugins
+         ORDER BY kind ASC, name ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(MigrationPlugin {
+            id: row.get(0)?,
+            repo_id: row.get(1)?,
+            name: row.get(2)?,
+            description: row.get(3)?,
+            kind: row.get(4)?,
+            install_command: row.get(5)?,
+            update_command: row.get(6)?,
+            source_path: row.get(7)?,
+            source_excerpt: row.get(8)?,
+            status: row.get(9)?,
+            detected_sha: row.get(10)?,
+            updated_at: row.get(11)?,
+            linked_skill_ids: Vec::new(),
+        })
+    })?;
+    for row in rows {
+        let mut plugin = row?;
+        plugin.linked_skill_ids = plugin_link_ids(conn, &plugin.id)?;
+        plugins.push(plugin);
+    }
+    drop(stmt);
+
+    let mut user_notes = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT scope, entity_key, note, updated_at FROM user_notes
+         ORDER BY scope ASC, entity_key ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(MigrationUserNote {
+            scope: row.get(0)?,
+            entity_key: row.get(1)?,
+            note: row.get(2)?,
+            updated_at: row.get(3)?,
+        })
+    })?;
+    for row in rows {
+        user_notes.push(row?);
+    }
+
+    Ok(MigrationPackage {
+        schema_version: MIGRATION_SCHEMA_VERSION,
+        app_version: APP_VERSION.to_string(),
+        exported_at: utc_now(),
+        github_accounts,
+        github_repositories,
+        repositories,
+        skills,
+        plugins,
+        user_notes,
+    })
+}
+
+fn migration_summary(
+    package: &MigrationPackage,
+    path: Option<String>,
+    cancelled: bool,
+    message: impl Into<String>,
+) -> MigrationPackageSummary {
+    MigrationPackageSummary {
+        path,
+        cancelled,
+        github_accounts: package.github_accounts.len(),
+        github_repositories: package.github_repositories.len(),
+        repositories: package.repositories.len(),
+        skills: package.skills.len(),
+        plugins: package.plugins.len(),
+        user_notes: package.user_notes.len(),
+        message: message.into(),
+    }
+}
+
+fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Result<(), AppError> {
+    if package.schema_version != MIGRATION_SCHEMA_VERSION {
+        return Err(AppError::with_details(
+            "migration_schema_unsupported",
+            "迁移包版本不兼容。",
+            format!("schemaVersion={}", package.schema_version),
+        ));
+    }
+    let now = utc_now();
+    for account in &package.github_accounts {
+        conn.execute(
+            "INSERT INTO github_accounts
+             (id, login, display_name, avatar_url, token_key, status, scopes, last_verified,
+              is_default, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'saved_unverified', ?6, ?7, ?8, ?9, ?9)
+             ON CONFLICT(id) DO UPDATE SET
+              login = excluded.login,
+              display_name = excluded.display_name,
+              avatar_url = excluded.avatar_url,
+              scopes = excluded.scopes,
+              updated_at = excluded.updated_at",
+            params![
+                account.id,
+                account.login,
+                account.display_name,
+                account.avatar_url,
+                github_account_token_key(&account.id),
+                account.scopes,
+                account.last_verified,
+                if account.is_default { 1 } else { 0 },
+                now
+            ],
+        )?;
+    }
+
+    for repo in &package.github_repositories {
+        conn.execute(
+            "INSERT INTO github_repo_catalog
+             (account_id, full_name, owner, repo, github_id, html_url, description, visibility,
+              private, fork, archived, default_branch, language, stargazers_count, starred,
+              permissions, pushed_at, github_updated_at, last_refreshed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+             ON CONFLICT(account_id, full_name) DO UPDATE SET
+              owner = excluded.owner,
+              repo = excluded.repo,
+              github_id = excluded.github_id,
+              html_url = excluded.html_url,
+              description = excluded.description,
+              visibility = excluded.visibility,
+              private = excluded.private,
+              fork = excluded.fork,
+              archived = excluded.archived,
+              default_branch = excluded.default_branch,
+              language = excluded.language,
+              stargazers_count = excluded.stargazers_count,
+              starred = excluded.starred,
+              permissions = excluded.permissions,
+              pushed_at = excluded.pushed_at,
+              github_updated_at = excluded.github_updated_at,
+              last_refreshed = excluded.last_refreshed",
+            params![
+                repo.account_id,
+                repo.full_name,
+                repo.owner,
+                repo.repo,
+                repo.github_id,
+                repo.html_url,
+                repo.description,
+                repo.visibility,
+                if repo.private { 1 } else { 0 },
+                if repo.fork { 1 } else { 0 },
+                if repo.archived { 1 } else { 0 },
+                repo.default_branch,
+                repo.language,
+                repo.stargazers_count,
+                if repo.starred { 1 } else { 0 },
+                repo.permissions,
+                repo.pushed_at,
+                repo.github_updated_at,
+                repo.last_refreshed,
+            ],
+        )?;
+    }
+
+    for repo in &package.repositories {
+        conn.execute(
+            "INSERT INTO repositories
+             (id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
+              last_backup_sha, last_checked, backup_status, check_status, url, branch,
+              backup_path, snapshot_time, source_type, local_path, github_account_id,
+              canonical_name, error, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                     ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+             ON CONFLICT(id) DO UPDATE SET
+              name = excluded.name,
+              owner = excluded.owner,
+              repo = excluded.repo,
+              ref_name = excluded.ref_name,
+              repo_type = excluded.repo_type,
+              skills_count = excluded.skills_count,
+              remote_sha = excluded.remote_sha,
+              last_backup_sha = excluded.last_backup_sha,
+              last_checked = excluded.last_checked,
+              backup_status = excluded.backup_status,
+              check_status = excluded.check_status,
+              url = excluded.url,
+              branch = excluded.branch,
+              backup_path = excluded.backup_path,
+              snapshot_time = excluded.snapshot_time,
+              source_type = excluded.source_type,
+              local_path = excluded.local_path,
+              github_account_id = excluded.github_account_id,
+              canonical_name = excluded.canonical_name,
+              error = excluded.error,
+              updated_at = excluded.updated_at",
+            params![
+                repo.id,
+                repo.name,
+                repo.owner,
+                repo.repo,
+                repo.ref_name,
+                repo.repo_type,
+                repo.skills_count,
+                repo.remote_sha,
+                repo.last_backup_sha,
+                repo.last_checked,
+                repo.backup_status,
+                repo.check_status,
+                repo.url,
+                repo.branch,
+                repo.backup_path,
+                repo.snapshot_time,
+                repo.source_type,
+                repo.local_path,
+                repo.github_account_id,
+                repo.canonical_name,
+                repo.error,
+                repo.created_at,
+                repo.updated_at,
+            ],
+        )?;
+    }
+
+    for skill in &package.skills {
+        conn.execute(
+            "INSERT INTO skills
+             (id, repo_id, name, description, repo_name, path, ref_name, local_version,
+              remote_version, status, installed, updated_at, installed_hash, source_type,
+              local_path, install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+             ON CONFLICT(id) DO UPDATE SET
+              repo_id = excluded.repo_id,
+              name = excluded.name,
+              description = excluded.description,
+              repo_name = excluded.repo_name,
+              path = excluded.path,
+              ref_name = excluded.ref_name,
+              local_version = excluded.local_version,
+              remote_version = excluded.remote_version,
+              status = excluded.status,
+              installed = excluded.installed,
+              updated_at = excluded.updated_at,
+              installed_hash = excluded.installed_hash,
+              source_type = excluded.source_type,
+              local_path = excluded.local_path,
+              install_path = excluded.install_path,
+              deleted_at = excluded.deleted_at,
+              deleted_path = excluded.deleted_path,
+              sync_targets_mode = excluded.sync_targets_mode,
+              sync_targets = excluded.sync_targets",
+            params![
+                skill.id,
+                skill.repo_id,
+                skill.name,
+                skill.description,
+                skill.repo_name,
+                skill.path,
+                skill.ref_name,
+                skill.local_version,
+                skill.remote_version,
+                skill.status,
+                if skill.installed { 1 } else { 0 },
+                skill.updated_at,
+                skill.installed_hash,
+                skill.source_type,
+                skill.local_path,
+                skill.install_path,
+                skill.deleted_at,
+                skill.deleted_path,
+                skill.sync_targets_mode,
+                skill.sync_targets,
+            ],
+        )?;
+    }
+
+    for plugin in &package.plugins {
+        conn.execute(
+            "INSERT INTO plugins
+             (id, repo_id, name, description, kind, install_command, update_command,
+              source_path, source_excerpt, status, detected_sha, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT(id) DO UPDATE SET
+              repo_id = excluded.repo_id,
+              name = excluded.name,
+              description = excluded.description,
+              kind = excluded.kind,
+              install_command = excluded.install_command,
+              update_command = excluded.update_command,
+              source_path = excluded.source_path,
+              source_excerpt = excluded.source_excerpt,
+              status = excluded.status,
+              detected_sha = excluded.detected_sha,
+              updated_at = excluded.updated_at",
+            params![
+                plugin.id,
+                plugin.repo_id,
+                plugin.name,
+                plugin.description,
+                plugin.kind,
+                plugin.install_command,
+                plugin.update_command,
+                plugin.source_path,
+                plugin.source_excerpt,
+                plugin.status,
+                plugin.detected_sha,
+                plugin.updated_at,
+            ],
+        )?;
+        conn.execute(
+            "DELETE FROM plugin_skill_links WHERE plugin_id = ?1",
+            params![plugin.id],
+        )?;
+        for skill_id_value in &plugin.linked_skill_ids {
+            conn.execute(
+                "INSERT OR IGNORE INTO plugin_skill_links (plugin_id, skill_id)
+                 SELECT ?1, ?2
+                 WHERE EXISTS (SELECT 1 FROM skills WHERE id = ?2)",
+                params![plugin.id, skill_id_value],
+            )?;
+        }
+    }
+
+    for note in &package.user_notes {
+        conn.execute(
+            "INSERT INTO user_notes (scope, entity_key, note, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(scope, entity_key) DO UPDATE SET
+              note = excluded.note,
+              updated_at = excluded.updated_at",
+            params![note.scope, note.entity_key, note.note, note.updated_at],
+        )?;
+    }
+    Ok(())
+}
+
+fn parse_migration_package(contents: &str) -> Result<MigrationPackage, AppError> {
+    serde_json::from_str(contents).map_err(|error| {
+        AppError::with_details(
+            "migration_package_invalid",
+            "迁移包 JSON 无法解析。",
+            error.to_string(),
+        )
+    })
+}
+
+#[tauri::command]
+async fn export_migration_package(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<MigrationPackageSummary> {
+    let package = {
+        let db = state.db.lock().expect("db mutex poisoned");
+        match build_migration_package(&db) {
+            Ok(package) => package,
+            Err(error) => return Ok(api_err(error)),
+        }
+    };
+    let contents = match serde_json::to_string_pretty(&package) {
+        Ok(contents) => contents,
+        Err(error) => {
+            return Ok(api_err(AppError::with_details(
+                "migration_export_failed",
+                "迁移包序列化失败。",
+                error.to_string(),
+            )))
+        }
+    };
+    let file_name = format!(
+        "skill-repo-tracker-migration-v{}-{}.json",
+        APP_VERSION,
+        Local::now().format("%Y%m%d-%H%M%S")
+    );
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("JSON", &["json"])
+            .set_file_name(&file_name)
+            .blocking_save_file()
+    })
+    .await
+    .map_err(|error| {
+        AppError::with_details(
+            "migration_export_failed",
+            "选择导出路径失败。",
+            error.to_string(),
+        )
+    });
+    let Some(path) = (match selected {
+        Ok(path) => path,
+        Err(error) => return Ok(api_err(error)),
+    }) else {
+        return Ok(ApiResponse::ok(migration_summary(
+            &package,
+            None,
+            true,
+            "导出已取消。",
+        )));
+    };
+    let path = match path.into_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return Ok(api_err(AppError::with_details(
+                "migration_export_failed",
+                "解析导出路径失败。",
+                error.to_string(),
+            )))
+        }
+    };
+    if let Err(error) = fs::write(&path, contents) {
+        return Ok(api_err(AppError::from(error)));
+    }
+    Ok(ApiResponse::ok(migration_summary(
+        &package,
+        Some(path_string(&path)),
+        false,
+        "导出完成。",
+    )))
+}
+
+#[tauri::command]
+async fn import_migration_package(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<MigrationPackageSummary> {
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("JSON", &["json"])
+            .blocking_pick_file()
+    })
+    .await
+    .map_err(|error| {
+        AppError::with_details(
+            "migration_import_failed",
+            "选择导入文件失败。",
+            error.to_string(),
+        )
+    });
+    let Some(path) = (match selected {
+        Ok(path) => path,
+        Err(error) => return Ok(api_err(error)),
+    }) else {
+        return Ok(ApiResponse::ok(MigrationPackageSummary {
+            path: None,
+            cancelled: true,
+            github_accounts: 0,
+            github_repositories: 0,
+            repositories: 0,
+            skills: 0,
+            plugins: 0,
+            user_notes: 0,
+            message: "导入已取消。".into(),
+        }));
+    };
+    let path = match path.into_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return Ok(api_err(AppError::with_details(
+                "migration_import_failed",
+                "解析导入路径失败。",
+                error.to_string(),
+            )))
+        }
+    };
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(error) => return Ok(api_err(AppError::from(error))),
+    };
+    let package = match parse_migration_package(&contents) {
+        Ok(package) => package,
+        Err(error) => return Ok(api_err(error)),
+    };
+    {
+        let db = state.db.lock().expect("db mutex poisoned");
+        if let Err(error) = merge_migration_package(&db, &package) {
+            return Ok(api_err(error));
+        }
+    }
+    Ok(ApiResponse::ok(migration_summary(
+        &package,
+        Some(path_string(&path)),
+        false,
+        "导入完成。",
+    )))
+}
+
 #[tauri::command]
 fn set_github_token(
     request: TokenRequest,
@@ -6029,6 +7029,7 @@ pub fn run() {
             remove_repository,
             list_skills,
             list_plugins,
+            update_item_note,
             get_plugin_detail,
             get_skill_detail,
             get_repository_readme,
@@ -6065,7 +7066,9 @@ pub fn run() {
             open_backup_folder,
             open_url,
             list_system_browsers,
-            configure_schedule
+            configure_schedule,
+            export_migration_package,
+            import_migration_package
         ])
         .run(tauri::generate_context!())
         .expect("error while running Skill Repo Tracker");
@@ -6910,6 +7913,183 @@ clawhub install baoyu-image-gen
     }
 
     #[test]
+    fn github_catalog_and_tracked_repository_share_note() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let account = GithubAccountRecord {
+            id: "github:octocat".into(),
+            login: "octocat".into(),
+            display_name: "Octocat".into(),
+            avatar_url: None,
+            token_key: github_account_token_key("github:octocat"),
+            status: "verified".into(),
+            scopes: "repo".into(),
+            last_verified: Some(utc_now()),
+            is_default: true,
+        };
+        upsert_github_account(&conn, &account).unwrap();
+        let repo_json = serde_json::json!({
+            "id": 42,
+            "full_name": "octocat/Hello-World",
+            "name": "Hello-World",
+            "owner": { "login": "octocat" },
+            "html_url": "https://github.com/octocat/Hello-World",
+            "description": "A demo repository",
+            "visibility": "public",
+            "private": false,
+            "fork": false,
+            "archived": false,
+            "default_branch": "main",
+            "language": "Rust",
+            "stargazers_count": 7,
+            "permissions": { "pull": true },
+            "pushed_at": "2026-06-30T00:00:00Z",
+            "updated_at": "2026-06-30T00:00:00Z"
+        });
+        upsert_github_catalog_item(&conn, &account.id, &repo_json, false).unwrap();
+        let remote = RemoteInfo {
+            owner: "octocat".into(),
+            repo: "Hello-World".into(),
+            full_name: "octocat/Hello-World".into(),
+            default_branch: "main".into(),
+            resolved_ref: "main".into(),
+            sha: "bf4e9ac4d4428bda261afcfe981871ceb92d94e6".into(),
+        };
+        save_repository_with_account(&conn, &remote, &[], Some(&account.id)).unwrap();
+
+        save_user_note(
+            &conn,
+            "repository",
+            &github_repository_note_key("OCTOCAT", "hello-world"),
+            "用于测试 GitHub 同步备注",
+        )
+        .unwrap();
+
+        let catalog = load_ui_github_repositories(&conn, Some(&account.id)).unwrap();
+        let repos = load_ui_repositories(&conn).unwrap();
+
+        assert_eq!(catalog[0].note, "用于测试 GitHub 同步备注");
+        assert_eq!(repos[0].note, "用于测试 GitHub 同步备注");
+
+        save_user_note(
+            &conn,
+            "repository",
+            &github_repository_note_key("octocat", "Hello-World"),
+            "",
+        )
+        .unwrap();
+        assert_eq!(
+            load_ui_github_repositories(&conn, Some(&account.id)).unwrap()[0].note,
+            ""
+        );
+        assert_eq!(load_ui_repositories(&conn).unwrap()[0].note, "");
+    }
+
+    #[test]
+    fn local_repository_skill_and_plugin_notes_use_distinct_keys() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let skill_dir = root.path().join("demo-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: demo-skill\ndescription: Local demo\nversion: v1.2.3\n---",
+        )
+        .unwrap();
+        let scans = scan_skills_from_directory(root.path(), "Local Skills").unwrap();
+        let plugins = vec![PluginScan {
+            name: "demo-plugin".into(),
+            description: "Demo plugin".into(),
+            kind: "structured-plugin".into(),
+            install_command: "/plugin install demo".into(),
+            update_command: None,
+            source_path: "plugin.json".into(),
+            source_excerpt: "{}".into(),
+            linked_skill_paths: vec!["demo-skill".into()],
+        }];
+        let repo_id_value =
+            save_local_repository_with_plugins(&conn, root.path(), &scans, &plugins, false)
+                .unwrap();
+        let skill_id_value = skill_id(&repo_id_value, "demo-skill");
+        let plugin_id_value = load_ui_plugins(&conn).unwrap()[0].id.clone();
+
+        save_user_note(
+            &conn,
+            "repository",
+            &format!("local:{repo_id_value}"),
+            "本地仓库备注",
+        )
+        .unwrap();
+        save_user_note(&conn, "skill", &skill_id_value, "技能备注").unwrap();
+        save_user_note(&conn, "plugin", &plugin_id_value, "插件备注").unwrap();
+
+        assert_eq!(load_ui_repositories(&conn).unwrap()[0].note, "本地仓库备注");
+        assert_eq!(load_ui_skills(&conn).unwrap()[0].note, "技能备注");
+        assert_eq!(load_ui_plugins(&conn).unwrap()[0].note, "插件备注");
+    }
+
+    #[test]
+    fn migration_package_excludes_token_key_and_imports_notes() {
+        let source = Connection::open_in_memory().unwrap();
+        migrate(&source).unwrap();
+        let account = GithubAccountRecord {
+            id: "github:octocat".into(),
+            login: "octocat".into(),
+            display_name: "Octocat".into(),
+            avatar_url: None,
+            token_key: "github-account-token:secret-source".into(),
+            status: "verified".into(),
+            scopes: "repo".into(),
+            last_verified: Some(utc_now()),
+            is_default: true,
+        };
+        upsert_github_account(&source, &account).unwrap();
+        save_user_note(
+            &source,
+            "repository",
+            &github_repository_note_key("octocat", "hello-world"),
+            "迁移备注",
+        )
+        .unwrap();
+
+        let package = build_migration_package(&source).unwrap();
+        let json = serde_json::to_string_pretty(&package).unwrap();
+
+        assert!(!json.contains("tokenKey"));
+        assert!(!json.contains("token_key"));
+        assert!(!json.contains("secret-source"));
+
+        let target = Connection::open_in_memory().unwrap();
+        migrate(&target).unwrap();
+        save_user_note(&target, "skill", "local-only-skill", "保留本机备注").unwrap();
+        let parsed = parse_migration_package(&json).unwrap();
+        merge_migration_package(&target, &parsed).unwrap();
+
+        assert_eq!(
+            load_user_note(
+                &target,
+                "repository",
+                &github_repository_note_key("OCTOCAT", "Hello-World")
+            )
+            .unwrap(),
+            "迁移备注"
+        );
+        assert_eq!(
+            load_user_note(&target, "skill", "local-only-skill").unwrap(),
+            "保留本机备注"
+        );
+        let imported_account = github_account_by_id(&target, "github:octocat")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            imported_account.token_key,
+            github_account_token_key("github:octocat")
+        );
+        assert_eq!(imported_account.status, "saved_unverified");
+    }
+
+    #[test]
     fn migration_adds_local_source_columns() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
@@ -6970,5 +8150,12 @@ clawhub install baoyu-image-gen
         let plugin_link_table: Option<String> =
             stmt.query_row([], |row| row.get(0)).optional().unwrap();
         assert_eq!(plugin_link_table.as_deref(), Some("plugin_skill_links"));
+
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_notes'")
+            .unwrap();
+        let user_notes_table: Option<String> =
+            stmt.query_row([], |row| row.get(0)).optional().unwrap();
+        assert_eq!(user_notes_table.as_deref(), Some("user_notes"));
     }
 }
