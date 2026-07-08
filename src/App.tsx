@@ -639,9 +639,15 @@ const COPY = {
     settings: "设置",
     needBackup: "需要备份",
     search: "搜索",
-    searchRepositories: "搜索仓库、备注、README...",
-    searchSkills: "搜索 Skill、备注、README...",
-    searchPlugins: "搜索插件、备注、README...",
+    searchRepositories: "搜索仓库名称...",
+    searchRepositoryNames: "搜索仓库名称...",
+    searchSkills: "搜索 Skill 名称...",
+    searchSkillNames: "搜索 Skill 名称...",
+    searchPlugins: "搜索插件名称...",
+    searchPluginNames: "搜索插件名称...",
+    searchNotesReadme: "搜索备注 / README...",
+    searchSkillContent: "搜索备注 / SKILL.md / 仓库 README...",
+    searchNotesPluginExcerpt: "搜索备注 / 来源摘录...",
     sourceRepositoryFilter: "来源仓库",
     allRepositories: "全部仓库",
     searchRepository: "搜索仓库",
@@ -1029,9 +1035,15 @@ const COPY = {
     settings: "Settings",
     needBackup: "need backup",
     search: "Search",
-    searchRepositories: "Search repositories, notes, README...",
-    searchSkills: "Search Skills, notes, README...",
-    searchPlugins: "Search plugins, notes, README...",
+    searchRepositories: "Search repository names...",
+    searchRepositoryNames: "Search repository names...",
+    searchSkills: "Search Skill names...",
+    searchSkillNames: "Search Skill names...",
+    searchPlugins: "Search plugin names...",
+    searchPluginNames: "Search plugin names...",
+    searchNotesReadme: "Search notes / README...",
+    searchSkillContent: "Search notes / SKILL.md / repository README...",
+    searchNotesPluginExcerpt: "Search notes / source excerpt...",
     sourceRepositoryFilter: "Source repository",
     allRepositories: "All repositories",
     searchRepository: "Search repositories",
@@ -1650,19 +1662,37 @@ function sortIndicator(active, direction) {
   return direction === "asc" ? " ↑" : " ↓";
 }
 
-function repositorySearchValues(repo, language = "zh") {
+function repositoryNameSearchValues(repo, language = "zh") {
+  return [repo.name, displayRepoName(repo.name, language)];
+}
+
+function repositoryContentSearchValues(repo) {
+  return [repo.note, repo.readmeSearchText];
+}
+
+function skillNameSearchValues(skill) {
+  return [skill.name];
+}
+
+function skillContentSearchValues(skill, sourceRepo) {
+  return [skill.note, skill.searchText, sourceRepo?.readmeSearchText];
+}
+
+function skillSourceRepoSearchValues(skill, sourceRepo, language = "zh") {
   return [
-    repo.name,
-    displayRepoName(repo.name, language),
-    repo.ref,
-    repo.branch,
-    repo.url,
-    repo.localPath,
-    repo.type,
-    repo.sourceType,
-    repo.readmeSearchText,
-    repo.note,
+    skill.repo,
+    displayRepoName(skill.repo, language),
+    sourceRepo?.name,
+    sourceRepo ? displayRepoName(sourceRepo.name, language) : "",
   ];
+}
+
+function pluginNameSearchValues(plugin) {
+  return [plugin.name];
+}
+
+function pluginContentSearchValues(plugin) {
+  return [plugin.note, plugin.sourceExcerpt];
 }
 
 function githubRepositoryNoteKey(repo) {
@@ -1831,8 +1861,11 @@ export function App() {
   const [taskFilter, setTaskFilter] = useState("all");
   const [pluginSort, setPluginSort] = useState({ key: "name", direction: "asc" });
   const [search, setSearch] = useState("");
+  const [repoContentSearch, setRepoContentSearch] = useState("");
   const [skillSearch, setSkillSearch] = useState("");
+  const [skillContentSearch, setSkillContentSearch] = useState("");
   const [pluginSearch, setPluginSearch] = useState(() => initialFreeParam("pluginSearch"));
+  const [pluginContentSearch, setPluginContentSearch] = useState("");
   const [modal, setModal] = useState(null);
   const [toast, setToast] = useState("");
   const toastTimerRef = useRef<number | undefined>(undefined);
@@ -2054,7 +2087,8 @@ export function App() {
 
   const filteredRepos = useMemo(() => {
     const visible = repositories.filter((repo) => {
-      const matchesSearch = fuzzyMatch(repositorySearchValues(repo, language), search);
+      const matchesSearch = fuzzyMatch(repositoryNameSearchValues(repo, language), search);
+      const matchesContentSearch = fuzzyMatch(repositoryContentSearchValues(repo), repoContentSearch);
       const matchesFilter =
         repoFilter === "all" ||
         (repoFilter === "skill" && repo.type === "skill repo") ||
@@ -2062,7 +2096,7 @@ export function App() {
         (repoFilter === "updated" && repo.backupStatus === "updated-not-backed-up") ||
         (repoFilter === "failed" && repo.backupStatus === "check-failed") ||
         (repoFilter === "never" && repo.backupStatus === "never-backed-up");
-      return matchesSearch && matchesFilter;
+      return matchesSearch && matchesContentSearch && matchesFilter;
     });
     return [...visible].sort((left, right) => {
       if (repoSort.key === "addedAt") {
@@ -2072,53 +2106,26 @@ export function App() {
       const compared = compareNames(displayRepoName(left.name, language), displayRepoName(right.name, language));
       return repoSort.key === "name" && repoSort.direction === "desc" ? -compared : compared;
     });
-  }, [repositories, language, search, repoFilter, repoSort]);
+  }, [repositories, language, search, repoContentSearch, repoFilter, repoSort]);
 
   const filteredSkills = useMemo(() => {
     const visible = skills.filter((skill) => {
-      const matchesSearch = fuzzyMatch(
-        [
-          skill.name,
-          skill.description,
-          skill.repo,
-          displayRepoName(skill.repo, language),
-          skill.path,
-          skill.sourceType,
-          skill.localPath,
-          skill.installPath,
-          skill.searchText,
-          skill.note,
-        ],
-        skillSearch,
-      );
       const sourceRepo = repositories.find((repo) => repo.id === skillRepoId(skill));
+      const matchesSearch = fuzzyMatch(skillNameSearchValues(skill), skillSearch);
+      const matchesContentSearch = fuzzyMatch(
+        skillContentSearchValues(skill, sourceRepo),
+        skillContentSearch,
+      );
       const matchesAllRepositories = fuzzyMatch([t("allRepositories"), "all", "全部仓库"], skillRepoQuery);
       const matchesRepo = matchesAllRepositories || fuzzyMatch(
-        [
-          skill.repo,
-          displayRepoName(skill.repo, language),
-          skill.path,
-          skill.sourceType,
-          skill.localPath,
-          skill.installPath,
-          sourceRepo?.name,
-          sourceRepo ? displayRepoName(sourceRepo.name, language) : "",
-          sourceRepo?.ref,
-          sourceRepo?.url,
-          sourceRepo?.localPath,
-          sourceRepo?.type,
-          sourceRepo ? statusLabel(sourceRepo.type, language) : "",
-          sourceRepo?.sourceType,
-          sourceRepo?.readmeSearchText,
-          sourceRepo?.note,
-        ],
+        skillSourceRepoSearchValues(skill, sourceRepo, language),
         skillRepoQuery,
       );
       const visibleByFilter =
         skillFilter === "deleted"
           ? skill.status === "deleted"
           : skill.status !== "deleted" && (skillFilter === "all" || skill.status === skillFilter);
-      return matchesSearch && matchesRepo && visibleByFilter;
+      return matchesSearch && matchesContentSearch && matchesRepo && visibleByFilter;
     });
     return [...visible].sort((left, right) => {
       if (skillSort.key === "createdAt") {
@@ -2128,27 +2135,12 @@ export function App() {
       const compared = compareNames(left.name, right.name);
       return skillSort.key === "name" && skillSort.direction === "desc" ? -compared : compared;
     });
-  }, [skills, repositories, language, skillSearch, skillRepoQuery, skillFilter, skillSort]);
+  }, [skills, repositories, language, skillSearch, skillContentSearch, skillRepoQuery, skillFilter, skillSort]);
 
   const filteredPlugins = useMemo(() => {
     const visible = plugins.filter((plugin) =>
-      fuzzyMatch(
-        [
-          plugin.name,
-          plugin.description,
-          plugin.kind,
-          statusLabel(plugin.kind, language),
-          plugin.repoName,
-          displayRepoName(plugin.repoName, language),
-          plugin.installCommand,
-          plugin.updateCommand,
-          plugin.sourcePath,
-          plugin.sourceExcerpt,
-          plugin.status,
-          plugin.note,
-        ],
-        pluginSearch,
-      ),
+      fuzzyMatch(pluginNameSearchValues(plugin), pluginSearch) &&
+      fuzzyMatch(pluginContentSearchValues(plugin), pluginContentSearch),
     );
     return [...visible].sort((left, right) => {
       if (pluginSort.key === "createdAt") {
@@ -2158,7 +2150,7 @@ export function App() {
       const compared = compareNames(left.name, right.name);
       return pluginSort.key === "name" && pluginSort.direction === "desc" ? -compared : compared;
     });
-  }, [plugins, language, pluginSearch, pluginSort]);
+  }, [plugins, pluginSearch, pluginContentSearch, pluginSort]);
 
   const filteredTasks = tasks.filter((task) => {
     return taskFilter === "all" || task.status === taskFilter;
@@ -3538,10 +3530,16 @@ export function App() {
             activeTab={activeTab}
             search={search}
             setSearch={setSearch}
+            repoContentSearch={repoContentSearch}
+            setRepoContentSearch={setRepoContentSearch}
             skillSearch={skillSearch}
             setSkillSearch={setSkillSearch}
+            skillContentSearch={skillContentSearch}
+            setSkillContentSearch={setSkillContentSearch}
             pluginSearch={pluginSearch}
             setPluginSearch={setPluginSearch}
+            pluginContentSearch={pluginContentSearch}
+            setPluginContentSearch={setPluginContentSearch}
             checkAllRepos={checkAllRepos}
             setModal={setModal}
             openAddRepoModal={openAddRepoModal}
@@ -3905,10 +3903,16 @@ function Toolbar({
   activeTab,
   search,
   setSearch,
+  repoContentSearch,
+  setRepoContentSearch,
   skillSearch,
   setSkillSearch,
+  skillContentSearch,
+  setSkillContentSearch,
   pluginSearch,
   setPluginSearch,
+  pluginContentSearch,
+  setPluginContentSearch,
   checkAllRepos,
   setModal,
   openAddRepoModal,
@@ -4014,34 +4018,64 @@ function Toolbar({
         {activeTab === "tasks" && <span>{failedTasks} {t("failed")}</span>}
       </div>
       {activeTab === "repositories" && (
-        <label className="search-field">
-          <span>{t("search")}</span>
-          <input
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder={t("searchRepositories")}
-          />
-        </label>
+        <div className="toolbar-searches">
+          <label className="search-field">
+            <span>{t("search")}</span>
+            <input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              placeholder={t("searchRepositoryNames")}
+            />
+          </label>
+          <label className="search-field">
+            <span>{t("search")}</span>
+            <input
+              value={repoContentSearch}
+              onChange={(event) => setRepoContentSearch(event.target.value)}
+              placeholder={t("searchNotesReadme")}
+            />
+          </label>
+        </div>
       )}
       {activeTab === "skills" && (
-        <label className="search-field">
-          <span>{t("search")}</span>
-          <input
-            value={skillSearch}
-            onChange={(event) => setSkillSearch(event.target.value)}
-            placeholder={t("searchSkills")}
-          />
-        </label>
+        <div className="toolbar-searches">
+          <label className="search-field">
+            <span>{t("search")}</span>
+            <input
+              value={skillSearch}
+              onChange={(event) => setSkillSearch(event.target.value)}
+              placeholder={t("searchSkillNames")}
+            />
+          </label>
+          <label className="search-field">
+            <span>{t("search")}</span>
+            <input
+              value={skillContentSearch}
+              onChange={(event) => setSkillContentSearch(event.target.value)}
+              placeholder={t("searchSkillContent")}
+            />
+          </label>
+        </div>
       )}
       {activeTab === "plugins" && (
-        <label className="search-field">
-          <span>{t("search")}</span>
-          <input
-            value={pluginSearch}
-            onChange={(event) => setPluginSearch(event.target.value)}
-            placeholder={t("searchPlugins")}
-          />
-        </label>
+        <div className="toolbar-searches">
+          <label className="search-field">
+            <span>{t("search")}</span>
+            <input
+              value={pluginSearch}
+              onChange={(event) => setPluginSearch(event.target.value)}
+              placeholder={t("searchPluginNames")}
+            />
+          </label>
+          <label className="search-field">
+            <span>{t("search")}</span>
+            <input
+              value={pluginContentSearch}
+              onChange={(event) => setPluginContentSearch(event.target.value)}
+              placeholder={t("searchNotesPluginExcerpt")}
+            />
+          </label>
+        </div>
       )}
     </header>
   );

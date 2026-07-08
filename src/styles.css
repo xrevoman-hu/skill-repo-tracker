@@ -341,7 +341,7 @@ a {
 
 .toolbar {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) auto minmax(220px, 300px);
+  grid-template-columns: minmax(280px, 1fr) auto minmax(420px, 560px);
   gap: 14px;
   align-items: center;
   padding: 10px 16px;
@@ -450,6 +450,14 @@ a {
 
 .search-field {
   position: relative;
+}
+
+.toolbar-searches,
+.github-searches {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
 }
 
 .search-field span {
@@ -665,9 +673,12 @@ a {
   overflow-x: auto;
 }
 
+.github-searches {
+  width: min(620px, 48vw);
+}
+
 .github-search {
-  width: min(320px, 36vw);
-  min-width: 220px;
+  min-width: 0;
 }
 
 .github-table-frame {
@@ -2590,6 +2601,7 @@ input[type="checkbox"] {
     text-overflow: ellipsis;
   }
 
+  .toolbar-searches,
   .toolbar .search-field {
     grid-column: 1 / -1;
   }
@@ -2619,6 +2631,10 @@ input[type="checkbox"] {
     min-width: 0;
   }
 
+  .github-searches {
+    width: 100%;
+  }
+
   .settings-main-column,
   .settings-side-column {
     grid-template-columns: minmax(0, 1fr);
@@ -2627,5 +2643,12 @@ input[type="checkbox"] {
   .setting-row {
     grid-template-columns: minmax(0, 1fr);
     gap: 6px;
+  }
+}
+
+@media (max-width: 720px) {
+  .toolbar-searches,
+  .github-searches {
+    grid-template-columns: minmax(0, 1fr);
   }
 }

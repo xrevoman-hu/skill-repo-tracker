@@ -73,19 +73,18 @@ function normalize(value: string) {
   return value.trim().toLowerCase();
 }
 
-function repoMatches(repo: GitHubRepository, query: string) {
+function repoNameMatches(repo: GitHubRepository, query: string) {
   const term = normalize(query);
   if (!term) return true;
-  return [
-    repo.fullName,
-    repo.description,
-    repo.language,
-    repo.visibility,
-    repo.accountLogin,
-    repo.permissions,
-    repo.note,
-    repo.readmeSearchText,
-  ]
+  return [repo.fullName]
+    .map((value) => normalize(String(value || "")))
+    .some((value) => value.includes(term));
+}
+
+function repoContentMatches(repo: GitHubRepository, query: string) {
+  const term = normalize(query);
+  if (!term) return true;
+  return [repo.note, repo.readmeSearchText]
     .map((value) => normalize(String(value || "")))
     .some((value) => value.includes(term));
 }
@@ -136,6 +135,7 @@ export function GitHubWorkbench({
 }: Props) {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
+  const [contentQuery, setContentQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "name", direction: "asc" });
   const activeAccount =
@@ -163,7 +163,7 @@ export function GitHubWorkbench({
         (filter === "personal-private" && personalRepo && repo.private) ||
         (filter === "starred" && repo.starred) ||
         (filter === "tracked" && repo.trackedRepoId);
-      return filterMatch && repoMatches(repo, query);
+      return filterMatch && repoNameMatches(repo, query) && repoContentMatches(repo, contentQuery);
     });
     return [...visible].sort((left, right) => {
       if (sort.key === "starredAt") {
@@ -177,7 +177,7 @@ export function GitHubWorkbench({
       const compared = compareNames(left.fullName, right.fullName);
       return sort.direction === "asc" || sort.key !== "name" ? compared : -compared;
     });
-  }, [activeRepos, activeAccount?.login, filter, query, sort]);
+  }, [activeRepos, activeAccount?.login, filter, query, contentQuery, sort]);
 
   function toggleSort(key: SortState["key"]) {
     setSort((current) => ({
@@ -291,14 +291,24 @@ export function GitHubWorkbench({
               </button>
             ))}
           </div>
-          <label className="search-field github-search">
-            <span>{t("search")}</span>
-            <input
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={t("searchRepositories")}
-              value={query}
-            />
-          </label>
+          <div className="github-searches">
+            <label className="search-field github-search">
+              <span>{t("search")}</span>
+              <input
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder={t("searchRepositoryNames")}
+                value={query}
+              />
+            </label>
+            <label className="search-field github-search">
+              <span>{t("search")}</span>
+              <input
+                onChange={(event) => setContentQuery(event.target.value)}
+                placeholder={t("searchNotesReadme")}
+                value={contentQuery}
+              />
+            </label>
+          </div>
         </div>
 
         <div className="table-frame github-table-frame">

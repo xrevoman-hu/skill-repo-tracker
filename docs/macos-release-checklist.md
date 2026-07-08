@@ -14,7 +14,7 @@ Use this lane when no Apple Developer ID signing identity is available.
 
 ```bash
 APP="src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-DMG="src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.9_aarch64.dmg"
+DMG="src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.10_aarch64.dmg"
 
 codesign --force --deep --sign - "$APP"
 codesign --force --sign - "$DMG"
@@ -55,7 +55,7 @@ The Tauri config enables hardened runtime and uses `src-tauri/entitlements.plist
 
 ```bash
 APP="src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-DMG="src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.9_aarch64.dmg"
+DMG="src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.10_aarch64.dmg"
 
 hdiutil verify "$DMG"
 hdiutil imageinfo "$DMG"

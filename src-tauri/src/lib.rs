@@ -23,8 +23,8 @@ mod plugins;
 
 use plugins::{scan_plugins_from_directory, scan_plugins_from_zip, sync_plugins, PluginScan};
 
-const APP_VERSION: &str = "1.1.9";
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.9";
+const APP_VERSION: &str = "1.1.10";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.10";
 const MIGRATION_SCHEMA_VERSION: i64 = 1;
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
