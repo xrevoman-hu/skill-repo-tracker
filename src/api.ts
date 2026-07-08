@@ -111,6 +111,13 @@ export type UiTask = {
   log: string[];
 };
 
+export type AppMetadata = {
+  name: string;
+  version: string;
+  projectGithubUrl: string;
+  openSource: boolean;
+};
+
 const runningInTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
 async function command<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -145,6 +152,7 @@ export const api = {
     command<any>("get_repository_readme", { request: { repoId } }),
   getGithubPreview: (url: string) => command<any>("get_github_preview", { request: { url } }),
   listTasks: () => command<UiTask[]>("list_tasks"),
+  getAppMetadata: () => command<AppMetadata>("get_app_metadata"),
   getSettings: () => command<any>("get_settings"),
   pickDirectory: (defaultPath?: string) => command<string | null>("pick_directory", { defaultPath }),
   validateDirectory: (kind: string, path: string) =>

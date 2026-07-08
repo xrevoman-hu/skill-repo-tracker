@@ -19,6 +19,7 @@ type Props = {
   onOpenUrl: (url: string, mode?: string) => Promise<void>;
   onCopyUrl: (url: string) => Promise<void>;
   onSaveNote: (repo: GitHubRepository, note: string) => Promise<void>;
+  rateLimitHelpText: string;
   t: (key: string) => string;
 };
 
@@ -37,6 +38,14 @@ function Button({
     <button className={`button ${variant}`} disabled={disabled} onClick={onClick} type="button">
       {children}
     </button>
+  );
+}
+
+function HelpTip({ text, label = "Help" }: { text: string; label?: string }) {
+  return (
+    <span aria-label={`${label}: ${text}`} className="help-tip" role="img" tabIndex={0} title={text}>
+      ?
+    </span>
   );
 }
 
@@ -131,6 +140,7 @@ export function GitHubWorkbench({
   onOpenUrl,
   onCopyUrl,
   onSaveNote,
+  rateLimitHelpText,
   t,
 }: Props) {
   const [filter, setFilter] = useState("all");
@@ -235,13 +245,16 @@ export function GitHubWorkbench({
             <Button disabled={isPending("githubSaveToken")} onClick={onOpenAddAccount}>
               {t("addAccount")}
             </Button>
-            <Button
-              disabled={!activeAccount || isPending(refreshKey)}
-              onClick={() => onRefresh(activeAccount?.id)}
-              variant="primary"
-            >
-              {isPending(refreshKey) ? t("refreshing") : t("refreshGithub")}
-            </Button>
+            <span className="control-with-help">
+              <Button
+                disabled={!activeAccount || isPending(refreshKey)}
+                onClick={() => onRefresh(activeAccount?.id)}
+                variant="primary"
+              >
+                {isPending(refreshKey) ? t("refreshing") : t("refreshGithub")}
+              </Button>
+              <HelpTip label={t("help")} text={rateLimitHelpText} />
+            </span>
           </div>
         </div>
 
@@ -397,9 +410,12 @@ export function GitHubWorkbench({
               <h2>{accounts.length ? t("githubNoReposTitle") : t("githubNoAccountTitle")}</h2>
               <p>{accounts.length ? t("githubNoReposText") : t("githubNoAccountText")}</p>
               {activeAccount && (
-                <Button disabled={isPending(refreshKey)} onClick={() => onRefresh(activeAccount.id)}>
-                  {isPending(refreshKey) ? t("refreshing") : t("refreshGithub")}
-                </Button>
+                <span className="control-with-help">
+                  <Button disabled={isPending(refreshKey)} onClick={() => onRefresh(activeAccount.id)}>
+                    {isPending(refreshKey) ? t("refreshing") : t("refreshGithub")}
+                  </Button>
+                  <HelpTip label={t("help")} text={rateLimitHelpText} />
+                </span>
               )}
             </div>
           )}

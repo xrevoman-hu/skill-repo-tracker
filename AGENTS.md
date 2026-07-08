@@ -20,6 +20,25 @@
 - 公开产品截图保留在 `docs/images/v1.1.8/`；宣传草稿、内部素材和生成过程文件不进入公开发布面。
 - 宣传资料默认加入 `.gitignore`，例如 `docs/promo/`、`docs/internal/`、旧宣传图、`assets/brand/` 和生成型宣传素材目录。
 
+## Local Artifact Rules
+
+- 只有用户明确要求生成本地验证包时，才构建 Apple Silicon `.app` 和 `.dmg`。
+- 本地验证包不等于正式发布：不打 tag、不创建 GitHub Release、不推送远程，除非用户同时明确要求。
+- 构建前先运行 `npm run typecheck`、`npm run build`、`PATH=/Users/zhiwei/.cargo/bin:$PATH cargo fmt --check --manifest-path src-tauri/Cargo.toml`、`PATH=/Users/zhiwei/.cargo/bin:$PATH cargo test --manifest-path src-tauri/Cargo.toml` 和 `git diff --check`。
+- 构建命令固定为 `PATH=/Users/zhiwei/.cargo/bin:$PATH npm run tauri build -- --bundles app,dmg`。
+- 本地构建文件名固定为 `Skill Repo Tracker_<version>_aarch64.dmg`，路径在 `src-tauri/target/release/bundle/dmg/`。
+- 本地验证包使用 ad-hoc 签名；必须校验 `.app`、`.dmg`、`hdiutil verify`、只读挂载内容、挂载内 app 签名，并记录文件大小、SHA-256 和当前 commit。
+- ad-hoc 包不是 Developer ID signed，也不是 Apple notarized；交付说明必须提醒首次启动可能需要 Control-click Open、Privacy & Security -> Open Anyway 或 `xattr -cr`。
+
+## GitHub Release Rules
+
+- 只有用户明确要求“发布”、“发版”或“GitHub Release”时，才执行正式发布流程。
+- 正式发布前必须同步版本到 `package.json`、`package-lock.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/tauri.conf.json`、`src-tauri/src/lib.rs` 的 `APP_VERSION` 和 `APP_USER_AGENT`。
+- Release notes 使用中英文结构，优先讲功能价值和用户可感知变化，不展开内部实现细节。
+- GitHub Release 上传资产名固定为 `Skill.Repo.Tracker_<version>_aarch64.dmg`；本地构建名仍保留空格形式。
+- 正式发布流程必须创建 annotated tag，推送 `main` 和 tag 到 `origin`，用 `gh release create` 创建非 draft、非 prerelease 的 Release，并远端校验 main、tag、Release asset 和 digest。
+- GitHub CLI Release 校验只使用支持字段：`tagName`、`name`、`url`、`isDraft`、`isPrerelease` 和 `assets`。
+
 ## Data And Safety
 
 - GitHub token 只应通过 macOS Keychain 管理，不能写入 SQLite、迁移包、日志或文档。

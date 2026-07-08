@@ -356,6 +356,37 @@ a {
   min-width: 0;
 }
 
+.control-with-help,
+.label-with-help {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.help-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  border: 1px solid #cbd5e1;
+  border-radius: 50%;
+  background: #f8fafc;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: help;
+  user-select: none;
+}
+
+.help-tip:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.28);
+  outline-offset: 2px;
+}
+
 .muted-toolbar {
   align-items: center;
   color: var(--muted);
@@ -2395,6 +2426,7 @@ input[type="checkbox"] {
 .app-shell[data-theme="dark"] .row-actions button,
 .app-shell[data-theme="dark"] .command-copy-button,
 .app-shell[data-theme="dark"] .icon-button,
+.app-shell[data-theme="dark"] .help-tip,
 .app-shell[data-theme="dark"] .account-pill,
 .app-shell[data-theme="dark"] .form-row input,
 .app-shell[data-theme="dark"] .settings-section input,

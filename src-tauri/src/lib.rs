@@ -23,8 +23,8 @@ mod plugins;
 
 use plugins::{scan_plugins_from_directory, scan_plugins_from_zip, sync_plugins, PluginScan};
 
-const APP_VERSION: &str = "1.1.10";
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.10";
+const APP_VERSION: &str = "1.1.11";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.11";
 const MIGRATION_SCHEMA_VERSION: i64 = 1;
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
@@ -90,7 +90,7 @@ impl<T: Serialize> ApiResponse<T> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct AppError {
     code: String,
     message: String,
@@ -147,6 +147,70 @@ struct AppState {
     data_dir: PathBuf,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GithubAuthSource {
+    RepoAccount,
+    DefaultAccount,
+    None,
+    KeychainMissing,
+}
+
+impl GithubAuthSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::RepoAccount => "repo_account",
+            Self::DefaultAccount => "default_account",
+            Self::None => "none",
+            Self::KeychainMissing => "keychain_missing",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct GithubAuth {
+    token: Option<String>,
+    account_id: Option<String>,
+    source: GithubAuthSource,
+}
+
+impl GithubAuth {
+    fn anonymous() -> Self {
+        Self {
+            token: None,
+            account_id: None,
+            source: GithubAuthSource::None,
+        }
+    }
+
+    fn keychain_missing(account_id: String) -> Self {
+        Self {
+            token: None,
+            account_id: Some(account_id),
+            source: GithubAuthSource::KeychainMissing,
+        }
+    }
+
+    fn label(&self) -> &'static str {
+        self.source.label()
+    }
+
+    fn token(&self) -> Option<&str> {
+        self.token.as_deref()
+    }
+
+    fn usable(&self) -> Result<(), AppError> {
+        if self.source == GithubAuthSource::KeychainMissing {
+            Err(AppError::with_details(
+                "github_token_keychain_missing",
+                "GitHub token 已配置，但无法从系统安全存储读取。请重新验证 GitHub 账号。",
+                "auth=keychain_missing",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
 impl AppState {
     fn new(data_dir: PathBuf) -> Result<Self, AppError> {
         fs::create_dir_all(&data_dir)?;
@@ -187,21 +251,61 @@ impl AppState {
             .filter(|token| !token.trim().is_empty())
     }
 
-    fn token_for_account(&self, account_id: &str) -> Option<String> {
-        let token_key = {
-            let db = self.db.lock().ok()?;
-            github_account_by_id(&db, account_id)
-                .ok()
-                .flatten()
-                .map(|account| account.token_key)
-        }?;
-        self.token_for_key(&token_key)
+    fn auth_for_account_record(
+        &self,
+        account: GithubAccountRecord,
+        source: GithubAuthSource,
+    ) -> GithubAuth {
+        match self.token_for_key(&account.token_key) {
+            Some(token) => GithubAuth {
+                token: Some(token),
+                account_id: Some(account.id),
+                source,
+            },
+            None => GithubAuth::keychain_missing(account.id),
+        }
     }
 
-    fn token_for_repo(&self, repo: &RepoRecord) -> Option<String> {
-        repo.github_account_id
-            .as_deref()
-            .and_then(|account_id| self.token_for_account(account_id))
+    fn default_github_auth(&self) -> GithubAuth {
+        let account = {
+            let db = match self.db.lock() {
+                Ok(db) => db,
+                Err(_) => return GithubAuth::anonymous(),
+            };
+            preferred_github_account(&db).ok().flatten()
+        };
+        account
+            .map(|account| self.auth_for_account_record(account, GithubAuthSource::DefaultAccount))
+            .unwrap_or_else(GithubAuth::anonymous)
+    }
+
+    fn github_auth_for_account(&self, account_id: &str, source: GithubAuthSource) -> GithubAuth {
+        let account = {
+            let db = match self.db.lock() {
+                Ok(db) => db,
+                Err(_) => return GithubAuth::anonymous(),
+            };
+            github_account_by_id(&db, account_id).ok().flatten()
+        };
+        account
+            .map(|account| self.auth_for_account_record(account, source))
+            .unwrap_or_else(|| self.default_github_auth())
+    }
+
+    fn github_auth_for_repo(&self, repo: &RepoRecord) -> GithubAuth {
+        if let Some(account_id) = repo.github_account_id.as_deref() {
+            let account = {
+                let db = match self.db.lock() {
+                    Ok(db) => db,
+                    Err(_) => return GithubAuth::anonymous(),
+                };
+                github_account_by_id(&db, account_id).ok().flatten()
+            };
+            if let Some(account) = account {
+                return self.auth_for_account_record(account, GithubAuthSource::RepoAccount);
+            }
+        }
+        self.default_github_auth()
     }
 }
 
@@ -484,6 +588,15 @@ pub struct AppSettings {
     github_token_configured: bool,
     github_token_status: String,
     github_token_last_verified: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct AppMetadata {
+    name: String,
+    version: String,
+    project_github_url: String,
+    open_source: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1408,6 +1521,21 @@ fn latest_github_account(conn: &Connection) -> Result<Option<GithubAccountRecord
     conn.query_row(
         "SELECT * FROM github_accounts
          ORDER BY updated_at DESC
+         LIMIT 1",
+        [],
+        github_account_from_row,
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+fn preferred_github_account(conn: &Connection) -> Result<Option<GithubAccountRecord>, AppError> {
+    conn.query_row(
+        "SELECT * FROM github_accounts
+         ORDER BY
+           CASE WHEN status = 'verified' THEN 0 ELSE 1 END,
+           COALESCE(last_verified, updated_at) DESC,
+           updated_at DESC
          LIMIT 1",
         [],
         github_account_from_row,
@@ -2573,13 +2701,162 @@ fn parse_link_header_next(value: &str) -> Option<String> {
     })
 }
 
+fn header_text(headers: &HeaderMap, name: &str) -> Option<String> {
+    headers
+        .get(name)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn github_error_details(status: u16, headers: &HeaderMap, body: &str, auth: &str) -> String {
+    let mut parts = vec![format!("status={status}"), format!("auth={auth}")];
+    for name in [
+        "x-ratelimit-limit",
+        "x-ratelimit-remaining",
+        "x-ratelimit-reset",
+        "x-ratelimit-resource",
+        "retry-after",
+    ] {
+        if let Some(value) = header_text(headers, name) {
+            parts.push(format!("{name}={value}"));
+            if name == "x-ratelimit-reset" {
+                if let Ok(epoch) = value.parse::<i64>() {
+                    if let Some(reset_at) = DateTime::<Utc>::from_timestamp(epoch, 0) {
+                        parts.push(format!(
+                            "reset_at={}",
+                            reset_at.with_timezone(&Local).format("%Y-%m-%d %H:%M:%S")
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    let body = body.trim();
+    if !body.is_empty() {
+        let compact = body
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .chars()
+            .take(240)
+            .collect::<String>();
+        parts.push(format!("message={compact}"));
+    }
+    parts.join("; ")
+}
+
+fn classify_github_rejection(
+    status: u16,
+    headers: &HeaderMap,
+    body: &str,
+    auth: &str,
+) -> Option<AppError> {
+    match status {
+        401 => Some(AppError::with_details(
+            "github_token_invalid",
+            "GitHub token 无效或已过期，请重新添加 token。",
+            github_error_details(status, headers, body, auth),
+        )),
+        403 => {
+            let lower_body = body.to_ascii_lowercase();
+            let remaining = header_text(headers, "x-ratelimit-remaining");
+            let limit = header_text(headers, "x-ratelimit-limit")
+                .and_then(|value| value.parse::<i64>().ok());
+            let retry_after = header_text(headers, "retry-after");
+            if remaining.as_deref() == Some("0") {
+                let (code, message) = match (limit, auth) {
+                    (Some(60), "none") => (
+                        "github_unauthenticated_rate_limited",
+                        "本次 GitHub 请求落到匿名配额（60 次/小时），请确认仓库已绑定 GitHub 账号或重新验证 token。",
+                    ),
+                    (Some(60), _) => (
+                        "github_token_not_applied_rate_limited",
+                        "GitHub 仍按匿名配额处理本次请求，请重新验证 token 或检查系统安全存储。",
+                    ),
+                    (Some(value), _) if value >= 5_000 => (
+                        "github_authenticated_rate_limited",
+                        "GitHub 认证请求配额已用尽，请等待重置后再试。",
+                    ),
+                    _ => (
+                        "github_rate_limited",
+                        "GitHub API 配额已用尽，请等待重置后再试。",
+                    ),
+                };
+                Some(AppError::with_details(
+                    code,
+                    message,
+                    github_error_details(status, headers, body, auth),
+                ))
+            } else if retry_after.is_some()
+                || lower_body.contains("secondary rate limit")
+                || lower_body.contains("abuse detection")
+                || lower_body.contains("abuse rate")
+            {
+                Some(AppError::with_details(
+                    "github_secondary_rate_limited",
+                    "GitHub 触发二级限流，请降低检测频率或稍后重试。",
+                    github_error_details(status, headers, body, auth),
+                ))
+            } else {
+                Some(AppError::with_details(
+                    "github_forbidden",
+                    "GitHub 拒绝请求，请检查 token 权限或仓库访问权限。",
+                    github_error_details(status, headers, body, auth),
+                ))
+            }
+        }
+        429 => Some(AppError::with_details(
+            "github_secondary_rate_limited",
+            "GitHub 请求过快，请降低检测频率或稍后重试。",
+            github_error_details(status, headers, body, auth),
+        )),
+        _ => None,
+    }
+}
+
+async fn github_rejection_error(response: reqwest::Response, auth: &str) -> AppError {
+    let status = response.status().as_u16();
+    let headers = response.headers().clone();
+    let body = response.text().await.unwrap_or_default();
+    classify_github_rejection(status, &headers, &body, auth).unwrap_or_else(|| {
+        AppError::with_details("github_error", "GitHub 返回未知错误。", status.to_string())
+    })
+}
+
+fn is_global_github_rejection(error: &AppError) -> bool {
+    matches!(
+        error.code.as_str(),
+        "github_token_invalid"
+            | "github_rate_limited"
+            | "github_unauthenticated_rate_limited"
+            | "github_token_not_applied_rate_limited"
+            | "github_authenticated_rate_limited"
+            | "github_secondary_rate_limited"
+    )
+}
+
+fn format_skipped_github_check(repo_name: &str, error: &AppError) -> String {
+    format!(
+        "{repo_name} skipped: same GitHub request block as earlier item [{}]",
+        error.code
+    )
+}
+
 async fn fetch_json_array_paginated(
     client: &reqwest::Client,
     first_url: String,
     token: &str,
+    auth: &str,
 ) -> Result<Vec<serde_json::Value>, AppError> {
-    fetch_json_array_paginated_with_accept(client, first_url, token, "application/vnd.github+json")
-        .await
+    fetch_json_array_paginated_with_accept(
+        client,
+        first_url,
+        token,
+        "application/vnd.github+json",
+        auth,
+    )
+    .await
 }
 
 async fn fetch_json_array_paginated_with_accept(
@@ -2587,6 +2864,7 @@ async fn fetch_json_array_paginated_with_accept(
     first_url: String,
     token: &str,
     accept: &'static str,
+    auth: &str,
 ) -> Result<Vec<serde_json::Value>, AppError> {
     let mut next_url = Some(first_url);
     let mut values = Vec::new();
@@ -2599,14 +2877,10 @@ async fn fetch_json_array_paginated_with_accept(
             .map_err(|err| {
                 AppError::with_details("github_network", "无法访问 GitHub。", err.to_string())
             })?;
-        match response.status().as_u16() {
+        let status = response.status().as_u16();
+        match status {
             200 => {}
-            401 | 403 => {
-                return Err(AppError::new(
-                    "github_rate_limited",
-                    "GitHub 拒绝请求，请检查 token 权限、Starring 权限或稍后重试。",
-                ));
-            }
+            401 | 403 | 429 => return Err(github_rejection_error(response, auth).await),
             status => {
                 return Err(AppError::with_details(
                     "github_error",
@@ -2901,6 +3175,7 @@ async fn fetch_remote_info(
     repo: &str,
     ref_name: &str,
     token: Option<&str>,
+    auth: &str,
 ) -> Result<RemoteInfo, AppError> {
     let repo_url = format!("https://api.github.com/repos/{owner}/{repo}");
     let repo_response = client
@@ -2914,12 +3189,7 @@ async fn fetch_remote_info(
 
     match repo_response.status().as_u16() {
         200 => {}
-        401 | 403 => {
-            return Err(AppError::new(
-                "github_rate_limited",
-                "GitHub 拒绝请求，请检查 token 或稍后重试。",
-            ));
-        }
+        401 | 403 | 429 => return Err(github_rejection_error(repo_response, auth).await),
         404 => {
             return Err(AppError::new(
                 "github_not_found",
@@ -2968,12 +3238,7 @@ async fn fetch_remote_info(
         })?;
     match commit_response.status().as_u16() {
         200 => {}
-        401 | 403 => {
-            return Err(AppError::new(
-                "github_rate_limited",
-                "GitHub 拒绝请求，请检查 token 或稍后重试。",
-            ));
-        }
+        401 | 403 | 429 => return Err(github_rejection_error(commit_response, auth).await),
         404 => return Err(AppError::new("ref_not_found", "指定 ref 不存在。")),
         status => {
             return Err(AppError::with_details(
@@ -3012,6 +3277,7 @@ async fn download_zip(
     repo: &str,
     sha: &str,
     token: Option<&str>,
+    auth: &str,
 ) -> Result<Vec<u8>, AppError> {
     let url = format!("https://api.github.com/repos/{owner}/{repo}/zipball/{sha}");
     let response = client
@@ -3023,6 +3289,9 @@ async fn download_zip(
             AppError::with_details("github_network", "源码 ZIP 下载失败。", err.to_string())
         })?;
     if !response.status().is_success() {
+        if matches!(response.status().as_u16(), 401 | 403 | 429) {
+            return Err(github_rejection_error(response, auth).await);
+        }
         return Err(AppError::with_details(
             "github_error",
             "源码 ZIP 下载失败。",
@@ -3230,8 +3499,9 @@ async fn fetch_github_readme_search(
     repo: &str,
     ref_name: &str,
     token: Option<&str>,
+    auth: &str,
 ) -> String {
-    fetch_github_content(client, owner, repo, ref_name, None, true, token)
+    fetch_github_content(client, owner, repo, ref_name, None, true, token, auth)
         .await
         .map(|(contents, _)| truncate_search_index(&contents))
         .unwrap_or_default()
@@ -3281,6 +3551,7 @@ async fn fetch_github_content(
     path: Option<&str>,
     readme: bool,
     token: Option<&str>,
+    auth: &str,
 ) -> Result<(String, String), AppError> {
     let url = if readme {
         format!(
@@ -3309,12 +3580,7 @@ async fn fetch_github_content(
         })?;
     match response.status().as_u16() {
         200 => {}
-        401 | 403 => {
-            return Err(AppError::new(
-                "github_rate_limited",
-                "GitHub 拒绝请求，请检查 token 或稍后重试。",
-            ));
-        }
+        401 | 403 | 429 => return Err(github_rejection_error(response, auth).await),
         404 => {
             return Err(AppError::new(
                 "github_file_not_found",
@@ -4720,9 +4986,10 @@ async fn get_skill_detail(
     };
 
     let (mut detail, deleted_path, owner, repo, repo_ref, repo_account_id) = base;
-    let token = repo_account_id
+    let auth = repo_account_id
         .as_deref()
-        .and_then(|account_id| state.token_for_account(account_id));
+        .map(|account_id| state.github_auth_for_account(account_id, GithubAuthSource::RepoAccount))
+        .unwrap_or_else(|| state.default_github_auth());
     let content_result = if let Some(path) = skill_markdown_path(
         detail.local_path.as_deref(),
         detail.install_path.as_deref(),
@@ -4733,6 +5000,9 @@ async fn get_skill_detail(
         match (owner.as_deref(), repo.as_deref(), repo_ref.as_deref()) {
             (Some(owner), Some(repo), Some(ref_name)) => {
                 let path = github_contents_path(&detail.path, "SKILL.md");
+                if let Err(error) = auth.usable() {
+                    return Ok(api_err(error));
+                }
                 fetch_github_content(
                     &state.http,
                     owner,
@@ -4740,7 +5010,8 @@ async fn get_skill_detail(
                     ref_name,
                     Some(&path),
                     false,
-                    token.as_deref(),
+                    auth.token(),
+                    auth.label(),
                 )
                 .await
             }
@@ -4808,7 +5079,10 @@ async fn get_repository_readme(
         };
     }
 
-    let token = state.token_for_repo(&repo_record);
+    let auth = state.github_auth_for_repo(&repo_record);
+    if let Err(error) = auth.usable() {
+        return Ok(api_err(error));
+    }
     match fetch_github_content(
         &state.http,
         &repo_record.owner,
@@ -4816,7 +5090,8 @@ async fn get_repository_readme(
         &repo_record.ref_name,
         None,
         true,
-        token.as_deref(),
+        auth.token(),
+        auth.label(),
     )
     .await
     {
@@ -4862,13 +5137,18 @@ async fn get_github_preview(
             Err(error) => return Ok(api_err(AppError::from(error))),
         }
     };
-    let token = catalog_account_id
+    let auth = catalog_account_id
         .as_deref()
-        .and_then(|account_id| state.token_for_account(account_id));
-    let remote = match fetch_remote_info(&state.http, &owner, &repo, "", token.as_deref()).await {
-        Ok(remote) => remote,
-        Err(error) => return Ok(api_err(error)),
-    };
+        .map(|account_id| state.github_auth_for_account(account_id, GithubAuthSource::RepoAccount))
+        .unwrap_or_else(|| state.default_github_auth());
+    if let Err(error) = auth.usable() {
+        return Ok(api_err(error));
+    }
+    let remote =
+        match fetch_remote_info(&state.http, &owner, &repo, "", auth.token(), auth.label()).await {
+            Ok(remote) => remote,
+            Err(error) => return Ok(api_err(error)),
+        };
     let readme_result = fetch_github_content(
         &state.http,
         &remote.owner,
@@ -4876,7 +5156,8 @@ async fn get_github_preview(
         &remote.resolved_ref,
         None,
         true,
-        token.as_deref(),
+        auth.token(),
+        auth.label(),
     )
     .await;
     let (readme, readme_source, readme_error) = match readme_result {
@@ -4913,6 +5194,16 @@ fn get_settings(state: State<'_, AppState>) -> ApiResponse<AppSettings> {
         Ok(settings) => ApiResponse::ok(settings),
         Err(error) => api_err(error),
     }
+}
+
+#[tauri::command]
+fn get_app_metadata() -> ApiResponse<AppMetadata> {
+    ApiResponse::ok(AppMetadata {
+        name: "Skill Repo Tracker".to_string(),
+        version: APP_VERSION.to_string(),
+        project_github_url: "https://github.com/xrevoman-hu/skill-repo-tracker".to_string(),
+        open_source: true,
+    })
 }
 
 #[tauri::command]
@@ -5035,12 +5326,32 @@ async fn add_repository(
         Ok(parsed) => parsed,
         Err(error) => return Ok(api_err(error)),
     };
-    let remote = match fetch_remote_info(&state.http, &owner, &repo, &request.ref_name, None).await
+    let auth = state.default_github_auth();
+    if let Err(error) = auth.usable() {
+        return Ok(api_err(error));
+    }
+    let remote = match fetch_remote_info(
+        &state.http,
+        &owner,
+        &repo,
+        &request.ref_name,
+        auth.token(),
+        auth.label(),
+    )
+    .await
     {
         Ok(remote) => remote,
         Err(error) => return Ok(api_err(error)),
     };
-    let zip = match download_zip(&state.http, &remote.owner, &remote.repo, &remote.sha, None).await
+    let zip = match download_zip(
+        &state.http,
+        &remote.owner,
+        &remote.repo,
+        &remote.sha,
+        auth.token(),
+        auth.label(),
+    )
+    .await
     {
         Ok(zip) => zip,
         Err(error) => return Ok(api_err(error)),
@@ -5062,7 +5373,7 @@ async fn add_repository(
             &remote,
             &scans,
             &plugins,
-            None,
+            auth.account_id.as_deref(),
             &readme_search_text,
         )?;
         if let Some(note) = request.note.as_deref() {
@@ -5125,15 +5436,30 @@ async fn check_repositories(
     let mut log = Vec::new();
     let mut success = 0;
     let mut failed = 0;
+    let mut skipped = 0;
+    let mut global_github_error: Option<AppError> = None;
 
     for repo in repos {
-        let token = state.token_for_repo(&repo);
+        if let Some(error) = &global_github_error {
+            log.push(format_skipped_github_check(&repo.name, error));
+            skipped += 1;
+            continue;
+        }
+        let auth = state.github_auth_for_repo(&repo);
+        if let Err(error) = auth.usable() {
+            let db = state.db.lock().expect("db mutex poisoned");
+            let _ = mark_repo_check_failed(&db, &repo.id, &error);
+            log.push(format_error_for_log(&repo.name, &error));
+            failed += 1;
+            continue;
+        }
         match fetch_remote_info(
             &state.http,
             &repo.owner,
             &repo.repo,
             &repo.ref_name,
-            token.as_deref(),
+            auth.token(),
+            auth.label(),
         )
         .await
         {
@@ -5143,7 +5469,8 @@ async fn check_repositories(
                     &remote.owner,
                     &remote.repo,
                     &remote.sha,
-                    token.as_deref(),
+                    auth.token(),
+                    auth.label(),
                 )
                 .await
                 {
@@ -5152,6 +5479,13 @@ async fn check_repositories(
                         let db = state.db.lock().expect("db mutex poisoned");
                         let _ = mark_repo_check_failed(&db, &repo.id, &error);
                         log.push(format_error_for_log(&repo.name, &error));
+                        if is_global_github_rejection(&error) {
+                            log.push(format!(
+                                "stop remaining GitHub checks: {} [{}]",
+                                error.message, error.code
+                            ));
+                            global_github_error = Some(error.clone());
+                        }
                         failed += 1;
                         continue;
                     }
@@ -5183,7 +5517,7 @@ async fn check_repositories(
                     &remote,
                     &scans,
                     &plugins,
-                    repo.github_account_id.as_deref(),
+                    auth.account_id.as_deref(),
                     &readme_search_text,
                 ) {
                     log.push(format_error_for_log(&repo.name, &error));
@@ -5200,6 +5534,13 @@ async fn check_repositories(
                 let db = state.db.lock().expect("db mutex poisoned");
                 let _ = mark_repo_check_failed(&db, &repo.id, &error);
                 log.push(format_error_for_log(&repo.name, &error));
+                if is_global_github_rejection(&error) {
+                    log.push(format!(
+                        "stop remaining GitHub checks: {} [{}]",
+                        error.message, error.code
+                    ));
+                    global_github_error = Some(error.clone());
+                }
                 failed += 1;
             }
         }
@@ -5212,13 +5553,17 @@ async fn check_repositories(
             &format!("check-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Check remote state",
             "All repositories",
-            &format!("{} / {}", success + failed, success + failed),
+            &format!(
+                "{} / {}",
+                success + failed + skipped,
+                success + failed + skipped
+            ),
             if failed > 0 {
                 "partial-success"
             } else {
                 "success"
             },
-            &format!("{success} success, {failed} failed"),
+            &format!("{success} success, {failed} failed, {skipped} skipped"),
             None,
             &log,
             RETRY_CHECK_REPOSITORIES,
@@ -5304,13 +5649,23 @@ async fn backup_repositories(
     let mut successful_repo_updates = Vec::new();
 
     for repo in &repos {
-        let token = state.token_for_repo(repo);
+        let auth = state.github_auth_for_repo(repo);
+        if let Err(error) = auth.usable() {
+            manifest_failures.push(serde_json::json!({
+                "repo_id": repo.id,
+                "repo": repo.name,
+                "error": error.message
+            }));
+            log.push(format_error_for_log(&repo.name, &error));
+            continue;
+        }
         match fetch_remote_info(
             &state.http,
             &repo.owner,
             &repo.repo,
             &repo.ref_name,
-            token.as_deref(),
+            auth.token(),
+            auth.label(),
         )
         .await
         {
@@ -5319,7 +5674,8 @@ async fn backup_repositories(
                 &remote.owner,
                 &remote.repo,
                 &remote.sha,
-                token.as_deref(),
+                auth.token(),
+                auth.label(),
             )
             .await
             {
@@ -5576,13 +5932,17 @@ async fn update_skill_inner(
         }
     }
 
-    let token = state.token_for_repo(&repo);
+    let auth = state.github_auth_for_repo(&repo);
+    if let Err(error) = auth.usable() {
+        return Ok(api_err(error));
+    }
     let zip = match download_zip(
         &state.http,
         &repo.owner,
         &repo.repo,
         &repo.remote_sha,
-        token.as_deref(),
+        auth.token(),
+        auth.label(),
     )
     .await
     {
@@ -7142,7 +7502,11 @@ async fn validate_github_account(
     request: GithubAccountRequest,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<UiGithubAccount>> {
-    let token = match state.token_for_account(&request.account_id) {
+    let auth = state.github_auth_for_account(&request.account_id, GithubAuthSource::RepoAccount);
+    if let Err(error) = auth.usable() {
+        return Ok(api_err(error));
+    }
+    let token = match auth.token() {
         Some(token) => token,
         None => {
             return Ok(api_err(AppError::new(
@@ -7151,7 +7515,7 @@ async fn validate_github_account(
             )))
         }
     };
-    let (mut verified, _) = match validate_token_identity(&state.http, &token).await {
+    let (mut verified, _) = match validate_token_identity(&state.http, token).await {
         Ok(account) => account,
         Err(error) => return Ok(api_err(error)),
     };
@@ -7250,21 +7614,33 @@ async fn refresh_github_repositories(
     }
 
     for account in &accounts {
-        let Some(token) = state.token_for_key(&account.token_key) else {
-            continue;
+        let auth = state.auth_for_account_record(account.clone(), GithubAuthSource::RepoAccount);
+        if let Err(error) = auth.usable() {
+            return Ok(api_err(error));
+        }
+        let token = match auth.token() {
+            Some(token) => token,
+            None => {
+                return Ok(api_err(AppError::new(
+                    "token_missing",
+                    "该 GitHub 账号缺少 token。",
+                )))
+            }
         };
         let repo_url = "https://api.github.com/user/repos?visibility=all&affiliation=owner,collaborator,organization_member&sort=updated&per_page=100".to_string();
         let starred_url =
             "https://api.github.com/user/starred?sort=updated&per_page=100".to_string();
-        let repos = match fetch_json_array_paginated(&state.http, repo_url, &token).await {
-            Ok(repos) => repos,
-            Err(error) => return Ok(api_err(error)),
-        };
+        let repos =
+            match fetch_json_array_paginated(&state.http, repo_url, token, auth.label()).await {
+                Ok(repos) => repos,
+                Err(error) => return Ok(api_err(error)),
+            };
         let starred = match fetch_json_array_paginated_with_accept(
             &state.http,
             starred_url,
-            &token,
+            token,
             "application/vnd.github.star+json",
+            auth.label(),
         )
         .await
         {
@@ -7313,7 +7689,8 @@ async fn refresh_github_repositories(
                 } else {
                     &default_branch
                 },
-                Some(&token),
+                Some(token),
+                auth.label(),
             )
             .await;
             catalog_items.push((repo.clone(), starred, starred_at, readme_search_text));
@@ -7358,7 +7735,11 @@ async fn set_github_star(
     request: GithubStarRequest,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<UiGithubRepository>> {
-    let token = match state.token_for_account(&request.account_id) {
+    let auth = state.github_auth_for_account(&request.account_id, GithubAuthSource::RepoAccount);
+    if let Err(error) = auth.usable() {
+        return Ok(api_err(error));
+    }
+    let token = match auth.token() {
         Some(token) => token,
         None => {
             return Ok(api_err(AppError::new(
@@ -7377,7 +7758,7 @@ async fn set_github_star(
     } else {
         state.http.delete(&url)
     };
-    let response = builder.headers(headers(Some(&token))).send().await;
+    let response = builder.headers(headers(Some(token))).send().await;
     match response {
         Ok(response) if response.status().as_u16() == 204 => {
             let db = state.db.lock().expect("db mutex poisoned");
@@ -7402,6 +7783,9 @@ async fn set_github_star(
                 Err(error) => api_err(error),
             })
         }
+        Ok(response) if matches!(response.status().as_u16(), 401 | 403 | 429) => Ok(api_err(
+            github_rejection_error(response, auth.label()).await,
+        )),
         Ok(response) => Ok(api_err(AppError::with_details(
             "github_star_failed",
             "GitHub Star 操作失败，请检查 token 的 Starring 权限。",
@@ -7420,7 +7804,11 @@ async fn add_repository_from_github(
     request: AddRepositoryFromGithubRequest,
     state: State<'_, AppState>,
 ) -> CommandResult<Vec<UiRepository>> {
-    let token = match state.token_for_account(&request.account_id) {
+    let auth = state.github_auth_for_account(&request.account_id, GithubAuthSource::RepoAccount);
+    if let Err(error) = auth.usable() {
+        return Ok(api_err(error));
+    }
+    let token = match auth.token() {
         Some(token) => token,
         None => {
             return Ok(api_err(AppError::new(
@@ -7434,7 +7822,8 @@ async fn add_repository_from_github(
         &request.owner,
         &request.repo,
         request.ref_name.as_deref().unwrap_or(""),
-        Some(&token),
+        Some(token),
+        auth.label(),
     )
     .await
     {
@@ -7446,7 +7835,8 @@ async fn add_repository_from_github(
         &remote.owner,
         &remote.repo,
         &remote.sha,
-        Some(&token),
+        Some(token),
+        auth.label(),
     )
     .await
     {
@@ -7698,6 +8088,7 @@ pub fn run() {
             cancel_task,
             copy_task_summary,
             get_settings,
+            get_app_metadata,
             update_settings,
             validate_directory,
             pick_directory,
@@ -9153,5 +9544,159 @@ clawhub install baoyu-image-gen
             .unwrap();
         assert_eq!(plugin.0, "2026-07-04T00:00:00Z");
         assert_eq!(plugin.1, "README plugin excerpt");
+    }
+
+    #[test]
+    fn preferred_github_account_uses_verified_account_first() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let unverified = GithubAccountRecord {
+            id: "github:unverified".into(),
+            login: "unverified".into(),
+            display_name: "Unverified".into(),
+            avatar_url: None,
+            token_key: github_account_token_key("github:unverified"),
+            status: "saved_unverified".into(),
+            scopes: "repo".into(),
+            last_verified: None,
+            is_default: false,
+        };
+        let verified = GithubAccountRecord {
+            id: "github:verified".into(),
+            login: "verified".into(),
+            display_name: "Verified".into(),
+            avatar_url: None,
+            token_key: github_account_token_key("github:verified"),
+            status: "verified".into(),
+            scopes: "repo".into(),
+            last_verified: Some("2026-07-08T00:00:00Z".into()),
+            is_default: false,
+        };
+        upsert_github_account(&conn, &unverified).unwrap();
+        upsert_github_account(&conn, &verified).unwrap();
+
+        let preferred = preferred_github_account(&conn).unwrap().unwrap();
+
+        assert_eq!(preferred.id, "github:verified");
+    }
+
+    #[test]
+    fn repository_save_backfills_and_preserves_github_account_binding() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let account = GithubAccountRecord {
+            id: "github:octocat".into(),
+            login: "octocat".into(),
+            display_name: "Octocat".into(),
+            avatar_url: None,
+            token_key: github_account_token_key("github:octocat"),
+            status: "verified".into(),
+            scopes: "repo".into(),
+            last_verified: Some("2026-07-08T00:00:00Z".into()),
+            is_default: false,
+        };
+        upsert_github_account(&conn, &account).unwrap();
+        let remote = RemoteInfo {
+            owner: "octocat".into(),
+            repo: "Hello-World".into(),
+            full_name: "octocat/Hello-World".into(),
+            default_branch: "main".into(),
+            resolved_ref: "main".into(),
+            sha: "bf4e9ac4d4428bda261afcfe981871ceb92d94e6".into(),
+        };
+
+        let saved_id =
+            save_repository_with_account(&conn, &remote, &[], Some(&account.id), "").unwrap();
+        let stored_account: Option<String> = conn
+            .query_row(
+                "SELECT github_account_id FROM repositories WHERE id = ?1",
+                params![saved_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_account.as_deref(), Some("github:octocat"));
+
+        save_repository_with_account(&conn, &remote, &[], None, "").unwrap();
+        let preserved_account: Option<String> = conn
+            .query_row(
+                "SELECT github_account_id FROM repositories WHERE id = ?1",
+                params![repo_id("octocat", "Hello-World", "main")],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved_account.as_deref(), Some("github:octocat"));
+    }
+
+    #[test]
+    fn classifies_github_auth_and_rate_limit_rejections() {
+        let mut anonymous_headers = HeaderMap::new();
+        anonymous_headers.insert("x-ratelimit-limit", HeaderValue::from_static("60"));
+        anonymous_headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        anonymous_headers.insert("x-ratelimit-reset", HeaderValue::from_static("1783512000"));
+
+        let error = classify_github_rejection(401, &HeaderMap::new(), "", "repo_account").unwrap();
+        assert_eq!(error.code, "github_token_invalid");
+
+        let error = classify_github_rejection(403, &anonymous_headers, "", "none").unwrap();
+        assert_eq!(error.code, "github_unauthenticated_rate_limited");
+        assert!(error
+            .details
+            .unwrap()
+            .contains("x-ratelimit-reset=1783512000"));
+        let error = classify_github_rejection(403, &anonymous_headers, "", "repo_account").unwrap();
+        assert_eq!(error.code, "github_token_not_applied_rate_limited");
+
+        let mut authenticated_headers = HeaderMap::new();
+        authenticated_headers.insert("x-ratelimit-limit", HeaderValue::from_static("5000"));
+        authenticated_headers.insert("x-ratelimit-remaining", HeaderValue::from_static("0"));
+        let error =
+            classify_github_rejection(403, &authenticated_headers, "", "default_account").unwrap();
+        assert_eq!(error.code, "github_authenticated_rate_limited");
+
+        let error = classify_github_rejection(
+            403,
+            &HeaderMap::new(),
+            r#"{"message":"You have exceeded a secondary rate limit"}"#,
+            "repo_account",
+        )
+        .unwrap();
+        assert_eq!(error.code, "github_secondary_rate_limited");
+
+        let error = classify_github_rejection(
+            403,
+            &HeaderMap::new(),
+            "Resource not accessible",
+            "repo_account",
+        )
+        .unwrap();
+        assert_eq!(error.code, "github_forbidden");
+
+        let error = classify_github_rejection(429, &HeaderMap::new(), "", "repo_account").unwrap();
+        assert_eq!(error.code, "github_secondary_rate_limited");
+    }
+
+    #[test]
+    fn global_github_rejections_stop_batch_checks_without_repeating_failures() {
+        let rate_error = AppError::new(
+            "github_unauthenticated_rate_limited",
+            "本次 GitHub 请求落到匿名配额（60 次/小时），请确认仓库已绑定 GitHub 账号或重新验证 token。",
+        );
+        assert!(is_global_github_rejection(&rate_error));
+        assert_eq!(
+            format_skipped_github_check("example/repo", &rate_error),
+            "example/repo skipped: same GitHub request block as earlier item [github_unauthenticated_rate_limited]"
+        );
+
+        let not_found = AppError::new("github_not_found", "仓库不存在或无访问权限。");
+        assert!(!is_global_github_rejection(&not_found));
+    }
+
+    #[test]
+    fn keychain_missing_auth_is_not_reported_as_unconfigured() {
+        let auth = GithubAuth::keychain_missing("github:octocat".into());
+        let error = auth.usable().unwrap_err();
+        assert_eq!(auth.label(), "keychain_missing");
+        assert_eq!(error.code, "github_token_keychain_missing");
+        assert_eq!(error.details.as_deref(), Some("auth=keychain_missing"));
     }
 }

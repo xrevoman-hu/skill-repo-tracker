@@ -1,0 +1,15 @@
+Generated: 2026-07-08
+
+Artifact:
+Skill.Repo.Tracker_1.1.11_aarch64.dmg
+
+Size:
+7497876 bytes
+
+SHA-256:
+28efcf541dfff7b84772fbd1097a75a447a1708c2c9f034ae59f90410dee859c
+
+Notes:
+Apple Silicon macOS 12+ DMG. The package is ad-hoc signed for testing and
+sharing through GitHub Releases. It is not Developer ID signed or Apple
+notarized, so first launch may require manual approval in macOS.

@@ -608,7 +608,7 @@ const navItems = [
 
 const APP_METADATA = {
   name: "Skill Repo Tracker",
-  version: "1.1.8",
+  version: "dev",
   projectGithubUrl: "https://github.com/xrevoman-hu/skill-repo-tracker",
   openSource: true,
 };
@@ -850,6 +850,9 @@ const COPY = {
     helpAutoBackupUpdatedOnly: "启用后只备份“有更新未备份”的仓库，不会备份所有仓库。",
     helpCleanupKeep: "保留最近多少份备份历史，后续清理策略会按这个数值执行。",
     helpGithubTokenStorage: "Token 只保存到系统安全存储，不写 SQLite、manifest 或任务日志。",
+    help: "说明",
+    githubRateLimitHelp: "GitHub 探测会优先使用仓库绑定账号；没有绑定时使用已验证账号兜底。未认证请求通常只有 60 次/小时，认证请求通常 5,000 次/小时。超限后请等到 x-ratelimit-reset 指定时间再请求。如果仍看到 60 次/小时，说明这次请求实际落到了匿名配额，请重新验证 token 或检查系统安全存储。",
+    githubRateLimitResetAt: "上次限流重置时间",
     directoryReady: "目录可用",
     directoryInvalid: "目录不可用",
     taskBehavior: "任务行为",
@@ -1249,6 +1252,9 @@ const COPY = {
     helpAutoBackupUpdatedOnly: "When enabled, only repositories with unbacked updates are backed up.",
     helpCleanupKeep: "Number of recent backup history items to keep for future cleanup.",
     helpGithubTokenStorage: "Tokens are stored only in the secure system store, never in SQLite, manifests, or task logs.",
+    help: "Help",
+    githubRateLimitHelp: "GitHub checks prefer the repository-bound account and fall back to a verified account when none is bound. Unauthenticated requests are usually limited to 60 per hour; authenticated requests are usually 5,000 per hour. After a limit is exceeded, wait until the x-ratelimit-reset time before trying again. If you still see a 60/hour limit, this request actually used the anonymous quota; re-verify the token or check the secure system store.",
+    githubRateLimitResetAt: "Last rate limit reset time",
     directoryReady: "Directory ready",
     directoryInvalid: "Directory unavailable",
     taskBehavior: "Task behavior",
@@ -1783,6 +1789,21 @@ function parseRepoName(raw) {
   return cleaned.includes("/") ? cleaned : `example-org/${cleaned}`;
 }
 
+function latestGithubRateLimitResetFromTasks(tasks: any[] = []) {
+  for (const task of tasks) {
+    for (const line of task.log || []) {
+      const match = String(line).match(/reset_at=([^;]+)/);
+      if (match?.[1]) return match[1].trim();
+    }
+  }
+  return "";
+}
+
+function githubRateLimitHelpText(t: (key: string) => string, resetAt: string) {
+  const base = t("githubRateLimitHelp");
+  return resetAt ? `${base} ${t("githubRateLimitResetAt")}: ${resetAt}` : base;
+}
+
 function Button({
   children,
   variant = "secondary",
@@ -1804,6 +1825,14 @@ function Button({
     >
       {pending ? pendingLabel || children : children}
     </button>
+  );
+}
+
+function HelpTip({ text, label = "Help" }: { text: string; label?: string }) {
+  return (
+    <span aria-label={`${label}: ${text}`} className="help-tip" role="img" tabIndex={0} title={text}>
+      ?
+    </span>
   );
 }
 
@@ -1895,6 +1924,7 @@ export function App() {
   const [githubTokenLastVerified, setGithubTokenLastVerified] = useState(null);
   const [githubAccounts, setGithubAccounts] = useState<GitHubAccount[]>(initialGithubAccounts);
   const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>(initialGithubRepositories);
+  const [appMetadata, setAppMetadata] = useState(APP_METADATA);
   const [activeGithubAccountId, setActiveGithubAccountId] = useState("github:demo");
   const [isAddingRepo, setIsAddingRepo] = useState(false);
   const addRepoRequestRef = useRef(0);
@@ -1908,6 +1938,11 @@ export function App() {
   });
   const t = (key) => getCopy(language, key);
   const desktopRuntime = isDesktopRuntime();
+  const latestGithubRateLimitReset = useMemo(() => latestGithubRateLimitResetFromTasks(tasks), [tasks]);
+  const githubRateLimitHelp = useMemo(
+    () => githubRateLimitHelpText(t, latestGithubRateLimitReset),
+    [language, latestGithubRateLimitReset],
+  );
 
   function isPending(key) {
     return Boolean(pendingActions[key]);
@@ -1979,6 +2014,7 @@ export function App() {
         nextSettings,
         nextGithubAccounts,
         nextGithubRepositories,
+        nextAppMetadata,
       ] = await Promise.all([
         api.listRepositories(),
         api.listSkills(),
@@ -1987,6 +2023,7 @@ export function App() {
         api.getSettings(),
         api.listGithubAccounts(),
         api.listGithubRepositoryCatalog(),
+        api.getAppMetadata(),
       ]);
       setRepositories(nextRepos);
       setSkills(nextSkills);
@@ -1994,6 +2031,7 @@ export function App() {
       setTasks(nextTasks);
       setGithubAccounts(nextGithubAccounts);
       setGithubRepositories(nextGithubRepositories);
+      setAppMetadata(nextAppMetadata || APP_METADATA);
       setActiveGithubAccountId((id) =>
         id && nextGithubAccounts.some((account) => account.id === id)
           ? id
@@ -2056,10 +2094,12 @@ export function App() {
     githubTokenConfigured,
     githubTokenStatus,
     githubTokenLastVerified,
+    githubRateLimitHelp,
     nextAutoCheckAt,
     nextAutoBackupAt,
     directoryStatus,
     migrationStatus,
+    appMetadata,
     isPending,
     desktopRuntime,
     refreshDesktopState,
@@ -3554,6 +3594,7 @@ export function App() {
             addLocalRepositoryFromPicker={addLocalRepositoryFromPicker}
             isPending={isPending}
             language={language}
+            githubRateLimitHelp={githubRateLimitHelp}
             t={t}
           />
         )}
@@ -3605,6 +3646,7 @@ export function App() {
               onOpenUrl={openGithubUrl}
               onCopyUrl={copyUrl}
               onSaveNote={(repo, note) => saveItemNote("githubRepository", repo, note)}
+              rateLimitHelpText={githubRateLimitHelp}
               t={t}
             />
           )}
@@ -3927,6 +3969,7 @@ function Toolbar({
   addLocalRepositoryFromPicker,
   isPending,
   language,
+  githubRateLimitHelp,
   t,
 }: any) {
   const titleKey = navItems.find((item) => item.id === activeTab)?.labelKey || "nav.repositories";
@@ -3944,13 +3987,16 @@ function Toolbar({
     <header className="toolbar">
       {activeTab === "repositories" && (
         <div className="toolbar-group">
-          <Button
-            onClick={checkAllRepos}
-            pending={isPending("checkAllRepos")}
-            pendingLabel={t("checking")}
-          >
-            {t("checkAll")}
-          </Button>
+          <span className="control-with-help">
+            <Button
+              onClick={checkAllRepos}
+              pending={isPending("checkAllRepos")}
+              pendingLabel={t("checking")}
+            >
+              {t("checkAll")}
+            </Button>
+            <HelpTip label={t("help")} text={githubRateLimitHelp} />
+          </span>
           <Button onClick={() => setModal({ type: "backup", mode: "updated" })} disabled={!needsBackup}>
             {t("backupUpdated")}
           </Button>
@@ -3967,13 +4013,16 @@ function Toolbar({
       )}
       {activeTab === "skills" && (
         <div className="toolbar-group">
-          <Button
-            onClick={checkAllRepos}
-            pending={isPending("checkAllRepos")}
-            pendingLabel={t("checking")}
-          >
-            {t("rescanSources")}
-          </Button>
+          <span className="control-with-help">
+            <Button
+              onClick={checkAllRepos}
+              pending={isPending("checkAllRepos")}
+              pendingLabel={t("checking")}
+            >
+              {t("rescanSources")}
+            </Button>
+            <HelpTip label={t("help")} text={githubRateLimitHelp} />
+          </span>
           <Button
             onClick={scanLocalSkills}
             pending={isPending("scanLocalSkills")}
@@ -3993,13 +4042,16 @@ function Toolbar({
       )}
       {activeTab === "plugins" && (
         <div className="toolbar-group">
-          <Button
-            onClick={checkAllRepos}
-            pending={isPending("checkAllRepos")}
-            pendingLabel={t("checking")}
-          >
-            {t("rescanSources")}
-          </Button>
+          <span className="control-with-help">
+            <Button
+              onClick={checkAllRepos}
+              pending={isPending("checkAllRepos")}
+              pendingLabel={t("checking")}
+            >
+              {t("rescanSources")}
+            </Button>
+            <HelpTip label={t("help")} text={githubRateLimitHelp} />
+          </span>
         </div>
       )}
       {activeTab === "tasks" && (
@@ -5169,10 +5221,12 @@ function PreferencesPanel({
   githubTokenConfigured,
   githubTokenStatus,
   githubTokenLastVerified,
+  githubRateLimitHelp,
   nextAutoCheckAt,
   nextAutoBackupAt,
   directoryStatus,
   migrationStatus,
+  appMetadata,
   chooseDirectory,
   validateDirectory,
   syncInstalledSkills,
@@ -5253,7 +5307,15 @@ function PreferencesPanel({
         </SettingsSection>
 
         <SettingsSection title={t("taskBehavior")}>
-          <SettingRow controlId="metadata-concurrency-input" label={t("metadataConcurrency")}>
+          <SettingRow
+            controlId="metadata-concurrency-input"
+            label={
+              <span className="label-with-help">
+                {t("metadataConcurrency")}
+                <HelpTip label={t("help")} text={githubRateLimitHelp} />
+              </span>
+            }
+          >
             <div className="range-row">
               <input
                 id="metadata-concurrency-input"
@@ -5513,6 +5575,7 @@ function PreferencesPanel({
         </SettingsSection>
 
         <AboutPanel
+          appMetadata={appMetadata}
           desktopRuntime={desktopRuntime}
           language={language}
           showToast={showToast}
@@ -5547,21 +5610,21 @@ function SettingRow({ label, description, controlId, stacked = false, children }
   );
 }
 
-function AboutPanel({ desktopRuntime, language, showToast, t }: any) {
+function AboutPanel({ appMetadata = APP_METADATA, desktopRuntime, language, showToast, t }: any) {
   const [checking, setChecking] = useState(false);
   const [updateStatus, setUpdateStatus] = useState("");
-  const defaultUpdateStatus = APP_METADATA.openSource && APP_METADATA.projectGithubUrl
+  const defaultUpdateStatus = appMetadata.openSource && appMetadata.projectGithubUrl
     ? t("updateCheckReady")
     : t("updateUnavailableInternalBuild");
 
   async function checkForUpdates() {
-    if (!APP_METADATA.openSource || !APP_METADATA.projectGithubUrl) {
+    if (!appMetadata.openSource || !appMetadata.projectGithubUrl) {
       setUpdateStatus(t("updateUnavailableInternalBuild"));
       showToast(t("updateUnavailableInternalBuild"));
       return;
     }
 
-    const match = APP_METADATA.projectGithubUrl.match(/github\.com\/([^/]+)\/([^/#?]+)/i);
+    const match = appMetadata.projectGithubUrl.match(/github\.com\/([^/]+)\/([^/#?]+)/i);
     if (!match) {
       setUpdateStatus(t("updateCheckFailed"));
       showToast(t("updateCheckFailed"));
@@ -5577,7 +5640,7 @@ function AboutPanel({ desktopRuntime, language, showToast, t }: any) {
       }
       const release = await response.json();
       const latest = String(release.tag_name || "").replace(/^v/i, "");
-      const current = APP_METADATA.version.replace(/^v/i, "");
+      const current = appMetadata.version.replace(/^v/i, "");
       const message = latest && latest !== current
         ? `${language === "zh" ? "发现新版本" : "New version"} v${latest}`
         : t("updateUpToDate");
@@ -5592,15 +5655,15 @@ function AboutPanel({ desktopRuntime, language, showToast, t }: any) {
   }
 
   async function openProjectGithub() {
-    if (!APP_METADATA.openSource || !APP_METADATA.projectGithubUrl) {
+    if (!appMetadata.openSource || !appMetadata.projectGithubUrl) {
       showToast(t("projectGithubComingSoon"));
       return;
     }
     try {
       if (desktopRuntime) {
-        await api.openUrl(APP_METADATA.projectGithubUrl, "systemDefault");
+        await api.openUrl(appMetadata.projectGithubUrl, "systemDefault");
       } else {
-        window.open(APP_METADATA.projectGithubUrl, "_blank", "noopener,noreferrer");
+        window.open(appMetadata.projectGithubUrl, "_blank", "noopener,noreferrer");
       }
     } catch (error) {
       showToast(error.message || t("openUrlFailed"));
@@ -5611,12 +5674,12 @@ function AboutPanel({ desktopRuntime, language, showToast, t }: any) {
     <SettingsSection title={t("aboutTitle")}>
       <div className="about-card">
         <div>
-          <strong>{APP_METADATA.name}</strong>
+          <strong>{appMetadata.name}</strong>
           <span>{t("settingsHelp")}</span>
         </div>
         <div className="status-card compact-status">
           <span>{t("aboutVersion")}</span>
-          <strong>v{APP_METADATA.version}</strong>
+          <strong>v{appMetadata.version}</strong>
         </div>
         <p className="settings-note">{updateStatus || defaultUpdateStatus}</p>
         <div className="about-actions">
@@ -5628,13 +5691,13 @@ function AboutPanel({ desktopRuntime, language, showToast, t }: any) {
             {t("checkForUpdates")}
           </Button>
           <Button
-            disabled={!APP_METADATA.openSource || !APP_METADATA.projectGithubUrl}
+            disabled={!appMetadata.openSource || !appMetadata.projectGithubUrl}
             onClick={openProjectGithub}
           >
             {t("openProjectGithub")}
           </Button>
         </div>
-        {(!APP_METADATA.openSource || !APP_METADATA.projectGithubUrl) && (
+        {(!appMetadata.openSource || !appMetadata.projectGithubUrl) && (
           <p className="settings-note">{t("projectGithubComingSoon")}</p>
         )}
       </div>
