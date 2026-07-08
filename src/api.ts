@@ -99,6 +99,18 @@ export type MigrationPackageSummary = {
   message: string;
 };
 
+export type UiTask = {
+  id: string;
+  kind: string;
+  target: string;
+  progress: string;
+  status: string;
+  summary: string;
+  retryable: boolean;
+  retryReason?: string | null;
+  log: string[];
+};
+
 const runningInTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
 async function command<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -132,7 +144,7 @@ export const api = {
   getRepositoryReadme: (repoId: string) =>
     command<any>("get_repository_readme", { request: { repoId } }),
   getGithubPreview: (url: string) => command<any>("get_github_preview", { request: { url } }),
-  listTasks: () => command<any[]>("list_tasks"),
+  listTasks: () => command<UiTask[]>("list_tasks"),
   getSettings: () => command<any>("get_settings"),
   pickDirectory: (defaultPath?: string) => command<string | null>("pick_directory", { defaultPath }),
   validateDirectory: (kind: string, path: string) =>
@@ -156,7 +168,7 @@ export const api = {
     command<any[]>("update_skill_sync_targets", { request: { skillId, mode, targets } }),
   resolveSkillLocalConflict: (skillId: string, choice: string) =>
     command<any[]>("resolve_skill_local_conflict", { request: { skillId, choice } }),
-  retryTask: (taskId: string) => command<any[]>("retry_task", { request: { taskId } }),
+  retryTask: (taskId: string) => command<UiTask[]>("retry_task", { request: { taskId } }),
   cancelTask: (taskId: string) => command<any[]>("cancel_task", { request: { taskId } }),
   copyTaskSummary: (taskId: string) => command<string>("copy_task_summary", { request: { taskId } }),
   removeRepository: (id: string) => command<any[]>("remove_repository", { id }),

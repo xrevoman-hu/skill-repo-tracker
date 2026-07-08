@@ -795,6 +795,8 @@ const COPY = {
     progress: "进度",
     taskSummary: "摘要",
     retry: "重试",
+    retryUnavailable: "旧任务缺少可重试参数，请从来源页面重新执行。",
+    retryOnlyFailed: "只有失败、部分成功或已中断任务可以重试。",
     copy: "复制",
     taskLog: "任务日志",
     taskAudit: "任务审计",
@@ -968,7 +970,8 @@ const COPY = {
     updateSkipped: "已跳过更新，本地改动已保留。",
     localBackupDone: "已先备份本地副本再覆盖。",
     forceOverwriteDone: "已用远端版本强制覆盖 Skill。",
-    retryAdded: "已添加重试任务。",
+    retryAdded: "已重新执行任务。",
+    retryRejected: "此任务不可重试。",
     taskCopied: "任务摘要已复制。",
     rootSaved: "备份根目录已保存。",
     settingsSaved: "设置已保存。",
@@ -1191,6 +1194,8 @@ const COPY = {
     progress: "Progress",
     taskSummary: "Summary",
     retry: "Retry",
+    retryUnavailable: "This older task has no retry parameters. Run it again from its source page.",
+    retryOnlyFailed: "Only failed, partially successful, or interrupted tasks can be retried.",
     copy: "Copy",
     taskLog: "Task log",
     taskAudit: "Task audit",
@@ -1364,7 +1369,8 @@ const COPY = {
     updateSkipped: "Update skipped. Local changes were preserved.",
     localBackupDone: "Local copy backed up before overwrite.",
     forceOverwriteDone: "Skill force overwritten with remote version.",
-    retryAdded: "Retry task added.",
+    retryAdded: "Task retried.",
+    retryRejected: "This task cannot be retried.",
     taskCopied: "Task summary copied.",
     rootSaved: "Backup root saved.",
     settingsSaved: "Settings saved.",
@@ -3219,6 +3225,10 @@ export function App() {
   async function retryTask(task) {
     const actionKey = `retryTask:${task.id}`;
     if (isPending(actionKey)) return;
+    if (!canRetryTask(task)) {
+      showToast(task.retryReason || t("retryRejected"));
+      return;
+    }
     const optimisticTaskId = beginOptimisticTask(actionKey, {
       kind: "Retry task",
       target: task.target,
@@ -3238,15 +3248,7 @@ export function App() {
       setActionPending(actionKey, false);
       return;
     }
-    addTask({
-      kind: task.kind,
-      target: `${task.target} retry`,
-      progress: "1 / 1",
-      status: "success",
-      summary: "retry completed",
-      log: ["retry failed item", "complete without changing unrelated state"],
-    });
-    showToast(t("retryAdded"));
+    showToast(t("retryRejected"));
     finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
@@ -4892,6 +4894,24 @@ function SkillInspector({
   );
 }
 
+function isRetryStatus(status: string) {
+  return ["failed", "interrupted", "partial-success"].includes(status);
+}
+
+function canRetryTask(task: any) {
+  return Boolean(task?.retryable) && isRetryStatus(task.status);
+}
+
+function retryTaskTitle(task: any, language: string, t: (key: string) => string) {
+  if (!isRetryStatus(task.status)) {
+    return t("retryOnlyFailed");
+  }
+  if (!task.retryable) {
+    return taskText(task.retryReason || t("retryUnavailable"), language);
+  }
+  return `${t("retry")}: ${taskText(task.target, language)}`;
+}
+
 function TasksView({ tasks, taskFilter, setTaskFilter, retryTask, copyTaskSummary, hasTasks, isPending, language, t }: any) {
   const filters = [
     ["all", t("all")],
@@ -4968,11 +4988,11 @@ function TasksView({ tasks, taskFilter, setTaskFilter, retryTask, copyTaskSummar
                         <button
                           aria-label={`${t("retry")}: ${taskText(task.target, language)}`}
                           disabled={
-                            !["failed", "interrupted", "partial-success"].includes(task.status) ||
+                            !canRetryTask(task) ||
                             isPending(`retryTask:${task.id}`)
                           }
                           onClick={() => retryTask(task)}
-                          title={`${t("retry")}: ${taskText(task.target, language)}`}
+                          title={retryTaskTitle(task, language, t)}
                           type="button"
                         >
                           {isPending(`retryTask:${task.id}`) ? t("retrying") : t("retry")}
@@ -5010,6 +5030,12 @@ function TasksView({ tasks, taskFilter, setTaskFilter, retryTask, copyTaskSummar
               <Detail label={t("target")} value={taskText(expandedTask.target, language)} />
               <Detail label={t("progress")} value={expandedTask.progress} />
               <Detail label={t("taskSummary")} value={taskText(expandedTask.summary, language)} />
+              {!canRetryTask(expandedTask) && isRetryStatus(expandedTask.status) && (
+                <Detail
+                  label={t("retry")}
+                  value={taskText(expandedTask.retryReason || t("retryUnavailable"), language)}
+                />
+              )}
             </div>
             <div className="log-actions">
               <h2>{t("taskLog")}</h2>
@@ -5017,11 +5043,11 @@ function TasksView({ tasks, taskFilter, setTaskFilter, retryTask, copyTaskSummar
                 <button
                   aria-label={`${t("retry")}: ${taskText(expandedTask.target, language)}`}
                   disabled={
-                    !["failed", "interrupted", "partial-success"].includes(expandedTask.status) ||
+                    !canRetryTask(expandedTask) ||
                     isPending(`retryTask:${expandedTask.id}`)
                   }
                   onClick={() => retryTask(expandedTask)}
-                  title={`${t("retry")}: ${taskText(expandedTask.target, language)}`}
+                  title={retryTaskTitle(expandedTask, language, t)}
                   type="button"
                 >
                   {isPending(`retryTask:${expandedTask.id}`) ? t("retrying") : t("retry")}

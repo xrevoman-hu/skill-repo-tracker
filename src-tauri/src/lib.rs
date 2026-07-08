@@ -4,7 +4,7 @@ use reqwest::header::{
     HeaderMap, HeaderName, HeaderValue, ACCEPT, AUTHORIZATION, LINK, USER_AGENT,
 };
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
@@ -39,6 +39,16 @@ const SYNC_TARGET_IDS: [&str; 6] = [
     "claude", "codex", "gemini", "opencode", "openclaw", "hermes",
 ];
 const DEFAULT_SYNC_TARGET_IDS: [&str; 2] = ["claude", "codex"];
+const RETRY_ADD_REPOSITORY: &str = "add_repository";
+const RETRY_ADD_REPOSITORY_FROM_GITHUB: &str = "add_repository_from_github";
+const RETRY_ADD_LOCAL_REPOSITORY: &str = "add_local_repository";
+const RETRY_BACKUP_REPOSITORIES: &str = "backup_repositories";
+const RETRY_CHECK_REPOSITORIES: &str = "check_repositories";
+const RETRY_INSTALL_SKILL: &str = "install_skill";
+const RETRY_SCAN_LOCAL_SKILLS: &str = "scan_local_skills";
+const RETRY_SYNC_INSTALLED_SKILLS: &str = "sync_installed_skills";
+const RETRY_UPDATE_SKILL: &str = "update_skill";
+const RETRY_UPDATE_SKILL_SYNC_TARGETS: &str = "update_skill_sync_targets";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -451,6 +461,8 @@ pub struct UiTask {
     progress: String,
     status: String,
     summary: String,
+    retryable: bool,
+    retry_reason: Option<String>,
     log: Vec<String>,
 }
 
@@ -631,7 +643,7 @@ pub struct MigrationUserNote {
     updated_at: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AddRepositoryRequest {
     url: String,
@@ -672,20 +684,20 @@ pub struct MigrationPackageSummary {
     message: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct CheckRepositoriesRequest {
     repo_ids: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BackupRepositoriesRequest {
     mode: String,
     repo_ids: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillActionRequest {
     skill_id: String,
@@ -724,13 +736,13 @@ pub struct SkillConflictRequest {
     choice: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanLocalSkillsRequest {
     root: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalRepositoryRequest {
     path: String,
@@ -794,7 +806,7 @@ pub struct GithubStarRequest {
     starred: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct AddRepositoryFromGithubRequest {
     account_id: String,
@@ -827,7 +839,7 @@ pub struct ScheduleRequest {
     interval_minutes: i64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SkillSyncTargetsRequest {
     skill_id: String,
@@ -885,6 +897,7 @@ struct SkillScan {
     description: String,
     path: String,
     version: String,
+    content_hash: String,
     search_text: String,
 }
 
@@ -1035,6 +1048,10 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           status TEXT NOT NULL,
           summary TEXT NOT NULL,
           backup_dir TEXT,
+          retryable INTEGER NOT NULL DEFAULT 0,
+          retry_action TEXT,
+          retry_payload TEXT,
+          retry_reason TEXT,
           created_at TEXT NOT NULL,
           started_at TEXT,
           completed_at TEXT
@@ -1226,6 +1243,30 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
         "github_repo_catalog",
         "readme_search_text",
         "ALTER TABLE github_repo_catalog ADD COLUMN readme_search_text TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "backup_jobs",
+        "retryable",
+        "ALTER TABLE backup_jobs ADD COLUMN retryable INTEGER NOT NULL DEFAULT 0",
+    )?;
+    add_column_if_missing(
+        conn,
+        "backup_jobs",
+        "retry_action",
+        "ALTER TABLE backup_jobs ADD COLUMN retry_action TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
+        "backup_jobs",
+        "retry_payload",
+        "ALTER TABLE backup_jobs ADD COLUMN retry_payload TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
+        "backup_jobs",
+        "retry_reason",
+        "ALTER TABLE backup_jobs ADD COLUMN retry_reason TEXT",
     )?;
     backfill_search_metadata(conn)?;
     Ok(())
@@ -2294,7 +2335,7 @@ fn plugin_linked_skills(
 
 fn load_ui_tasks(conn: &Connection) -> Result<Vec<UiTask>, AppError> {
     let mut stmt = conn.prepare(
-        "SELECT id, kind, target, progress, status, summary
+        "SELECT id, kind, target, progress, status, summary, retryable, retry_reason
          FROM backup_jobs
          ORDER BY created_at DESC
          LIMIT 100",
@@ -2307,12 +2348,14 @@ fn load_ui_tasks(conn: &Connection) -> Result<Vec<UiTask>, AppError> {
             row.get::<_, String>(3)?,
             row.get::<_, String>(4)?,
             row.get::<_, String>(5)?,
+            row.get::<_, i64>(6)?,
+            row.get::<_, Option<String>>(7)?,
         ))
     })?;
 
     let mut tasks = Vec::new();
     for row in rows {
-        let (id, kind, target, progress, status, summary) = row?;
+        let (id, kind, target, progress, status, summary, retryable, retry_reason) = row?;
         let log = load_task_log(conn, &id)?;
         tasks.push(UiTask {
             id,
@@ -2321,6 +2364,8 @@ fn load_ui_tasks(conn: &Connection) -> Result<Vec<UiTask>, AppError> {
             progress,
             status,
             summary,
+            retryable: retryable == 1,
+            retry_reason,
             log,
         });
     }
@@ -2364,6 +2409,106 @@ fn insert_task(
         )?;
     }
     Ok(())
+}
+
+fn insert_retryable_task<T: Serialize>(
+    conn: &Connection,
+    id: &str,
+    kind: &str,
+    target: &str,
+    progress: &str,
+    status: &str,
+    summary: &str,
+    backup_dir: Option<&str>,
+    log: &[String],
+    retry_action: &str,
+    retry_payload: &T,
+) -> Result<(), AppError> {
+    insert_task(
+        conn, id, kind, target, progress, status, summary, backup_dir, log,
+    )?;
+    let payload = serde_json::to_string(retry_payload).map_err(|err| {
+        AppError::with_details(
+            "retry_payload_invalid",
+            "任务重试参数序列化失败。",
+            err.to_string(),
+        )
+    })?;
+    conn.execute(
+        "UPDATE backup_jobs
+         SET retryable = 1, retry_action = ?2, retry_payload = ?3, retry_reason = NULL
+         WHERE id = ?1",
+        params![id, retry_action, payload],
+    )?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct TaskRetryMetadata {
+    action: String,
+    payload: String,
+}
+
+fn load_task_retry_metadata(
+    conn: &Connection,
+    task_id: &str,
+) -> Result<TaskRetryMetadata, AppError> {
+    let (status, retryable, retry_action, retry_payload, retry_reason) = conn
+        .query_row(
+            "SELECT status, retryable, retry_action, retry_payload, retry_reason
+             FROM backup_jobs
+             WHERE id = ?1",
+            params![task_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
+        )
+        .optional()?
+        .ok_or_else(|| AppError::new("task_not_found", "任务不存在。"))?;
+    if !matches!(
+        status.as_str(),
+        "failed" | "partial-success" | "interrupted"
+    ) {
+        return Err(AppError::new(
+            "task_not_retryable",
+            "只有失败、部分成功或已中断任务可以重试。",
+        ));
+    }
+    if retryable != 1 {
+        return Err(AppError::new(
+            "task_not_retryable",
+            retry_reason.unwrap_or_else(|| "旧任务缺少可重试参数，请从来源页面重新执行。".into()),
+        ));
+    }
+    let action = retry_action.ok_or_else(|| {
+        AppError::new(
+            "task_not_retryable",
+            "任务缺少可重试动作，请从来源页面重新执行。",
+        )
+    })?;
+    let payload = retry_payload.ok_or_else(|| {
+        AppError::new(
+            "task_not_retryable",
+            "任务缺少可重试参数，请从来源页面重新执行。",
+        )
+    })?;
+    Ok(TaskRetryMetadata { action, payload })
+}
+
+fn parse_retry_payload<T: DeserializeOwned>(payload: &str) -> Result<T, AppError> {
+    serde_json::from_str(payload).map_err(|err| {
+        AppError::with_details(
+            "retry_payload_invalid",
+            "任务重试参数读取失败。",
+            err.to_string(),
+        )
+    })
 }
 
 fn insert_failed_task(
@@ -2931,11 +3076,13 @@ fn scan_skills_from_zip(bytes: &[u8], repo_name: &str) -> Result<Vec<SkillScan>,
         let description = extract_markdown_field(&contents, "description").unwrap_or_default();
         let version =
             extract_markdown_field(&contents, "version").unwrap_or_else(|| "v0.1.0".into());
+        let content_hash = hash_skill_from_zip(bytes, &skill_path)?;
         skills.push(SkillScan {
             name,
             description,
             path: skill_path,
             version,
+            content_hash,
             search_text: truncate_search_index(&contents),
         });
     }
@@ -2993,6 +3140,7 @@ fn scan_skills_from_directory(root: &Path, repo_name: &str) -> Result<Vec<SkillS
             description,
             path: skill_path,
             version,
+            content_hash: hash_directory(skill_dir)?,
             search_text: truncate_search_index(&contents),
         });
     }
@@ -3251,21 +3399,31 @@ fn sync_skills(
     for scan in scans {
         let id = skill_id(repo_id, &scan.path);
         seen.push(id.clone());
-        let existing: Option<(i64, Option<String>, String)> = conn
+        let existing: Option<(i64, Option<String>, String, Option<String>)> = conn
             .query_row(
-                "SELECT installed, installed_hash, status FROM skills WHERE id = ?1",
+                "SELECT installed, installed_hash, status, local_version FROM skills WHERE id = ?1",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .optional()?;
-        let (installed, installed_hash, status) =
-            existing.unwrap_or((0, None, "not-installed".into()));
+        let (installed, installed_hash, status, local_version) =
+            existing.unwrap_or((0, None, "not-installed".into(), None));
+        let remote_hash_matches = installed_hash.as_deref() == Some(scan.content_hash.as_str());
         let next_status = if installed == 0 {
             "not-installed".to_string()
         } else if status == "local-modified" {
             "local-modified".to_string()
+        } else if remote_hash_matches {
+            "installed-latest".to_string()
         } else {
             "update-available".to_string()
+        };
+        let next_local_version = if installed == 0 {
+            None
+        } else if status != "local-modified" && remote_hash_matches {
+            Some(scan.version.as_str())
+        } else {
+            local_version.as_deref()
         };
         conn.execute(
             "INSERT INTO skills
@@ -3277,6 +3435,7 @@ fn sync_skills(
               description = excluded.description,
               repo_name = excluded.repo_name,
               ref_name = excluded.ref_name,
+              local_version = excluded.local_version,
               remote_version = excluded.remote_version,
               status = excluded.status,
               source_type = excluded.source_type,
@@ -3291,7 +3450,7 @@ fn sync_skills(
                 repo.full_name,
                 scan.path,
                 repo.resolved_ref,
-                if installed == 1 { Some(scan.version.as_str()) } else { None },
+                next_local_version,
                 scan.version,
                 next_status,
                 installed,
@@ -3646,6 +3805,47 @@ fn hash_directory(path: &Path) -> Result<String, AppError> {
             hasher.update(relative.to_string_lossy().as_bytes());
         }
         hasher.update(fs::read(entry)?);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn hash_skill_from_zip(bytes: &[u8], skill_path: &str) -> Result<String, AppError> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+    let normalized_skill_path = if skill_path == "." {
+        String::new()
+    } else {
+        format!("{}/", skill_path.trim_matches('/'))
+    };
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index)?;
+        if !file.is_file() {
+            continue;
+        }
+        let relative = strip_zip_root(file.name());
+        if !normalized_skill_path.is_empty() && !relative.starts_with(&normalized_skill_path) {
+            continue;
+        }
+        let output_relative = if normalized_skill_path.is_empty() {
+            relative
+        } else {
+            relative
+                .strip_prefix(&normalized_skill_path)
+                .unwrap_or("")
+                .to_string()
+        };
+        if output_relative.is_empty() {
+            continue;
+        }
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)?;
+        entries.push((output_relative, contents));
+    }
+    entries.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut hasher = Sha256::new();
+    for (relative, contents) in entries {
+        hasher.update(relative.as_bytes());
+        hasher.update(contents);
     }
     Ok(hex::encode(hasher.finalize()))
 }
@@ -4873,7 +5073,7 @@ async fn add_repository(
                 note,
             )?;
         }
-        insert_task(
+        insert_retryable_task(
             &db,
             &format!("scan-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Scan repository",
@@ -4895,6 +5095,8 @@ async fn add_repository(
                     format!("found {} SKILL.md file(s)", scans.len())
                 },
             ],
+            RETRY_ADD_REPOSITORY,
+            &request,
         )?;
         let _ = id;
         load_ui_repositories(&db)
@@ -5005,7 +5207,7 @@ async fn check_repositories(
 
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<UiRepository>, AppError> {
-        insert_task(
+        insert_retryable_task(
             &db,
             &format!("check-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Check remote state",
@@ -5019,6 +5221,8 @@ async fn check_repositories(
             &format!("{success} success, {failed} failed"),
             None,
             &log,
+            RETRY_CHECK_REPOSITORIES,
+            &request,
         )?;
         load_ui_repositories(&db)
     })();
@@ -5263,7 +5467,7 @@ async fn backup_repositories(
             manifest_failures.len()
         );
         let job_id = format!("backup-{backup_id}");
-        insert_task(
+        insert_retryable_task(
             &db,
             &job_id,
             "Backup repositories",
@@ -5273,6 +5477,8 @@ async fn backup_repositories(
             &summary,
             Some(&path_string(&backup_dir)),
             &log,
+            RETRY_BACKUP_REPOSITORIES,
+            &request,
         )?;
         db.execute(
             "INSERT INTO backup_manifests (id, backup_dir, manifest_path, created_at, mode, status, summary)
@@ -5425,21 +5631,56 @@ async fn update_skill_inner(
         } else {
             "local Skill updated".to_string()
         };
-        insert_task(
-            &db,
-            &format!("skill-{}", Local::now().format("%Y%m%d%H%M%S")),
-            "Update Skill",
-            &skill.name,
-            &format!(
-                "{} / {}",
-                sync_report.success_count + 1,
-                sync_report.success_count + sync_report.failure_count + 1
-            ),
-            task_status,
-            &task_summary,
-            None,
-            &task_log,
-        )?;
+        let task_id = format!("skill-{}", Local::now().format("%Y%m%d%H%M%S"));
+        let task_progress = format!(
+            "{} / {}",
+            sync_report.success_count + 1,
+            sync_report.success_count + sync_report.failure_count + 1
+        );
+        let retry_payload = SkillActionRequest {
+            skill_id: skill_id_value.clone(),
+        };
+        if mode == "install" {
+            insert_retryable_task(
+                &db,
+                &task_id,
+                "Update Skill",
+                &skill.name,
+                &task_progress,
+                task_status,
+                &task_summary,
+                None,
+                &task_log,
+                RETRY_INSTALL_SKILL,
+                &retry_payload,
+            )?;
+        } else if mode == "update" {
+            insert_retryable_task(
+                &db,
+                &task_id,
+                "Update Skill",
+                &skill.name,
+                &task_progress,
+                task_status,
+                &task_summary,
+                None,
+                &task_log,
+                RETRY_UPDATE_SKILL,
+                &retry_payload,
+            )?;
+        } else {
+            insert_task(
+                &db,
+                &task_id,
+                "Update Skill",
+                &skill.name,
+                &task_progress,
+                task_status,
+                &task_summary,
+                None,
+                &task_log,
+            )?;
+        }
         load_ui_skills(&db)
     })();
     Ok(match result {
@@ -5578,7 +5819,7 @@ fn scan_local_skills(
         }
         let scans = scan_skills_from_directory(&root, "Local Skills")?;
         save_local_repository(&db, &root, &scans, true)?;
-        insert_task(
+        insert_retryable_task(
             &db,
             &format!("local-scan-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Scan local Skills",
@@ -5591,6 +5832,8 @@ fn scan_local_skills(
                 format!("scan {}", path_string(&root)),
                 format!("found {} SKILL.md file(s)", scans.len()),
             ],
+            RETRY_SCAN_LOCAL_SKILLS,
+            &request,
         )?;
         load_ui_skills(&db)
     })();
@@ -5631,7 +5874,7 @@ fn add_local_repository(
         let scans = scan_skills_from_directory(&root, &name)?;
         let plugins = scan_plugins_from_directory(&root, &name, &scans)?;
         save_local_repository_with_plugins(&db, &root, &scans, &plugins, false)?;
-        insert_task(
+        insert_retryable_task(
             &db,
             &format!("local-repo-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Scan local repository",
@@ -5648,6 +5891,8 @@ fn add_local_repository(
                 format!("scan local repository {}", path_string(&root)),
                 format!("found {} SKILL.md file(s)", scans.len()),
             ],
+            RETRY_ADD_LOCAL_REPOSITORY,
+            &request,
         )?;
         load_ui_repositories(&db)
     })();
@@ -5900,7 +6145,7 @@ fn sync_installed_skills(state: State<'_, AppState>) -> ApiResponse<Vec<UiSkill>
             aggregate.skipped_count += report.skipped_count;
             aggregate.log.extend(report.log);
         }
-        insert_task(
+        insert_retryable_task(
             &db,
             &format!("sync-skills-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Apply Skill sync settings",
@@ -5914,6 +6159,8 @@ fn sync_installed_skills(state: State<'_, AppState>) -> ApiResponse<Vec<UiSkill>
             &sync_task_summary(&aggregate),
             None,
             &aggregate.log,
+            RETRY_SYNC_INSTALLED_SKILLS,
+            &serde_json::json!({}),
         )?;
         load_ui_skills(&db)
     })();
@@ -5954,7 +6201,7 @@ fn update_skill_sync_targets(
         let skill = load_skill_record(&db, &requested_skill_id)?
             .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
         let report = reconcile_skill_sync(&db, &settings, &skill);
-        insert_task(
+        insert_retryable_task(
             &db,
             &format!("sync-targets-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Update Skill sync targets",
@@ -5968,6 +6215,8 @@ fn update_skill_sync_targets(
             &sync_task_summary(&report),
             None,
             &report.log,
+            RETRY_UPDATE_SKILL_SYNC_TARGETS,
+            &request,
         )?;
         load_ui_skills(&db)
     })();
@@ -5991,28 +6240,115 @@ fn remove_repository(id: String, state: State<'_, AppState>) -> ApiResponse<Vec<
 }
 
 #[tauri::command]
-fn retry_task(request: TaskRequest, state: State<'_, AppState>) -> ApiResponse<Vec<UiTask>> {
+async fn retry_task(
+    request: TaskRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<UiTask>> {
+    let metadata = {
+        let db = state.db.lock().expect("db mutex poisoned");
+        match load_task_retry_metadata(&db, &request.task_id) {
+            Ok(metadata) => metadata,
+            Err(error) => return Ok(api_err(error)),
+        }
+    };
+
+    let command_error = match metadata.action.as_str() {
+        RETRY_ADD_REPOSITORY => {
+            let retry_request: AddRepositoryRequest = match parse_retry_payload(&metadata.payload) {
+                Ok(request) => request,
+                Err(error) => return Ok(api_err(error)),
+            };
+            add_repository(retry_request, state.clone()).await?.error
+        }
+        RETRY_ADD_REPOSITORY_FROM_GITHUB => {
+            let retry_request: AddRepositoryFromGithubRequest =
+                match parse_retry_payload(&metadata.payload) {
+                    Ok(request) => request,
+                    Err(error) => return Ok(api_err(error)),
+                };
+            add_repository_from_github(retry_request, state.clone())
+                .await?
+                .error
+        }
+        RETRY_ADD_LOCAL_REPOSITORY => {
+            let retry_request: LocalRepositoryRequest = match parse_retry_payload(&metadata.payload)
+            {
+                Ok(request) => request,
+                Err(error) => return Ok(api_err(error)),
+            };
+            add_local_repository(retry_request, state.clone()).error
+        }
+        RETRY_BACKUP_REPOSITORIES => {
+            let retry_request: BackupRepositoriesRequest =
+                match parse_retry_payload(&metadata.payload) {
+                    Ok(request) => request,
+                    Err(error) => return Ok(api_err(error)),
+                };
+            backup_repositories(retry_request, state.clone())
+                .await?
+                .error
+        }
+        RETRY_CHECK_REPOSITORIES => {
+            let retry_request: CheckRepositoriesRequest =
+                match parse_retry_payload(&metadata.payload) {
+                    Ok(request) => request,
+                    Err(error) => return Ok(api_err(error)),
+                };
+            check_repositories(retry_request, state.clone())
+                .await?
+                .error
+        }
+        RETRY_INSTALL_SKILL => {
+            let retry_request: SkillActionRequest = match parse_retry_payload(&metadata.payload) {
+                Ok(request) => request,
+                Err(error) => return Ok(api_err(error)),
+            };
+            install_skill(retry_request, state.clone()).await?.error
+        }
+        RETRY_SCAN_LOCAL_SKILLS => {
+            let retry_request: ScanLocalSkillsRequest = match parse_retry_payload(&metadata.payload)
+            {
+                Ok(request) => request,
+                Err(error) => return Ok(api_err(error)),
+            };
+            scan_local_skills(retry_request, state.clone()).error
+        }
+        RETRY_SYNC_INSTALLED_SKILLS => sync_installed_skills(state.clone()).error,
+        RETRY_UPDATE_SKILL => {
+            let retry_request: SkillActionRequest = match parse_retry_payload(&metadata.payload) {
+                Ok(request) => request,
+                Err(error) => return Ok(api_err(error)),
+            };
+            update_skill(retry_request, state.clone()).await?.error
+        }
+        RETRY_UPDATE_SKILL_SYNC_TARGETS => {
+            let retry_request: SkillSyncTargetsRequest =
+                match parse_retry_payload(&metadata.payload) {
+                    Ok(request) => request,
+                    Err(error) => return Ok(api_err(error)),
+                };
+            update_skill_sync_targets(retry_request, state.clone()).error
+        }
+        _ => {
+            return Ok(api_err(AppError::with_details(
+                "task_not_retryable",
+                "该任务动作不支持重试。",
+                metadata.action,
+            )))
+        }
+    };
+
+    if let Some(error) = command_error {
+        return Ok(ApiResponse {
+            ok: false,
+            data: None,
+            error: Some(error),
+        });
+    }
     let db = state.db.lock().expect("db mutex poisoned");
-    let result = (|| -> Result<Vec<UiTask>, AppError> {
-        insert_task(
-            &db,
-            &format!("retry-{}", Local::now().format("%Y%m%d%H%M%S")),
-            "Retry task",
-            &request.task_id,
-            "1 / 1",
-            "success",
-            "retry completed",
-            None,
-            &[
-                "retry failed item".into(),
-                "complete without changing unrelated state".into(),
-            ],
-        )?;
-        load_ui_tasks(&db)
-    })();
-    match result {
-        Ok(items) => ApiResponse::ok(items),
-        Err(error) => api_err(error),
+    match load_ui_tasks(&db) {
+        Ok(items) => Ok(ApiResponse::ok(items)),
+        Err(error) => Ok(api_err(error)),
     }
 }
 
@@ -7136,7 +7472,7 @@ async fn add_repository_from_github(
             Some(&request.account_id),
             &readme_search_text,
         )?;
-        insert_task(
+        insert_retryable_task(
             &db,
             &format!("scan-{}", Local::now().format("%Y%m%d%H%M%S")),
             "Scan repository",
@@ -7158,6 +7494,8 @@ async fn add_repository_from_github(
                     format!("found {} SKILL.md file(s)", scans.len())
                 },
             ],
+            RETRY_ADD_REPOSITORY_FROM_GITHUB,
+            &request,
         )?;
         db.execute(
             "UPDATE github_repo_catalog
@@ -7398,13 +7736,19 @@ mod tests {
     use zip::{write::SimpleFileOptions, ZipWriter};
 
     fn zip_with_file(path: &str, bytes: &[u8]) -> Vec<u8> {
+        zip_with_files(&[(path, bytes)])
+    }
+
+    fn zip_with_files(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut buffer = Cursor::new(Vec::new());
         {
             let mut writer = ZipWriter::new(&mut buffer);
-            writer
-                .start_file(path, SimpleFileOptions::default())
-                .unwrap();
-            writer.write_all(bytes).unwrap();
+            for (path, bytes) in files {
+                writer
+                    .start_file(*path, SimpleFileOptions::default())
+                    .unwrap();
+                writer.write_all(bytes).unwrap();
+            }
             writer.finish().unwrap();
         }
         buffer.into_inner()
@@ -7432,6 +7776,25 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("none");
         assert_eq!(hash_directory(&missing).unwrap(), "missing");
+    }
+
+    #[test]
+    fn skill_zip_content_hash_matches_extracted_directory_hash() {
+        let zip = zip_with_files(&[
+            (
+                "example-demo/skills/demo/SKILL.md",
+                b"name: demo-skill\ndescription: Demo\nversion: v1.0.0",
+            ),
+            ("example-demo/skills/demo/assets/prompt.md", b"prompt"),
+            ("example-demo/README.md", b"repo readme"),
+        ]);
+        let scans = scan_skills_from_zip(&zip, "example/demo").unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let dest = root.path().join("demo");
+        extract_skill_from_zip(&zip, "skills/demo", &dest).unwrap();
+
+        assert_eq!(scans.len(), 1);
+        assert_eq!(scans[0].content_hash, hash_directory(&dest).unwrap());
     }
 
     #[test]
@@ -7686,6 +8049,7 @@ mod tests {
                 description: "image".into(),
                 path: "skills/baoyu-image-gen".into(),
                 version: "v1.0.0".into(),
+                content_hash: "hash-baoyu-image-gen".into(),
                 search_text: "image".into(),
             },
             SkillScan {
@@ -7693,6 +8057,7 @@ mod tests {
                 description: "research".into(),
                 path: "skills/baoyu-research".into(),
                 version: "v1.0.0".into(),
+                content_hash: "hash-baoyu-research".into(),
                 search_text: "research".into(),
             },
         ];
@@ -7757,6 +8122,7 @@ clawhub install baoyu-image-gen
             description: "demo".into(),
             path: "skills/demo-skill".into(),
             version: "v1.0.0".into(),
+            content_hash: "hash-demo-skill".into(),
             search_text: "demo".into(),
         }];
         assert!(scan_plugins_from_zip(b"not a zip", "example/demo", &scans).is_err());
@@ -7801,6 +8167,7 @@ clawhub install baoyu-image-gen
             description: "image".into(),
             path: "skills/baoyu-image-gen".into(),
             version: "v1.0.0".into(),
+            content_hash: "hash-baoyu-image-gen".into(),
             search_text: "image".into(),
         }];
         let plugins = vec![PluginScan {
@@ -7876,6 +8243,7 @@ clawhub install baoyu-image-gen
                 description: "stale duplicate from previous scan".into(),
                 path: "skills/stale-example-skill".into(),
                 version: "0.2.0".into(),
+                content_hash: "hash-stale-example-skill".into(),
                 search_text: "stale duplicate from previous scan".into(),
             },
             SkillScan {
@@ -7883,6 +8251,7 @@ clawhub install baoyu-image-gen
                 description: "current skill".into(),
                 path: ".".into(),
                 version: "v0.1.0".into(),
+                content_hash: "hash-icon-generator".into(),
                 search_text: "current skill".into(),
             },
         ];
@@ -7891,6 +8260,7 @@ clawhub install baoyu-image-gen
             description: "current skill".into(),
             path: ".".into(),
             version: "v0.1.0".into(),
+            content_hash: "hash-icon-generator".into(),
             search_text: "current skill".into(),
         }];
 
@@ -7911,6 +8281,127 @@ clawhub install baoyu-image-gen
         assert!(skills.iter().any(
             |skill| skill.name == "stale-example-skill" && skill.status == "source-unavailable"
         ));
+    }
+
+    fn remote_for_skill_sync_status() -> RemoteInfo {
+        RemoteInfo {
+            owner: "example-org".into(),
+            repo: "demo-skills".into(),
+            full_name: "example-org/demo-skills".into(),
+            default_branch: "main".into(),
+            resolved_ref: "main".into(),
+            sha: "bf4e9ac4d4428bda261afcfe981871ceb92d94e6".into(),
+        }
+    }
+
+    fn sync_status_scan(version: &str, content_hash: &str) -> Vec<SkillScan> {
+        vec![SkillScan {
+            name: "demo-skill".into(),
+            description: "current skill".into(),
+            path: "skills/demo-skill".into(),
+            version: version.into(),
+            content_hash: content_hash.into(),
+            search_text: "current skill".into(),
+        }]
+    }
+
+    #[test]
+    fn sync_skills_marks_installed_latest_when_remote_hash_matches() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let scans = sync_status_scan("v1.0.0", "hash-current");
+        let repo_id_value = save_repository_with_account(&conn, &remote, &scans, None, "").unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        conn.execute(
+            "UPDATE skills
+             SET installed = 1,
+                 status = 'update-available',
+                 local_version = 'v1.0.0',
+                 remote_version = 'v1.0.0',
+                 installed_hash = 'hash-current'
+             WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+
+        save_repository_with_account(&conn, &remote, &scans, None, "").unwrap();
+
+        let skill = load_ui_skills(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|skill| skill.id == id)
+            .unwrap();
+        assert_eq!(skill.status, "installed-latest");
+        assert_eq!(skill.local_version, "v1.0.0");
+    }
+
+    #[test]
+    fn sync_skills_marks_update_available_only_when_remote_hash_differs() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let initial_scans = sync_status_scan("v1.0.0", "hash-old");
+        let repo_id_value =
+            save_repository_with_account(&conn, &remote, &initial_scans, None, "").unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        conn.execute(
+            "UPDATE skills
+             SET installed = 1,
+                 status = 'installed-latest',
+                 local_version = 'v1.0.0',
+                 remote_version = 'v1.0.0',
+                 installed_hash = 'hash-old'
+             WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        let changed_scans = sync_status_scan("v2.0.0", "hash-new");
+
+        save_repository_with_account(&conn, &remote, &changed_scans, None, "").unwrap();
+
+        let skill = load_ui_skills(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|skill| skill.id == id)
+            .unwrap();
+        assert_eq!(skill.status, "update-available");
+        assert_eq!(skill.local_version, "v1.0.0");
+        assert_eq!(skill.remote_version, "v2.0.0");
+    }
+
+    #[test]
+    fn sync_skills_preserves_local_modified_status() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let initial_scans = sync_status_scan("v1.0.0", "hash-old");
+        let repo_id_value =
+            save_repository_with_account(&conn, &remote, &initial_scans, None, "").unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        conn.execute(
+            "UPDATE skills
+             SET installed = 1,
+                 status = 'local-modified',
+                 local_version = 'v1.0.0',
+                 remote_version = 'v1.0.0',
+                 installed_hash = 'hash-old'
+             WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        let changed_scans = sync_status_scan("v2.0.0", "hash-new");
+
+        save_repository_with_account(&conn, &remote, &changed_scans, None, "").unwrap();
+
+        let skill = load_ui_skills(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|skill| skill.id == id)
+            .unwrap();
+        assert_eq!(skill.status, "local-modified");
+        assert_eq!(skill.local_version, "v1.0.0");
+        assert_eq!(skill.remote_version, "v2.0.0");
     }
 
     #[test]
@@ -8064,6 +8555,73 @@ clawhub install baoyu-image-gen
         let line = format_error_for_log("NVIDIA/SkillSpector", &error);
         assert!(line.contains("sqlite_error"));
         assert!(line.contains("UNIQUE constraint failed"));
+    }
+
+    #[test]
+    fn migration_marks_legacy_tasks_as_not_retryable() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            CREATE TABLE backup_jobs (
+              id TEXT PRIMARY KEY,
+              kind TEXT NOT NULL,
+              target TEXT NOT NULL,
+              progress TEXT NOT NULL,
+              status TEXT NOT NULL,
+              summary TEXT NOT NULL,
+              backup_dir TEXT,
+              created_at TEXT NOT NULL,
+              started_at TEXT,
+              completed_at TEXT
+            );
+            INSERT INTO backup_jobs
+             (id, kind, target, progress, status, summary, created_at)
+             VALUES ('legacy-task', 'Update Skill', 'demo-skill', '0 / 1',
+              'failed', 'old failure', '2026-07-08T00:00:00Z');
+            "#,
+        )
+        .unwrap();
+
+        migrate(&conn).unwrap();
+
+        let task = load_ui_tasks(&conn).unwrap().pop().unwrap();
+        assert_eq!(task.id, "legacy-task");
+        assert!(!task.retryable);
+        assert!(task.retry_reason.is_none());
+        let error = load_task_retry_metadata(&conn, "legacy-task").unwrap_err();
+        assert_eq!(error.code, "task_not_retryable");
+        assert!(error.message.contains("旧任务缺少可重试参数"));
+    }
+
+    #[test]
+    fn retryable_task_metadata_round_trips() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let retry_request = CheckRepositoriesRequest {
+            repo_ids: Some(vec!["repo-1".into()]),
+        };
+
+        insert_retryable_task(
+            &conn,
+            "check-1",
+            "Check remote state",
+            "Selected repositories",
+            "0 / 1",
+            "failed",
+            "0 success, 1 failed",
+            None,
+            &["repo failed".into()],
+            RETRY_CHECK_REPOSITORIES,
+            &retry_request,
+        )
+        .unwrap();
+
+        let task = load_ui_tasks(&conn).unwrap().pop().unwrap();
+        assert!(task.retryable);
+        let metadata = load_task_retry_metadata(&conn, "check-1").unwrap();
+        assert_eq!(metadata.action, RETRY_CHECK_REPOSITORIES);
+        let payload: CheckRepositoriesRequest = parse_retry_payload(&metadata.payload).unwrap();
+        assert_eq!(payload.repo_ids, Some(vec!["repo-1".into()]));
     }
 
     #[test]
