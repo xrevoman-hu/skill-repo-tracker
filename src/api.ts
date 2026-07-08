@@ -39,10 +39,12 @@ export type GitHubRepository = {
   stargazersCount: number;
   starred: boolean;
   trackedRepoId?: string | null;
+  starredAt?: string | null;
   pushedAt?: string | null;
   updatedAt?: string | null;
   lastRefreshed?: string | null;
   permissions: string;
+  readmeSearchText?: string;
   note: string;
 };
 
@@ -75,6 +77,7 @@ export type UiPlugin = {
   status: string;
   skillCount: number;
   detectedSha: string;
+  createdAt: string;
   updatedAt: string;
   linkedSkills?: PluginSkillSummary[];
   note: string;

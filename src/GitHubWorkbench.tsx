@@ -17,6 +17,7 @@ type Props = {
   onTrackRepository: (repo: GitHubRepository) => Promise<void>;
   onUntrackRepository: (repo: GitHubRepository) => Promise<void>;
   onOpenUrl: (url: string, mode?: string) => Promise<void>;
+  onCopyUrl: (url: string) => Promise<void>;
   onSaveNote: (repo: GitHubRepository, note: string) => Promise<void>;
   t: (key: string) => string;
 };
@@ -83,6 +84,7 @@ function repoMatches(repo: GitHubRepository, query: string) {
     repo.accountLogin,
     repo.permissions,
     repo.note,
+    repo.readmeSearchText,
   ]
     .map((value) => normalize(String(value || "")))
     .some((value) => value.includes(term));
@@ -90,6 +92,28 @@ function repoMatches(repo: GitHubRepository, query: string) {
 
 function isPersonalRepository(repo: GitHubRepository, account?: GitHubAccount) {
   return Boolean(account?.login) && normalize(repo.owner) === normalize(account.login);
+}
+
+function compareNames(left: string, right: string) {
+  return String(left || "").localeCompare(String(right || ""), "en", {
+    caseFirst: "upper",
+    sensitivity: "variant",
+  });
+}
+
+function sortableDate(value?: string | null) {
+  const normalized = String(value || "").trim();
+  return normalized && normalized !== "Never" && normalized !== "-" ? normalized : "";
+}
+
+type SortState = {
+  key: "name" | "starredAt";
+  direction: "asc" | "desc";
+};
+
+function sortIndicator(active: boolean, direction: SortState["direction"]) {
+  if (!active) return "";
+  return direction === "asc" ? " ↑" : " ↓";
 }
 
 export function GitHubWorkbench({
@@ -106,12 +130,14 @@ export function GitHubWorkbench({
   onTrackRepository,
   onUntrackRepository,
   onOpenUrl,
+  onCopyUrl,
   onSaveNote,
   t,
 }: Props) {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [selectedKey, setSelectedKey] = useState("");
+  const [sort, setSort] = useState<SortState>({ key: "name", direction: "asc" });
   const activeAccount =
     accounts.find((account) => account.id === activeAccountId) ||
     accounts[0];
@@ -129,7 +155,7 @@ export function GitHubWorkbench({
   }, [repositories, activeAccount?.id]);
 
   const filteredRepos = useMemo(() => {
-    return activeRepos.filter((repo) => {
+    const visible = activeRepos.filter((repo) => {
       const personalRepo = isPersonalRepository(repo, activeAccount);
       const filterMatch =
         filter === "all" ||
@@ -139,7 +165,26 @@ export function GitHubWorkbench({
         (filter === "tracked" && repo.trackedRepoId);
       return filterMatch && repoMatches(repo, query);
     });
-  }, [activeRepos, activeAccount?.login, filter, query]);
+    return [...visible].sort((left, right) => {
+      if (sort.key === "starredAt") {
+        const leftDate = sortableDate(left.starredAt);
+        const rightDate = sortableDate(right.starredAt);
+        if (!leftDate && rightDate) return 1;
+        if (leftDate && !rightDate) return -1;
+        const compared = leftDate.localeCompare(rightDate);
+        if (compared !== 0) return sort.direction === "asc" ? compared : -compared;
+      }
+      const compared = compareNames(left.fullName, right.fullName);
+      return sort.direction === "asc" || sort.key !== "name" ? compared : -compared;
+    });
+  }, [activeRepos, activeAccount?.login, filter, query, sort]);
+
+  function toggleSort(key: SortState["key"]) {
+    setSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+  }
 
   const selectedRepo = selectedKey
     ? filteredRepos.find((repo) => repoKey(repo) === selectedKey) || null
@@ -261,8 +306,17 @@ export function GitHubWorkbench({
             <table className="data-table github-table">
               <thead>
                 <tr>
-                  <th>{t("repository")}</th>
+                  <th>
+                    <button className="table-sort-button" onClick={() => toggleSort("name")} type="button">
+                      {t("repository")}{sortIndicator(sort.key === "name", sort.direction)}
+                    </button>
+                  </th>
                   <th>{t("source")}</th>
+                  <th>
+                    <button className="table-sort-button" onClick={() => toggleSort("starredAt")} type="button">
+                      {t("starredAt")}{sortIndicator(sort.key === "starredAt", sort.direction)}
+                    </button>
+                  </th>
                   <th>{t("visibility")}</th>
                   <th>{t("stars")}</th>
                   <th>{t("languageLabel")}</th>
@@ -285,6 +339,7 @@ export function GitHubWorkbench({
                         {repo.note && <span className="subtext note-preview">{repo.note}</span>}
                       </td>
                       <td>{repo.accountLogin}</td>
+                      <td className="mono">{repo.starredAt || "-"}</td>
                       <td>
                         <Chip tone={repo.private ? "source-chip" : "generic repo"}>
                           {repo.private ? t("githubPrivate") : t("githubPublic")}
@@ -390,6 +445,7 @@ export function GitHubWorkbench({
             <Detail label={t("visibility")} value={selectedRepo.private ? t("githubPrivate") : t("githubPublic")} />
             <Detail label={t("languageLabel")} value={selectedRepo.language || "-"} />
             <Detail label={t("permissions")} value={selectedRepo.permissions || t("unknown")} />
+            <Detail label={t("starredAt")} value={selectedRepo.starredAt || "-"} />
             <Detail label={t("lastChecked")} value={selectedRepo.lastRefreshed || t("neverVerified")} />
           </section>
 
@@ -412,6 +468,7 @@ export function GitHubWorkbench({
               <Button onClick={() => onOpenUrl(selectedRepo.htmlUrl, "systemDefault")}>
                 {t("systemBrowser")}
               </Button>
+              <Button onClick={() => onCopyUrl(selectedRepo.htmlUrl)}>{t("copyLink")}</Button>
             </div>
           </section>
 

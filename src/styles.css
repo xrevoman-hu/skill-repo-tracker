@@ -676,7 +676,7 @@ a {
 
 .github-table th:nth-child(1),
 .github-table td:nth-child(1) {
-  width: 30%;
+  width: 28%;
 }
 
 .github-table th:nth-child(2),
@@ -686,23 +686,28 @@ a {
 
 .github-table th:nth-child(3),
 .github-table td:nth-child(3) {
-  width: 92px;
+  width: 112px;
 }
 
 .github-table th:nth-child(4),
 .github-table td:nth-child(4) {
-  width: 64px;
+  width: 92px;
 }
 
 .github-table th:nth-child(5),
 .github-table td:nth-child(5),
 .github-table th:nth-child(6),
 .github-table td:nth-child(6) {
-  width: 92px;
+  width: 78px;
 }
 
 .github-table th:nth-child(7),
 .github-table td:nth-child(7) {
+  width: 92px;
+}
+
+.github-table th:nth-child(8),
+.github-table td:nth-child(8) {
   width: 150px;
 }
 
@@ -768,6 +773,24 @@ a {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.table-sort-button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table-sort-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
 }
 
 .data-table tr {
@@ -855,30 +878,35 @@ a {
 
 .repositories-table th:nth-child(4),
 .repositories-table td:nth-child(4) {
-  width: 54px;
+  width: 112px;
 }
 
 .repositories-table th:nth-child(5),
 .repositories-table td:nth-child(5) {
-  width: 52px;
+  width: 54px;
 }
 
 .repositories-table th:nth-child(6),
-.repositories-table td:nth-child(6),
+.repositories-table td:nth-child(6) {
+  width: 52px;
+}
+
 .repositories-table th:nth-child(7),
-.repositories-table td:nth-child(7) {
+.repositories-table td:nth-child(7),
+.repositories-table th:nth-child(8),
+.repositories-table td:nth-child(8) {
   width: 94px;
 }
 
-.repositories-table th:nth-child(8),
-.repositories-table td:nth-child(8),
 .repositories-table th:nth-child(9),
-.repositories-table td:nth-child(9) {
+.repositories-table td:nth-child(9),
+.repositories-table th:nth-child(10),
+.repositories-table td:nth-child(10) {
   width: 112px;
 }
 
-.repositories-table th:nth-child(10),
-.repositories-table td:nth-child(10) {
+.repositories-table th:nth-child(11),
+.repositories-table td:nth-child(11) {
   width: 118px;
 }
 
@@ -899,21 +927,26 @@ a {
 
 .skills-table th:nth-child(4),
 .skills-table td:nth-child(4) {
-  width: 140px;
+  width: 112px;
 }
 
 .skills-table th:nth-child(5),
 .skills-table td:nth-child(5) {
-  width: 108px;
+  width: 140px;
 }
 
 .skills-table th:nth-child(6),
 .skills-table td:nth-child(6) {
-  width: 76px;
+  width: 108px;
 }
 
 .skills-table th:nth-child(7),
 .skills-table td:nth-child(7) {
+  width: 76px;
+}
+
+.skills-table th:nth-child(8),
+.skills-table td:nth-child(8) {
   width: 188px;
 }
 
@@ -934,21 +967,26 @@ a {
 
 .plugins-table th:nth-child(4),
 .plugins-table td:nth-child(4) {
-  width: 64px;
+  width: 112px;
 }
 
 .plugins-table th:nth-child(5),
 .plugins-table td:nth-child(5) {
-  width: 116px;
+  width: 64px;
 }
 
 .plugins-table th:nth-child(6),
 .plugins-table td:nth-child(6) {
-  width: 92px;
+  width: 116px;
 }
 
 .plugins-table th:nth-child(7),
 .plugins-table td:nth-child(7) {
+  width: 92px;
+}
+
+.plugins-table th:nth-child(8),
+.plugins-table td:nth-child(8) {
   width: 132px;
 }
 

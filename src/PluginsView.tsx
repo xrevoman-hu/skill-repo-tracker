@@ -9,6 +9,10 @@ type DisplayValue = (value: unknown, language: string) => ReactNode;
 type DisplayRepoName = (value: string, language?: string) => string;
 type ManifestPreview = (value?: string | null) => string;
 type StatusLabel = (value: string, language?: string) => string;
+type SortState = {
+  key: string;
+  direction: "asc" | "desc";
+};
 
 type TagComponent = ComponentType<{
   value: string;
@@ -63,6 +67,8 @@ type PluginViewProps = {
   hasInspector: boolean;
   selectedPluginId: string;
   focusPluginRow?: boolean;
+  pluginSort: SortState;
+  setPluginSort: (sorter: (current: SortState) => SortState) => void;
   language: string;
   t: Translator;
   Tag: TagComponent;
@@ -118,6 +124,8 @@ export function PluginsView({
   hasInspector,
   selectedPluginId,
   focusPluginRow = false,
+  pluginSort,
+  setPluginSort,
   language,
   t,
   Tag,
@@ -134,6 +142,18 @@ export function PluginsView({
     setActiveTab("repositories");
   }
 
+  function toggleSort(key: string) {
+    setPluginSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+  }
+
+  function sortIndicator(active: boolean, direction: SortState["direction"]) {
+    if (!active) return "";
+    return direction === "asc" ? " ↑" : " ↓";
+  }
+
   return (
     <section className={`main-pane ${hasInspector ? "" : "single"}`}>
       <div className="pane-header">
@@ -148,9 +168,18 @@ export function PluginsView({
           <table className="data-table plugins-table">
             <thead>
               <tr>
-                <th>{t("plugin")}</th>
+                <th>
+                  <button className="table-sort-button" onClick={() => toggleSort("name")} type="button">
+                    {t("plugin")}{sortIndicator(pluginSort.key === "name", pluginSort.direction)}
+                  </button>
+                </th>
                 <th>{t("installCommand")}</th>
                 <th>{t("sourceRepository")}</th>
+                <th>
+                  <button className="table-sort-button" onClick={() => toggleSort("createdAt")} type="button">
+                    {t("createdAt")}{sortIndicator(pluginSort.key === "createdAt", pluginSort.direction)}
+                  </button>
+                </th>
                 <th>{t("skills")}</th>
                 <th>{t("remoteSha")}</th>
                 <th>{t("status")}</th>
@@ -185,6 +214,7 @@ export function PluginsView({
                   <td className="source-repo-cell" title={displayRepoName(plugin.repoName, language)}>
                     {displayRepoName(plugin.repoName, language)}
                   </td>
+                  <td className="mono">{plugin.createdAt || "-"}</td>
                   <td>{plugin.skillCount || 0}</td>
                   <td className="mono" title={String(displayValue(plugin.detectedSha, language))}>
                     {manifestShaPreview(plugin.detectedSha)}

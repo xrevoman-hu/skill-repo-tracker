@@ -7,7 +7,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs,
     io::{Cursor, Read, Write},
     path::{Path, PathBuf},
@@ -33,6 +33,7 @@ const GITHUB_API_VERSION: &str = "2022-11-28";
 const LOCAL_SKILLS_LIBRARY_NAME: &str = "本地 Skills 库";
 const LEGACY_LOCAL_SKILLS_LIBRARY_NAME: &str = "Local Skills Library";
 const PREVIEW_MAX_CHARS: usize = 120_000;
+const SEARCH_INDEX_MAX_CHARS: usize = 60_000;
 const DEFAULT_SYNC_BACKUP_KEEP: i64 = 5;
 const SYNC_TARGET_IDS: [&str; 6] = [
     "claude", "codex", "gemini", "opencode", "openclaw", "hermes",
@@ -217,6 +218,8 @@ pub struct UiRepository {
     recognized_plugins: Vec<RecognizedPlugin>,
     source_type: String,
     local_path: Option<String>,
+    added_at: String,
+    readme_search_text: String,
     note: String,
 }
 
@@ -254,6 +257,7 @@ pub struct UiSkill {
     remote_version: String,
     status: String,
     installed: bool,
+    created_at: String,
     updated_at: String,
     source_type: String,
     local_path: Option<String>,
@@ -265,6 +269,7 @@ pub struct UiSkill {
     published_targets: Vec<String>,
     can_restore: bool,
     can_delete: bool,
+    search_text: String,
     note: String,
 }
 
@@ -319,6 +324,7 @@ pub struct UiPlugin {
     status: String,
     skill_count: i64,
     detected_sha: String,
+    created_at: String,
     updated_at: String,
     note: String,
 }
@@ -339,6 +345,7 @@ pub struct PluginDetail {
     status: String,
     skill_count: i64,
     detected_sha: String,
+    created_at: String,
     updated_at: String,
     linked_skills: Vec<PluginSkillSummary>,
     note: String,
@@ -402,10 +409,12 @@ pub struct UiGithubRepository {
     stargazers_count: i64,
     starred: bool,
     tracked_repo_id: Option<String>,
+    starred_at: Option<String>,
     pushed_at: Option<String>,
     updated_at: Option<String>,
     last_refreshed: Option<String>,
     permissions: String,
+    readme_search_text: String,
     note: String,
 }
 
@@ -522,9 +531,13 @@ pub struct MigrationGithubRepository {
     language: String,
     stargazers_count: i64,
     starred: bool,
+    #[serde(default)]
+    starred_at: Option<String>,
     permissions: String,
     pushed_at: Option<String>,
     github_updated_at: Option<String>,
+    #[serde(default)]
+    readme_search_text: String,
     last_refreshed: String,
 }
 
@@ -552,6 +565,8 @@ pub struct MigrationRepository {
     github_account_id: Option<String>,
     canonical_name: Option<String>,
     error: Option<String>,
+    #[serde(default)]
+    readme_search_text: String,
     created_at: String,
     updated_at: String,
 }
@@ -570,6 +585,8 @@ pub struct MigrationSkill {
     remote_version: String,
     status: String,
     installed: bool,
+    #[serde(default)]
+    created_at: Option<String>,
     updated_at: Option<String>,
     installed_hash: Option<String>,
     source_type: String,
@@ -579,6 +596,8 @@ pub struct MigrationSkill {
     deleted_path: Option<String>,
     sync_targets_mode: String,
     sync_targets: Option<String>,
+    #[serde(default)]
+    search_text: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -595,7 +614,11 @@ pub struct MigrationPlugin {
     source_excerpt: String,
     status: String,
     detected_sha: String,
+    #[serde(default)]
+    created_at: String,
     updated_at: String,
+    #[serde(default)]
+    search_text: String,
     linked_skill_ids: Vec<String>,
 }
 
@@ -839,6 +862,8 @@ struct RepoRecord {
     source_type: String,
     local_path: Option<String>,
     github_account_id: Option<String>,
+    created_at: String,
+    readme_search_text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -860,6 +885,7 @@ struct SkillScan {
     description: String,
     path: String,
     version: String,
+    search_text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -925,6 +951,7 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           github_account_id TEXT,
           canonical_name TEXT,
           error TEXT,
+          readme_search_text TEXT NOT NULL DEFAULT '',
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
@@ -941,6 +968,7 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           remote_version TEXT NOT NULL,
           status TEXT NOT NULL,
           installed INTEGER NOT NULL DEFAULT 0,
+          created_at TEXT,
           updated_at TEXT,
           installed_hash TEXT,
           source_type TEXT NOT NULL DEFAULT 'github_repo',
@@ -950,6 +978,7 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           deleted_path TEXT,
           sync_targets_mode TEXT NOT NULL DEFAULT 'inherit',
           sync_targets TEXT,
+          search_text TEXT NOT NULL DEFAULT '',
           FOREIGN KEY(repo_id) REFERENCES repositories(id) ON DELETE CASCADE
         );
 
@@ -976,7 +1005,9 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           source_excerpt TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'detected',
           detected_sha TEXT NOT NULL DEFAULT 'unknown',
+          created_at TEXT,
           updated_at TEXT NOT NULL,
+          search_text TEXT NOT NULL DEFAULT '',
           FOREIGN KEY(repo_id) REFERENCES repositories(id) ON DELETE CASCADE
         );
 
@@ -1066,9 +1097,11 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           language TEXT NOT NULL DEFAULT '',
           stargazers_count INTEGER NOT NULL DEFAULT 0,
           starred INTEGER NOT NULL DEFAULT 0,
+          starred_at TEXT,
           permissions TEXT NOT NULL DEFAULT '',
           pushed_at TEXT,
           github_updated_at TEXT,
+          readme_search_text TEXT NOT NULL DEFAULT '',
           last_refreshed TEXT NOT NULL,
           PRIMARY KEY(account_id, full_name),
           FOREIGN KEY(account_id) REFERENCES github_accounts(id) ON DELETE CASCADE
@@ -1112,6 +1145,24 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
     )?;
     add_column_if_missing(
         conn,
+        "repositories",
+        "readme_search_text",
+        "ALTER TABLE repositories ADD COLUMN readme_search_text TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "skills",
+        "created_at",
+        "ALTER TABLE skills ADD COLUMN created_at TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
+        "skills",
+        "search_text",
+        "ALTER TABLE skills ADD COLUMN search_text TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
         "skills",
         "source_type",
         "ALTER TABLE skills ADD COLUMN source_type TEXT NOT NULL DEFAULT 'github_repo'",
@@ -1151,6 +1202,70 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
         "skills",
         "sync_targets",
         "ALTER TABLE skills ADD COLUMN sync_targets TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
+        "plugins",
+        "created_at",
+        "ALTER TABLE plugins ADD COLUMN created_at TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
+        "plugins",
+        "search_text",
+        "ALTER TABLE plugins ADD COLUMN search_text TEXT NOT NULL DEFAULT ''",
+    )?;
+    add_column_if_missing(
+        conn,
+        "github_repo_catalog",
+        "starred_at",
+        "ALTER TABLE github_repo_catalog ADD COLUMN starred_at TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
+        "github_repo_catalog",
+        "readme_search_text",
+        "ALTER TABLE github_repo_catalog ADD COLUMN readme_search_text TEXT NOT NULL DEFAULT ''",
+    )?;
+    backfill_search_metadata(conn)?;
+    Ok(())
+}
+
+fn backfill_search_metadata(conn: &Connection) -> Result<(), AppError> {
+    let now = utc_now();
+    conn.execute(
+        "UPDATE skills
+         SET created_at = COALESCE(NULLIF(created_at, ''), updated_at,
+           (SELECT repositories.created_at FROM repositories WHERE repositories.id = skills.repo_id),
+           ?1)
+         WHERE created_at IS NULL OR created_at = ''",
+        params![now],
+    )?;
+    conn.execute(
+        "UPDATE plugins
+         SET created_at = COALESCE(NULLIF(created_at, ''), updated_at,
+           (SELECT repositories.created_at FROM repositories WHERE repositories.id = plugins.repo_id),
+           ?1)
+         WHERE created_at IS NULL OR created_at = ''",
+        params![now],
+    )?;
+    conn.execute(
+        "UPDATE skills
+         SET search_text = COALESCE(NULLIF(search_text, ''), description, '')
+         WHERE search_text IS NULL OR search_text = ''",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE plugins
+         SET search_text = COALESCE(NULLIF(search_text, ''), source_excerpt, description, '')
+         WHERE search_text IS NULL OR search_text = ''",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE github_repo_catalog
+         SET starred_at = NULL
+         WHERE starred = 0",
+        [],
     )?;
     Ok(())
 }
@@ -1875,6 +1990,8 @@ fn repo_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RepoRecord> {
         source_type: row.get("source_type")?,
         local_path: row.get("local_path")?,
         github_account_id: row.get("github_account_id")?,
+        created_at: row.get("created_at")?,
+        readme_search_text: row.get("readme_search_text")?,
     })
 }
 
@@ -1986,6 +2103,8 @@ fn ui_repository(conn: &Connection, repo: RepoRecord) -> Result<UiRepository, Ap
         recognized_plugins: recognized_plugins(conn, &repo.id)?,
         source_type: repo.source_type,
         local_path: repo.local_path,
+        added_at: local_display(Some(&repo.created_at)),
+        readme_search_text: repo.readme_search_text,
         note,
     })
 }
@@ -2001,8 +2120,8 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
     let default_sync_targets = sync_targets_from_db(conn)?;
     let mut stmt = conn.prepare(
         "SELECT id, repo_id, name, description, repo_name, path, ref_name, local_version,
-                remote_version, status, installed, updated_at, source_type, local_path, install_path,
-                deleted_at, deleted_path, sync_targets_mode, sync_targets
+                remote_version, status, installed, created_at, updated_at, source_type, local_path,
+                install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets, search_text
          FROM skills
          ORDER BY
            CASE WHEN deleted_at IS NOT NULL THEN 5 ELSE 0 END,
@@ -2017,12 +2136,12 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
     )?;
     let rows = stmt.query_map([], |row| {
         let installed = row.get::<_, i64>(10)? == 1;
-        let deleted_at = row.get::<_, Option<String>>(15)?;
-        let deleted_path = row.get::<_, Option<String>>(16)?;
+        let deleted_at = row.get::<_, Option<String>>(16)?;
+        let deleted_path = row.get::<_, Option<String>>(17)?;
         let sync_targets_mode = row
-            .get::<_, Option<String>>(17)?
+            .get::<_, Option<String>>(18)?
             .unwrap_or_else(|| "inherit".to_string());
-        let sync_targets = parse_sync_targets(row.get::<_, Option<String>>(18)?.as_deref());
+        let sync_targets = parse_sync_targets(row.get::<_, Option<String>>(19)?.as_deref());
         let resolved_sync_targets =
             resolve_skill_sync_targets(&sync_targets_mode, &sync_targets, &default_sync_targets);
         let status = if deleted_at.is_some() {
@@ -2046,10 +2165,11 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
             remote_version: row.get(8)?,
             status,
             installed,
-            updated_at: local_display(row.get::<_, Option<String>>(11)?.as_deref()),
-            source_type: row.get(12)?,
-            local_path: row.get(13)?,
-            install_path: row.get(14)?,
+            created_at: local_display(row.get::<_, Option<String>>(11)?.as_deref()),
+            updated_at: local_display(row.get::<_, Option<String>>(12)?.as_deref()),
+            source_type: row.get(13)?,
+            local_path: row.get(14)?,
+            install_path: row.get(15)?,
             deleted_path: deleted_path.clone(),
             sync_targets_mode,
             sync_targets,
@@ -2057,6 +2177,7 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
             published_targets: Vec::new(),
             can_restore: deleted_at.is_some() && deleted_path.is_some(),
             can_delete: installed && deleted_at.is_none(),
+            search_text: row.get::<_, Option<String>>(20)?.unwrap_or_default(),
             note,
         })
     })?;
@@ -2076,13 +2197,13 @@ fn load_ui_plugins(conn: &Connection) -> Result<Vec<UiPlugin>, AppError> {
     let mut stmt = conn.prepare(
         "SELECT p.id, p.repo_id, r.name, p.name, p.description, p.kind, p.install_command,
                 p.update_command, p.source_path, p.source_excerpt, p.status,
-                COUNT(ps.skill_id) AS skill_count, p.detected_sha, p.updated_at
+                COUNT(ps.skill_id) AS skill_count, p.detected_sha, p.created_at, p.updated_at
          FROM plugins p
          JOIN repositories r ON r.id = p.repo_id
          LEFT JOIN plugin_skill_links ps ON ps.plugin_id = p.id
          GROUP BY p.id, p.repo_id, r.name, p.name, p.description, p.kind, p.install_command,
                   p.update_command, p.source_path, p.source_excerpt, p.status,
-                  p.detected_sha, p.updated_at
+                  p.detected_sha, p.created_at, p.updated_at
          ORDER BY
            CASE p.status WHEN 'detected' THEN 0 ELSE 1 END,
            p.kind ASC,
@@ -2105,7 +2226,8 @@ fn load_ui_plugins(conn: &Connection) -> Result<Vec<UiPlugin>, AppError> {
             status: row.get(10)?,
             skill_count: row.get(11)?,
             detected_sha: row.get(12)?,
-            updated_at: local_display(row.get::<_, Option<String>>(13)?.as_deref()),
+            created_at: local_display(row.get::<_, Option<String>>(13)?.as_deref()),
+            updated_at: local_display(row.get::<_, Option<String>>(14)?.as_deref()),
             note,
         })
     })?;
@@ -2267,12 +2389,13 @@ fn insert_failed_task(
 }
 
 fn headers(token: Option<&str>) -> HeaderMap {
+    headers_with_accept(token, "application/vnd.github+json")
+}
+
+fn headers_with_accept(token: Option<&str>, accept: &'static str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(USER_AGENT, HeaderValue::from_static(APP_USER_AGENT));
-    headers.insert(
-        ACCEPT,
-        HeaderValue::from_static("application/vnd.github+json"),
-    );
+    headers.insert(ACCEPT, HeaderValue::from_static(accept));
     headers.insert(
         HeaderName::from_static("x-github-api-version"),
         HeaderValue::from_static(GITHUB_API_VERSION),
@@ -2310,12 +2433,22 @@ async fn fetch_json_array_paginated(
     first_url: String,
     token: &str,
 ) -> Result<Vec<serde_json::Value>, AppError> {
+    fetch_json_array_paginated_with_accept(client, first_url, token, "application/vnd.github+json")
+        .await
+}
+
+async fn fetch_json_array_paginated_with_accept(
+    client: &reqwest::Client,
+    first_url: String,
+    token: &str,
+    accept: &'static str,
+) -> Result<Vec<serde_json::Value>, AppError> {
     let mut next_url = Some(first_url);
     let mut values = Vec::new();
     while let Some(url) = next_url {
         let response = client
             .get(&url)
-            .headers(headers(Some(token)))
+            .headers(headers_with_accept(Some(token), accept))
             .send()
             .await
             .map_err(|err| {
@@ -2432,11 +2565,21 @@ fn json_string(value: &serde_json::Value, key: &str) -> String {
         .to_string()
 }
 
+fn starred_repo_payload(value: &serde_json::Value) -> &serde_json::Value {
+    value.get("repo").unwrap_or(value)
+}
+
+fn starred_repo_time(value: &serde_json::Value) -> Option<&str> {
+    value.get("starred_at").and_then(|item| item.as_str())
+}
+
 fn upsert_github_catalog_item(
     conn: &Connection,
     account_id: &str,
     repo: &serde_json::Value,
     starred: bool,
+    starred_at: Option<&str>,
+    readme_search_text: &str,
 ) -> Result<(), AppError> {
     let full_name = json_string(repo, "full_name");
     let (owner, name) = full_name
@@ -2460,8 +2603,8 @@ fn upsert_github_catalog_item(
         "INSERT INTO github_repo_catalog
          (account_id, full_name, owner, repo, github_id, html_url, description, visibility,
           private, fork, archived, default_branch, language, stargazers_count, starred,
-          permissions, pushed_at, github_updated_at, last_refreshed)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+          starred_at, permissions, pushed_at, github_updated_at, readme_search_text, last_refreshed)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
          ON CONFLICT(account_id, full_name) DO UPDATE SET
           owner = excluded.owner,
           repo = excluded.repo,
@@ -2476,9 +2619,11 @@ fn upsert_github_catalog_item(
           language = excluded.language,
           stargazers_count = excluded.stargazers_count,
           starred = excluded.starred,
+          starred_at = excluded.starred_at,
           permissions = excluded.permissions,
           pushed_at = excluded.pushed_at,
           github_updated_at = excluded.github_updated_at,
+          readme_search_text = excluded.readme_search_text,
           last_refreshed = excluded.last_refreshed",
         params![
             account_id,
@@ -2508,9 +2653,11 @@ fn upsert_github_catalog_item(
             json_string(repo, "language"),
             repo.get("stargazers_count").and_then(|value| value.as_i64()).unwrap_or(0),
             if starred { 1 } else { 0 },
+            if starred { starred_at } else { None },
             repository_permission_summary(repo.get("permissions").unwrap_or(&serde_json::Value::Null)),
             repo.get("pushed_at").and_then(|value| value.as_str()),
             repo.get("updated_at").and_then(|value| value.as_str()),
+            readme_search_text,
             utc_now(),
         ],
     )?;
@@ -2535,7 +2682,8 @@ fn load_ui_github_repositories(
         "SELECT c.account_id, a.login, c.owner, c.repo, c.full_name, c.html_url,
                 c.description, c.visibility, c.private, c.fork, c.archived,
                 c.default_branch, c.language, c.stargazers_count, c.starred,
-                c.pushed_at, c.github_updated_at, c.last_refreshed, c.permissions,
+                c.starred_at, c.pushed_at, c.github_updated_at, c.last_refreshed, c.permissions,
+                c.readme_search_text,
                 (SELECT r.id FROM repositories r
                  WHERE r.source_type = 'github'
                    AND lower(r.owner) = lower(c.owner)
@@ -2567,17 +2715,21 @@ fn load_ui_github_repositories(
             language: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
             stargazers_count: row.get(13)?,
             starred: row.get::<_, i64>(14)? == 1,
-            pushed_at: row
+            starred_at: row
                 .get::<_, Option<String>>(15)?
                 .map(|value| local_display(Some(&value))),
             updated_at: row
-                .get::<_, Option<String>>(16)?
-                .map(|value| local_display(Some(&value))),
-            last_refreshed: row
                 .get::<_, Option<String>>(17)?
                 .map(|value| local_display(Some(&value))),
-            permissions: row.get::<_, Option<String>>(18)?.unwrap_or_default(),
-            tracked_repo_id: row.get(19)?,
+            last_refreshed: row
+                .get::<_, Option<String>>(18)?
+                .map(|value| local_display(Some(&value))),
+            pushed_at: row
+                .get::<_, Option<String>>(16)?
+                .map(|value| local_display(Some(&value))),
+            permissions: row.get::<_, Option<String>>(19)?.unwrap_or_default(),
+            readme_search_text: row.get::<_, Option<String>>(20)?.unwrap_or_default(),
+            tracked_repo_id: row.get(21)?,
             note: load_user_note(
                 conn,
                 "repository",
@@ -2784,6 +2936,7 @@ fn scan_skills_from_zip(bytes: &[u8], repo_name: &str) -> Result<Vec<SkillScan>,
             description,
             path: skill_path,
             version,
+            search_text: truncate_search_index(&contents),
         });
     }
     Ok(skills)
@@ -2840,6 +2993,7 @@ fn scan_skills_from_directory(root: &Path, repo_name: &str) -> Result<Vec<SkillS
             description,
             path: skill_path,
             version,
+            search_text: truncate_search_index(&contents),
         });
     }
     skills.sort_by(|left, right| left.name.cmp(&right.name));
@@ -2874,6 +3028,65 @@ fn truncate_preview(mut contents: String) -> String {
     contents = contents.chars().take(PREVIEW_MAX_CHARS).collect();
     contents.push_str("\n\n[内容过长，已截断预览。]");
     contents
+}
+
+fn truncate_search_index(contents: &str) -> String {
+    let trimmed = contents.trim();
+    if trimmed.chars().count() <= SEARCH_INDEX_MAX_CHARS {
+        return trimmed.to_string();
+    }
+    trimmed.chars().take(SEARCH_INDEX_MAX_CHARS).collect()
+}
+
+fn read_local_readme_search(root: &Path) -> String {
+    local_readme_path(root)
+        .and_then(|path| fs::read_to_string(path).ok())
+        .map(|contents| truncate_search_index(&contents))
+        .unwrap_or_default()
+}
+
+fn readme_search_from_zip(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    let reader = Cursor::new(bytes);
+    let Ok(mut archive) = ZipArchive::new(reader) else {
+        return String::new();
+    };
+    for index in 0..archive.len() {
+        let Ok(mut file) = archive.by_index(index) else {
+            continue;
+        };
+        if !file.is_file() {
+            continue;
+        }
+        let relative = strip_zip_root(file.name());
+        let file_name = relative.rsplit('/').next().unwrap_or(relative.as_str());
+        if !matches!(
+            file_name.to_ascii_lowercase().as_str(),
+            "readme.md" | "readme.markdown" | "readme"
+        ) {
+            continue;
+        }
+        let mut contents = String::new();
+        if file.read_to_string(&mut contents).is_ok() {
+            return truncate_search_index(&contents);
+        }
+    }
+    String::new()
+}
+
+async fn fetch_github_readme_search(
+    client: &reqwest::Client,
+    owner: &str,
+    repo: &str,
+    ref_name: &str,
+    token: Option<&str>,
+) -> String {
+    fetch_github_content(client, owner, repo, ref_name, None, true, token)
+        .await
+        .map(|(contents, _)| truncate_search_index(&contents))
+        .unwrap_or_default()
 }
 
 fn skill_markdown_path(
@@ -3057,8 +3270,8 @@ fn sync_skills(
         conn.execute(
             "INSERT INTO skills
              (id, repo_id, name, description, repo_name, path, ref_name, local_version,
-              remote_version, status, installed, updated_at, installed_hash, source_type, local_path, install_path, deleted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'github_repo', NULL, NULL, NULL)
+              remote_version, status, installed, created_at, updated_at, installed_hash, source_type, local_path, install_path, deleted_at, search_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'github_repo', NULL, NULL, NULL, ?15)
              ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               description = excluded.description,
@@ -3067,6 +3280,7 @@ fn sync_skills(
               remote_version = excluded.remote_version,
               status = excluded.status,
               source_type = excluded.source_type,
+              search_text = excluded.search_text,
               deleted_at = NULL,
               deleted_path = NULL",
             params![
@@ -3081,8 +3295,10 @@ fn sync_skills(
                 scan.version,
                 next_status,
                 installed,
+                now,
                 if installed == 1 { Some(now.as_str()) } else { None },
-                installed_hash
+                installed_hash,
+                scan.search_text
             ],
         )?;
     }
@@ -3107,8 +3323,10 @@ fn save_repository_with_plugins(
     scans: &[SkillScan],
     plugins: &[PluginScan],
     github_account_id: Option<&str>,
+    readme_search_text: &str,
 ) -> Result<String, AppError> {
-    let id = save_repository_with_account(conn, remote, scans, github_account_id)?;
+    let id =
+        save_repository_with_account(conn, remote, scans, github_account_id, readme_search_text)?;
     sync_plugins(conn, &id, &remote.full_name, &remote.sha, scans, plugins)?;
     Ok(id)
 }
@@ -3118,6 +3336,7 @@ fn save_repository_with_account(
     remote: &RemoteInfo,
     scans: &[SkillScan],
     github_account_id: Option<&str>,
+    readme_search_text: &str,
 ) -> Result<String, AppError> {
     let id = repo_id(&remote.owner, &remote.repo, &remote.resolved_ref);
     let now = utc_now();
@@ -3144,9 +3363,9 @@ fn save_repository_with_account(
         "INSERT INTO repositories
          (id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
           last_backup_sha, last_checked, backup_status, check_status, url, branch,
-          backup_path, snapshot_time, source_type, local_path, github_account_id, canonical_name, error, created_at, updated_at)
+          backup_path, snapshot_time, source_type, local_path, github_account_id, canonical_name, error, readme_search_text, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'success', ?12, ?13,
-                 NULL, NULL, 'github', NULL, ?14, ?2, NULL, ?10, ?10)
+                 NULL, NULL, 'github', NULL, ?14, ?2, NULL, ?15, ?10, ?10)
          ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           owner = excluded.owner,
@@ -3167,6 +3386,7 @@ fn save_repository_with_account(
           github_account_id = COALESCE(excluded.github_account_id, repositories.github_account_id),
           canonical_name = excluded.canonical_name,
           error = NULL,
+          readme_search_text = excluded.readme_search_text,
           updated_at = excluded.updated_at",
         params![
             id,
@@ -3182,7 +3402,8 @@ fn save_repository_with_account(
             backup_status,
             format!("https://github.com/{}", remote.full_name),
             remote.default_branch,
-            github_account_id
+            github_account_id,
+            readme_search_text
         ],
     )?;
     sync_skills(conn, remote, &id, scans)?;
@@ -3222,8 +3443,8 @@ fn sync_local_skills(
         conn.execute(
             "INSERT INTO skills
              (id, repo_id, name, description, repo_name, path, ref_name, local_version,
-              remote_version, status, installed, updated_at, installed_hash, source_type, local_path, install_path, deleted_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, NULL)
+              remote_version, status, installed, created_at, updated_at, installed_hash, source_type, local_path, install_path, deleted_at, search_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?12, ?13, ?14, ?15, ?16, NULL, ?17)
              ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               description = excluded.description,
@@ -3239,6 +3460,7 @@ fn sync_local_skills(
               source_type = excluded.source_type,
               local_path = excluded.local_path,
               install_path = excluded.install_path,
+              search_text = excluded.search_text,
               deleted_at = NULL,
               deleted_path = NULL",
             params![
@@ -3258,6 +3480,7 @@ fn sync_local_skills(
                 source_type,
                 path_string(&skill_dir),
                 if installed { Some(path_string(&skill_dir)) } else { None },
+                scan.search_text,
             ],
         )?;
     }
@@ -3315,13 +3538,14 @@ fn save_local_repository_with_plugins(
         "skill repo"
     };
     let local_sha = hash_directory(&canonical_root).unwrap_or_else(|_| "local".into());
+    let readme_search_text = read_local_readme_search(&canonical_root);
     conn.execute(
         "INSERT INTO repositories
          (id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
           last_backup_sha, last_checked, backup_status, check_status, url, branch,
-          backup_path, snapshot_time, source_type, local_path, canonical_name, error, created_at, updated_at)
+          backup_path, snapshot_time, source_type, local_path, canonical_name, error, readme_search_text, created_at, updated_at)
          VALUES (?1, ?2, 'local', ?3, 'local', ?4, ?5, ?6, NULL, ?7, 'local-only', 'success',
-                 ?8, 'local', NULL, NULL, 'local', ?9, ?2, NULL, ?7, ?7)
+                 ?8, 'local', NULL, NULL, 'local', ?9, ?2, NULL, ?10, ?7, ?7)
          ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           repo_type = excluded.repo_type,
@@ -3336,6 +3560,7 @@ fn save_local_repository_with_plugins(
           local_path = excluded.local_path,
           canonical_name = excluded.canonical_name,
           error = NULL,
+          readme_search_text = excluded.readme_search_text,
           updated_at = excluded.updated_at",
         params![
             id,
@@ -3347,6 +3572,7 @@ fn save_local_repository_with_plugins(
             now,
             format!("file://{}", path_string(&canonical_root)),
             path_string(&canonical_root),
+            readme_search_text,
         ],
     )?;
     sync_local_skills(
@@ -4176,14 +4402,14 @@ fn get_plugin_detail(
         .query_row(
             "SELECT p.id, p.repo_id, r.name, p.name, p.description, p.kind, p.install_command,
                     p.update_command, p.source_path, p.source_excerpt, p.status,
-                    COUNT(ps.skill_id) AS skill_count, p.detected_sha, p.updated_at
+                    COUNT(ps.skill_id) AS skill_count, p.detected_sha, p.created_at, p.updated_at
              FROM plugins p
              JOIN repositories r ON r.id = p.repo_id
              LEFT JOIN plugin_skill_links ps ON ps.plugin_id = p.id
              WHERE p.id = ?1
              GROUP BY p.id, p.repo_id, r.name, p.name, p.description, p.kind, p.install_command,
                       p.update_command, p.source_path, p.source_excerpt, p.status,
-                      p.detected_sha, p.updated_at",
+                      p.detected_sha, p.created_at, p.updated_at",
             params![request.plugin_id],
             |row| {
                 Ok(PluginDetail {
@@ -4200,7 +4426,8 @@ fn get_plugin_detail(
                     status: row.get(10)?,
                     skill_count: row.get(11)?,
                     detected_sha: row.get(12)?,
-                    updated_at: local_display(row.get::<_, Option<String>>(13)?.as_deref()),
+                    created_at: local_display(row.get::<_, Option<String>>(13)?.as_deref()),
+                    updated_at: local_display(row.get::<_, Option<String>>(14)?.as_deref()),
                     linked_skills: Vec::new(),
                     note: String::new(),
                 })
@@ -4626,10 +4853,18 @@ async fn add_repository(
         Ok(plugins) => plugins,
         Err(error) => return Ok(api_err(error)),
     };
+    let readme_search_text = readme_search_from_zip(&zip);
 
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<UiRepository>, AppError> {
-        let id = save_repository_with_plugins(&db, &remote, &scans, &plugins, None)?;
+        let id = save_repository_with_plugins(
+            &db,
+            &remote,
+            &scans,
+            &plugins,
+            None,
+            &readme_search_text,
+        )?;
         if let Some(note) = request.note.as_deref() {
             save_user_note(
                 &db,
@@ -4739,6 +4974,7 @@ async fn check_repositories(
                         continue;
                     }
                 };
+                let readme_search_text = readme_search_from_zip(&zip);
                 let db = state.db.lock().expect("db mutex poisoned");
                 if let Err(error) = save_repository_with_plugins(
                     &db,
@@ -4746,6 +4982,7 @@ async fn check_repositories(
                     &scans,
                     &plugins,
                     repo.github_account_id.as_deref(),
+                    &readme_search_text,
                 ) {
                     log.push(format_error_for_log(&repo.name, &error));
                     failed += 1;
@@ -5855,7 +6092,7 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
     let mut stmt = conn.prepare(
         "SELECT account_id, full_name, owner, repo, github_id, html_url, description, visibility,
                 private, fork, archived, default_branch, language, stargazers_count, starred,
-                permissions, pushed_at, github_updated_at, last_refreshed
+                starred_at, permissions, pushed_at, github_updated_at, readme_search_text, last_refreshed
          FROM github_repo_catalog
          ORDER BY account_id ASC, full_name ASC",
     )?;
@@ -5876,10 +6113,12 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
             language: row.get(12)?,
             stargazers_count: row.get(13)?,
             starred: row.get::<_, i64>(14)? == 1,
-            permissions: row.get(15)?,
-            pushed_at: row.get(16)?,
-            github_updated_at: row.get(17)?,
-            last_refreshed: row.get(18)?,
+            starred_at: row.get(15)?,
+            permissions: row.get(16)?,
+            pushed_at: row.get(17)?,
+            github_updated_at: row.get(18)?,
+            readme_search_text: row.get(19)?,
+            last_refreshed: row.get(20)?,
         })
     })?;
     for row in rows {
@@ -5892,7 +6131,7 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
         "SELECT id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
                 last_backup_sha, last_checked, backup_status, check_status, url, branch,
                 backup_path, snapshot_time, source_type, local_path, github_account_id,
-                canonical_name, error, created_at, updated_at
+                canonical_name, error, readme_search_text, created_at, updated_at
          FROM repositories
          ORDER BY updated_at DESC",
     )?;
@@ -5919,8 +6158,9 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
             github_account_id: row.get(18)?,
             canonical_name: row.get(19)?,
             error: row.get(20)?,
-            created_at: row.get(21)?,
-            updated_at: row.get(22)?,
+            readme_search_text: row.get(21)?,
+            created_at: row.get(22)?,
+            updated_at: row.get(23)?,
         })
     })?;
     for row in rows {
@@ -5931,8 +6171,8 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
     let mut skills = Vec::new();
     let mut stmt = conn.prepare(
         "SELECT id, repo_id, name, description, repo_name, path, ref_name, local_version,
-                remote_version, status, installed, updated_at, installed_hash, source_type,
-                local_path, install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets
+                remote_version, status, installed, created_at, updated_at, installed_hash, source_type,
+                local_path, install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets, search_text
          FROM skills
          ORDER BY repo_name ASC, name ASC",
     )?;
@@ -5949,15 +6189,17 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
             remote_version: row.get(8)?,
             status: row.get(9)?,
             installed: row.get::<_, i64>(10)? == 1,
-            updated_at: row.get(11)?,
-            installed_hash: row.get(12)?,
-            source_type: row.get(13)?,
-            local_path: row.get(14)?,
-            install_path: row.get(15)?,
-            deleted_at: row.get(16)?,
-            deleted_path: row.get(17)?,
-            sync_targets_mode: row.get(18)?,
-            sync_targets: row.get(19)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
+            installed_hash: row.get(13)?,
+            source_type: row.get(14)?,
+            local_path: row.get(15)?,
+            install_path: row.get(16)?,
+            deleted_at: row.get(17)?,
+            deleted_path: row.get(18)?,
+            sync_targets_mode: row.get(19)?,
+            sync_targets: row.get(20)?,
+            search_text: row.get(21)?,
         })
     })?;
     for row in rows {
@@ -5968,7 +6210,7 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
     let mut plugins = Vec::new();
     let mut stmt = conn.prepare(
         "SELECT id, repo_id, name, description, kind, install_command, update_command,
-                source_path, source_excerpt, status, detected_sha, updated_at
+                source_path, source_excerpt, status, detected_sha, created_at, updated_at, search_text
          FROM plugins
          ORDER BY kind ASC, name ASC",
     )?;
@@ -5985,7 +6227,9 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
             source_excerpt: row.get(8)?,
             status: row.get(9)?,
             detected_sha: row.get(10)?,
-            updated_at: row.get(11)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
+            search_text: row.get(13)?,
             linked_skill_ids: Vec::new(),
         })
     })?;
@@ -6083,10 +6327,10 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
     for repo in &package.github_repositories {
         conn.execute(
             "INSERT INTO github_repo_catalog
-             (account_id, full_name, owner, repo, github_id, html_url, description, visibility,
+         (account_id, full_name, owner, repo, github_id, html_url, description, visibility,
               private, fork, archived, default_branch, language, stargazers_count, starred,
-              permissions, pushed_at, github_updated_at, last_refreshed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+              starred_at, permissions, pushed_at, github_updated_at, readme_search_text, last_refreshed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21)
              ON CONFLICT(account_id, full_name) DO UPDATE SET
               owner = excluded.owner,
               repo = excluded.repo,
@@ -6101,9 +6345,11 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
               language = excluded.language,
               stargazers_count = excluded.stargazers_count,
               starred = excluded.starred,
+              starred_at = excluded.starred_at,
               permissions = excluded.permissions,
               pushed_at = excluded.pushed_at,
               github_updated_at = excluded.github_updated_at,
+              readme_search_text = excluded.readme_search_text,
               last_refreshed = excluded.last_refreshed",
             params![
                 repo.account_id,
@@ -6121,9 +6367,11 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
                 repo.language,
                 repo.stargazers_count,
                 if repo.starred { 1 } else { 0 },
+                repo.starred_at,
                 repo.permissions,
                 repo.pushed_at,
                 repo.github_updated_at,
+                repo.readme_search_text,
                 repo.last_refreshed,
             ],
         )?;
@@ -6135,9 +6383,9 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
              (id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
               last_backup_sha, last_checked, backup_status, check_status, url, branch,
               backup_path, snapshot_time, source_type, local_path, github_account_id,
-              canonical_name, error, created_at, updated_at)
+              canonical_name, error, readme_search_text, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                     ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)
+                     ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
              ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               owner = excluded.owner,
@@ -6159,6 +6407,7 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
               github_account_id = excluded.github_account_id,
               canonical_name = excluded.canonical_name,
               error = excluded.error,
+              readme_search_text = excluded.readme_search_text,
               updated_at = excluded.updated_at",
             params![
                 repo.id,
@@ -6182,6 +6431,7 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
                 repo.github_account_id,
                 repo.canonical_name,
                 repo.error,
+                repo.readme_search_text,
                 repo.created_at,
                 repo.updated_at,
             ],
@@ -6192,9 +6442,9 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
         conn.execute(
             "INSERT INTO skills
              (id, repo_id, name, description, repo_name, path, ref_name, local_version,
-              remote_version, status, installed, updated_at, installed_hash, source_type,
-              local_path, install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
+              remote_version, status, installed, created_at, updated_at, installed_hash, source_type,
+              local_path, install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets, search_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
              ON CONFLICT(id) DO UPDATE SET
               repo_id = excluded.repo_id,
               name = excluded.name,
@@ -6206,6 +6456,7 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
               remote_version = excluded.remote_version,
               status = excluded.status,
               installed = excluded.installed,
+              created_at = excluded.created_at,
               updated_at = excluded.updated_at,
               installed_hash = excluded.installed_hash,
               source_type = excluded.source_type,
@@ -6214,7 +6465,8 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
               deleted_at = excluded.deleted_at,
               deleted_path = excluded.deleted_path,
               sync_targets_mode = excluded.sync_targets_mode,
-              sync_targets = excluded.sync_targets",
+              sync_targets = excluded.sync_targets,
+              search_text = excluded.search_text",
             params![
                 skill.id,
                 skill.repo_id,
@@ -6227,6 +6479,7 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
                 skill.remote_version,
                 skill.status,
                 if skill.installed { 1 } else { 0 },
+                skill.created_at,
                 skill.updated_at,
                 skill.installed_hash,
                 skill.source_type,
@@ -6236,6 +6489,7 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
                 skill.deleted_path,
                 skill.sync_targets_mode,
                 skill.sync_targets,
+                skill.search_text,
             ],
         )?;
     }
@@ -6244,8 +6498,8 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
         conn.execute(
             "INSERT INTO plugins
              (id, repo_id, name, description, kind, install_command, update_command,
-              source_path, source_excerpt, status, detected_sha, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+              source_path, source_excerpt, status, detected_sha, created_at, updated_at, search_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(id) DO UPDATE SET
               repo_id = excluded.repo_id,
               name = excluded.name,
@@ -6257,7 +6511,9 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
               source_excerpt = excluded.source_excerpt,
               status = excluded.status,
               detected_sha = excluded.detected_sha,
-              updated_at = excluded.updated_at",
+              created_at = excluded.created_at,
+              updated_at = excluded.updated_at,
+              search_text = excluded.search_text",
             params![
                 plugin.id,
                 plugin.repo_id,
@@ -6270,7 +6526,9 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
                 plugin.source_excerpt,
                 plugin.status,
                 plugin.detected_sha,
+                plugin.created_at,
                 plugin.updated_at,
+                plugin.search_text,
             ],
         )?;
         conn.execute(
@@ -6666,28 +6924,79 @@ async fn refresh_github_repositories(
             Ok(repos) => repos,
             Err(error) => return Ok(api_err(error)),
         };
-        let starred = match fetch_json_array_paginated(&state.http, starred_url, &token).await {
+        let starred = match fetch_json_array_paginated_with_accept(
+            &state.http,
+            starred_url,
+            &token,
+            "application/vnd.github.star+json",
+        )
+        .await
+        {
             Ok(repos) => repos,
             Err(error) => return Ok(api_err(error)),
         };
-        let starred_names = starred
+        let starred_times = starred
             .iter()
-            .filter_map(|repo| repo.get("full_name").and_then(|value| value.as_str()))
-            .map(|value| value.to_ascii_lowercase())
-            .collect::<HashSet<_>>();
+            .filter_map(|item| {
+                let repo = starred_repo_payload(item);
+                let name = repo.get("full_name").and_then(|value| value.as_str())?;
+                Some((
+                    name.to_ascii_lowercase(),
+                    starred_repo_time(item).map(|value| value.to_string()),
+                ))
+            })
+            .collect::<HashMap<_, _>>();
+        let mut catalog_items = Vec::new();
+        for item in repos.iter().chain(starred.iter()) {
+            let repo = starred_repo_payload(item);
+            let full_name = repo
+                .get("full_name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let starred_at = starred_times
+                .get(&full_name)
+                .and_then(|value| value.clone());
+            let starred = starred_times.contains_key(&full_name);
+            let default_branch = json_string(repo, "default_branch");
+            let owner = repo
+                .get("owner")
+                .and_then(|owner| owner.get("login"))
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let name = repo
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            let readme_search_text = fetch_github_readme_search(
+                &state.http,
+                owner,
+                name,
+                if default_branch.is_empty() {
+                    "main"
+                } else {
+                    &default_branch
+                },
+                Some(&token),
+            )
+            .await;
+            catalog_items.push((repo.clone(), starred, starred_at, readme_search_text));
+        }
         let db = state.db.lock().expect("db mutex poisoned");
         let result = (|| -> Result<(), AppError> {
             db.execute(
-                "UPDATE github_repo_catalog SET starred = 0 WHERE account_id = ?1",
+                "UPDATE github_repo_catalog SET starred = 0, starred_at = NULL WHERE account_id = ?1",
                 params![account.id],
             )?;
-            for repo in repos.iter().chain(starred.iter()) {
-                let starred = repo
-                    .get("full_name")
-                    .and_then(|value| value.as_str())
-                    .map(|name| starred_names.contains(&name.to_ascii_lowercase()))
-                    .unwrap_or(false);
-                upsert_github_catalog_item(&db, &account.id, repo, starred)?;
+            for (repo, starred, starred_at, readme_search_text) in &catalog_items {
+                upsert_github_catalog_item(
+                    &db,
+                    &account.id,
+                    repo,
+                    *starred,
+                    starred_at.as_deref(),
+                    readme_search_text,
+                )?;
             }
             refresh_tracked_catalog_links(&db)?;
             db.execute(
@@ -6739,13 +7048,14 @@ async fn set_github_star(
             let result = (|| -> Result<Vec<UiGithubRepository>, AppError> {
                 db.execute(
                     "UPDATE github_repo_catalog
-                     SET starred = ?4, last_refreshed = ?5
+                     SET starred = ?4, starred_at = ?5, last_refreshed = ?6
                      WHERE account_id = ?1 AND lower(owner) = lower(?2) AND lower(repo) = lower(?3)",
                     params![
                         request.account_id,
                         request.owner,
                         request.repo,
                         if request.starred { 1 } else { 0 },
+                        if request.starred { Some(utc_now()) } else { None },
                         utc_now()
                     ],
                 )?;
@@ -6815,6 +7125,7 @@ async fn add_repository_from_github(
         Ok(plugins) => plugins,
         Err(error) => return Ok(api_err(error)),
     };
+    let readme_search_text = readme_search_from_zip(&zip);
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<UiRepository>, AppError> {
         let id = save_repository_with_plugins(
@@ -6823,6 +7134,7 @@ async fn add_repository_from_github(
             &scans,
             &plugins,
             Some(&request.account_id),
+            &readme_search_text,
         )?;
         insert_task(
             &db,
@@ -7241,6 +7553,8 @@ mod tests {
             source_type: source_type.into(),
             local_path: Some("/tmp/skills".into()),
             github_account_id: None,
+            created_at: "2026-07-01T00:00:00Z".into(),
+            readme_search_text: String::new(),
         }
     }
 
@@ -7355,6 +7669,8 @@ mod tests {
             "---\nname: demo-skill\ndescription: Local demo\nversion: v1.2.3\n---",
         )
         .unwrap();
+        fs::write(root.path().join("README.md"), "Repository README marker").unwrap();
+        assert!(read_local_readme_search(root.path()).contains("Repository README marker"));
         let scans = scan_skills_from_directory(root.path(), "Local Skills").unwrap();
         assert_eq!(scans.len(), 1);
         assert_eq!(scans[0].name, "demo-skill");
@@ -7370,12 +7686,14 @@ mod tests {
                 description: "image".into(),
                 path: "skills/baoyu-image-gen".into(),
                 version: "v1.0.0".into(),
+                search_text: "image".into(),
             },
             SkillScan {
                 name: "baoyu-research".into(),
                 description: "research".into(),
                 path: "skills/baoyu-research".into(),
                 version: "v1.0.0".into(),
+                search_text: "research".into(),
             },
         ];
         let readme = r#"
@@ -7439,6 +7757,7 @@ clawhub install baoyu-image-gen
             description: "demo".into(),
             path: "skills/demo-skill".into(),
             version: "v1.0.0".into(),
+            search_text: "demo".into(),
         }];
         assert!(scan_plugins_from_zip(b"not a zip", "example/demo", &scans).is_err());
     }
@@ -7454,6 +7773,15 @@ clawhub install baoyu-image-gen
     fn invalid_skill_markdown_in_zip_does_not_become_fallback_skill() {
         let zip = zip_with_file("example-demo/skills/demo/SKILL.md", &[0xff, 0xfe, 0xfd]);
         assert!(scan_skills_from_zip(&zip, "example/demo").is_err());
+    }
+
+    #[test]
+    fn extracts_readme_search_text_from_zip() {
+        let zip = zip_with_file(
+            "example-demo/README.md",
+            b"# Demo\n\nUnique README search marker.",
+        );
+        assert!(readme_search_from_zip(&zip).contains("Unique README search marker"));
     }
 
     #[test]
@@ -7473,6 +7801,7 @@ clawhub install baoyu-image-gen
             description: "image".into(),
             path: "skills/baoyu-image-gen".into(),
             version: "v1.0.0".into(),
+            search_text: "image".into(),
         }];
         let plugins = vec![PluginScan {
             name: "baoyu-skills".into(),
@@ -7486,7 +7815,7 @@ clawhub install baoyu-image-gen
         }];
 
         let repo_id_value =
-            save_repository_with_plugins(&conn, &remote, &scans, &plugins, None).unwrap();
+            save_repository_with_plugins(&conn, &remote, &scans, &plugins, None, "").unwrap();
         let repo = load_ui_repositories(&conn)
             .unwrap()
             .into_iter()
@@ -7547,12 +7876,14 @@ clawhub install baoyu-image-gen
                 description: "stale duplicate from previous scan".into(),
                 path: "skills/stale-example-skill".into(),
                 version: "0.2.0".into(),
+                search_text: "stale duplicate from previous scan".into(),
             },
             SkillScan {
                 name: "icon-generator".into(),
                 description: "current skill".into(),
                 path: ".".into(),
                 version: "v0.1.0".into(),
+                search_text: "current skill".into(),
             },
         ];
         let current_scans = vec![SkillScan {
@@ -7560,10 +7891,11 @@ clawhub install baoyu-image-gen
             description: "current skill".into(),
             path: ".".into(),
             version: "v0.1.0".into(),
+            search_text: "current skill".into(),
         }];
 
-        save_repository_with_account(&conn, &remote, &initial_scans, None).unwrap();
-        save_repository_with_account(&conn, &remote, &current_scans, None).unwrap();
+        save_repository_with_account(&conn, &remote, &initial_scans, None, "").unwrap();
+        save_repository_with_account(&conn, &remote, &current_scans, None, "").unwrap();
 
         let repos = load_ui_repositories(&conn).unwrap();
         let repo = repos
@@ -7884,7 +8216,15 @@ clawhub install baoyu-image-gen
             "pushed_at": "2026-06-30T00:00:00Z",
             "updated_at": "2026-06-30T00:00:00Z"
         });
-        upsert_github_catalog_item(&conn, &account.id, &repo_json, true).unwrap();
+        upsert_github_catalog_item(
+            &conn,
+            &account.id,
+            &repo_json,
+            true,
+            Some("2026-06-30T01:00:00Z"),
+            "demo readme search",
+        )
+        .unwrap();
         let remote = RemoteInfo {
             owner: "octocat".into(),
             repo: "Hello-World".into(),
@@ -7893,13 +8233,16 @@ clawhub install baoyu-image-gen
             resolved_ref: "main".into(),
             sha: "bf4e9ac4d4428bda261afcfe981871ceb92d94e6".into(),
         };
-        save_repository_with_account(&conn, &remote, &[], Some(&account.id)).unwrap();
+        save_repository_with_account(&conn, &remote, &[], Some(&account.id), "tracked readme")
+            .unwrap();
 
         let catalog = load_ui_github_repositories(&conn, Some(&account.id)).unwrap();
 
         assert_eq!(catalog.len(), 1);
         assert!(catalog[0].private);
         assert!(catalog[0].starred);
+        assert!(catalog[0].starred_at.is_some());
+        assert_eq!(catalog[0].readme_search_text, "demo readme search");
         assert_eq!(catalog[0].language, "Rust");
         assert_eq!(
             catalog[0].tracked_repo_id.as_deref(),
@@ -7907,9 +8250,10 @@ clawhub install baoyu-image-gen
         );
         assert!(catalog[0].permissions.contains("push"));
 
-        upsert_github_catalog_item(&conn, &account.id, &repo_json, false).unwrap();
+        upsert_github_catalog_item(&conn, &account.id, &repo_json, false, None, "").unwrap();
         let refreshed_catalog = load_ui_github_repositories(&conn, Some(&account.id)).unwrap();
         assert!(!refreshed_catalog[0].starred);
+        assert!(refreshed_catalog[0].starred_at.is_none());
     }
 
     #[test]
@@ -7946,7 +8290,7 @@ clawhub install baoyu-image-gen
             "pushed_at": "2026-06-30T00:00:00Z",
             "updated_at": "2026-06-30T00:00:00Z"
         });
-        upsert_github_catalog_item(&conn, &account.id, &repo_json, false).unwrap();
+        upsert_github_catalog_item(&conn, &account.id, &repo_json, false, None, "").unwrap();
         let remote = RemoteInfo {
             owner: "octocat".into(),
             repo: "Hello-World".into(),
@@ -7955,7 +8299,7 @@ clawhub install baoyu-image-gen
             resolved_ref: "main".into(),
             sha: "bf4e9ac4d4428bda261afcfe981871ceb92d94e6".into(),
         };
-        save_repository_with_account(&conn, &remote, &[], Some(&account.id)).unwrap();
+        save_repository_with_account(&conn, &remote, &[], Some(&account.id), "").unwrap();
 
         save_user_note(
             &conn,
@@ -7990,6 +8334,7 @@ clawhub install baoyu-image-gen
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let root = tempfile::tempdir().unwrap();
+        fs::write(root.path().join("README.md"), "Repository README marker").unwrap();
         let skill_dir = root.path().join("demo-skill");
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(
@@ -8011,6 +8356,14 @@ clawhub install baoyu-image-gen
         let repo_id_value =
             save_local_repository_with_plugins(&conn, root.path(), &scans, &plugins, false)
                 .unwrap();
+        let cached_readme: String = conn
+            .query_row(
+                "SELECT readme_search_text FROM repositories WHERE id = ?1",
+                params![&repo_id_value],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(cached_readme.contains("Repository README marker"));
         let skill_id_value = skill_id(&repo_id_value, "demo-skill");
         let plugin_id_value = load_ui_plugins(&conn).unwrap()[0].id.clone();
 
@@ -8024,9 +8377,22 @@ clawhub install baoyu-image-gen
         save_user_note(&conn, "skill", &skill_id_value, "技能备注").unwrap();
         save_user_note(&conn, "plugin", &plugin_id_value, "插件备注").unwrap();
 
-        assert_eq!(load_ui_repositories(&conn).unwrap()[0].note, "本地仓库备注");
-        assert_eq!(load_ui_skills(&conn).unwrap()[0].note, "技能备注");
-        assert_eq!(load_ui_plugins(&conn).unwrap()[0].note, "插件备注");
+        let repo = load_ui_repositories(&conn).unwrap()[0].clone();
+        let skill = load_ui_skills(&conn).unwrap()[0].clone();
+        let plugin = load_ui_plugins(&conn).unwrap()[0].clone();
+        assert_eq!(repo.note, "本地仓库备注");
+        assert!(repo.readme_search_text.contains("Repository README marker"));
+        assert_eq!(skill.note, "技能备注");
+        assert!(skill.search_text.contains("Local demo"));
+        assert_eq!(plugin.note, "插件备注");
+        assert!(!plugin.created_at.is_empty());
+
+        let package = build_migration_package(&conn).unwrap();
+        assert!(package.repositories[0]
+            .readme_search_text
+            .contains("Repository README marker"));
+        assert!(package.skills[0].search_text.contains("Local demo"));
+        assert_eq!(package.plugins[0].search_text, "{}");
     }
 
     #[test]
@@ -8105,6 +8471,8 @@ clawhub install baoyu-image-gen
         assert!(columns.contains(&"deleted_path".to_string()));
         assert!(columns.contains(&"sync_targets_mode".to_string()));
         assert!(columns.contains(&"sync_targets".to_string()));
+        assert!(columns.contains(&"created_at".to_string()));
+        assert!(columns.contains(&"search_text".to_string()));
 
         let mut stmt = conn.prepare("PRAGMA table_info(repositories)").unwrap();
         let repo_columns = stmt
@@ -8113,6 +8481,27 @@ clawhub install baoyu-image-gen
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
         assert!(repo_columns.contains(&"github_account_id".to_string()));
+        assert!(repo_columns.contains(&"readme_search_text".to_string()));
+
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(github_repo_catalog)")
+            .unwrap();
+        let catalog_columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(catalog_columns.contains(&"starred_at".to_string()));
+        assert!(catalog_columns.contains(&"readme_search_text".to_string()));
+
+        let mut stmt = conn.prepare("PRAGMA table_info(plugins)").unwrap();
+        let plugin_columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(plugin_columns.contains(&"created_at".to_string()));
+        assert!(plugin_columns.contains(&"search_text".to_string()));
 
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'skill_sync_records'")
@@ -8157,5 +8546,54 @@ clawhub install baoyu-image-gen
         let user_notes_table: Option<String> =
             stmt.query_row([], |row| row.get(0)).optional().unwrap();
         assert_eq!(user_notes_table.as_deref(), Some("user_notes"));
+    }
+
+    #[test]
+    fn backfills_added_time_and_search_text_metadata() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO repositories
+             (id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha, url, branch, created_at, updated_at)
+             VALUES ('repo-1', 'example/repo', 'example', 'repo', 'main', 'skill repo', 1, 'abc', 'https://github.com/example/repo', 'main', '2026-07-01T00:00:00Z', '2026-07-02T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO skills
+             (id, repo_id, name, description, repo_name, path, ref_name, remote_version, status, updated_at)
+             VALUES ('skill-1', 'repo-1', 'DemoSkill', 'Skill description', 'example/repo', '.', 'main', 'v1', 'not-installed', '2026-07-03T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO plugins
+             (id, repo_id, name, description, kind, install_command, source_path, source_excerpt, status, detected_sha, updated_at)
+             VALUES ('plugin-1', 'repo-1', 'DemoPlugin', 'Plugin description', 'codex-marketplace', '/plugin install demo', 'README.md', 'README plugin excerpt', 'detected', 'abc', '2026-07-04T00:00:00Z')",
+            [],
+        )
+        .unwrap();
+
+        backfill_search_metadata(&conn).unwrap();
+
+        let skill: (String, String) = conn
+            .query_row(
+                "SELECT created_at, search_text FROM skills WHERE id = 'skill-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(skill.0, "2026-07-03T00:00:00Z");
+        assert_eq!(skill.1, "Skill description");
+
+        let plugin: (String, String) = conn
+            .query_row(
+                "SELECT created_at, search_text FROM plugins WHERE id = 'plugin-1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(plugin.0, "2026-07-04T00:00:00Z");
+        assert_eq!(plugin.1, "README plugin excerpt");
     }
 }

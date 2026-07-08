@@ -112,8 +112,8 @@ pub(crate) fn sync_plugins(
         conn.execute(
             "INSERT INTO plugins
              (id, repo_id, name, description, kind, install_command, update_command,
-              source_path, source_excerpt, status, detected_sha, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'detected', ?10, ?11)
+              source_path, source_excerpt, status, detected_sha, created_at, updated_at, search_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'detected', ?10, ?11, ?11, ?12)
              ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               description = excluded.description,
@@ -124,6 +124,7 @@ pub(crate) fn sync_plugins(
               source_excerpt = excluded.source_excerpt,
               status = 'detected',
               detected_sha = excluded.detected_sha,
+              search_text = excluded.search_text,
               updated_at = excluded.updated_at",
             params![
                 id,
@@ -141,6 +142,7 @@ pub(crate) fn sync_plugins(
                 scan.source_excerpt,
                 detected_sha,
                 now,
+                scan.source_excerpt,
             ],
         )?;
         conn.execute(

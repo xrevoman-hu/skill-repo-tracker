@@ -442,6 +442,7 @@ const initialPlugins = [
     status: "detected",
     skillCount: 1,
     detectedSha: "a1b2c3d",
+    createdAt: "2026-06-14 10:18",
     updatedAt: "2026-06-14 10:18",
     linkedSkills: [
       {
@@ -467,6 +468,7 @@ const initialPlugins = [
     status: "detected",
     skillCount: 1,
     detectedSha: "a1b2c3d",
+    createdAt: "2026-06-14 10:18",
     updatedAt: "2026-06-14 10:18",
     linkedSkills: [
       {
@@ -637,9 +639,9 @@ const COPY = {
     settings: "设置",
     needBackup: "需要备份",
     search: "搜索",
-    searchRepositories: "搜索仓库...",
-    searchSkills: "搜索 Skill...",
-    searchPlugins: "搜索插件...",
+    searchRepositories: "搜索仓库、备注、README...",
+    searchSkills: "搜索 Skill、备注、README...",
+    searchPlugins: "搜索插件、备注、README...",
     sourceRepositoryFilter: "来源仓库",
     allRepositories: "全部仓库",
     searchRepository: "搜索仓库",
@@ -669,6 +671,9 @@ const COPY = {
     skills: "技能",
     remoteSha: "远端 SHA",
     lastChecked: "最后检测",
+    addedAt: "添加时间",
+    createdAt: "添加时间",
+    starredAt: "Star 时间",
     checkStatusLabel: "检测状态",
     lastBackup: "最后备份",
     actions: "操作",
@@ -1024,9 +1029,9 @@ const COPY = {
     settings: "Settings",
     needBackup: "need backup",
     search: "Search",
-    searchRepositories: "Search repositories...",
-    searchSkills: "Search Skills...",
-    searchPlugins: "Search plugins...",
+    searchRepositories: "Search repositories, notes, README...",
+    searchSkills: "Search Skills, notes, README...",
+    searchPlugins: "Search plugins, notes, README...",
     sourceRepositoryFilter: "Source repository",
     allRepositories: "All repositories",
     searchRepository: "Search repositories",
@@ -1056,6 +1061,9 @@ const COPY = {
     skills: "Skills",
     remoteSha: "Remote SHA",
     lastChecked: "Last Checked",
+    addedAt: "Added",
+    createdAt: "Added",
+    starredAt: "Starred at",
     checkStatusLabel: "Check status",
     lastBackup: "Last backup",
     actions: "Actions",
@@ -1616,6 +1624,32 @@ function fuzzyMatch(values, query) {
   return values.some((value) => normalizeSearch(displayValue(value, "zh")).includes(term) || normalizeSearch(value).includes(term));
 }
 
+function compareNames(left, right) {
+  return String(left || "").localeCompare(String(right || ""), "en", {
+    caseFirst: "upper",
+    sensitivity: "variant",
+  });
+}
+
+function sortableDate(value) {
+  const normalized = String(value || "").trim();
+  return normalized && normalized !== "Never" && normalized !== "-" ? normalized : "";
+}
+
+function compareDates(left, right, direction = "asc") {
+  const leftDate = sortableDate(left);
+  const rightDate = sortableDate(right);
+  if (!leftDate && rightDate) return 1;
+  if (leftDate && !rightDate) return -1;
+  const compared = leftDate.localeCompare(rightDate);
+  return direction === "asc" ? compared : -compared;
+}
+
+function sortIndicator(active, direction) {
+  if (!active) return "";
+  return direction === "asc" ? " ↑" : " ↓";
+}
+
 function repositorySearchValues(repo, language = "zh") {
   return [
     repo.name,
@@ -1626,6 +1660,7 @@ function repositorySearchValues(repo, language = "zh") {
     repo.localPath,
     repo.type,
     repo.sourceType,
+    repo.readmeSearchText,
     repo.note,
   ];
 }
@@ -1789,9 +1824,12 @@ export function App() {
   const pluginDetailRequestRef = useRef("");
   const [selectedRows, setSelectedRows] = useState(["content"]);
   const [repoFilter, setRepoFilter] = useState("all");
+  const [repoSort, setRepoSort] = useState({ key: "name", direction: "asc" });
   const [skillFilter, setSkillFilter] = useState("all");
+  const [skillSort, setSkillSort] = useState({ key: "name", direction: "asc" });
   const [skillRepoQuery, setSkillRepoQuery] = useState("");
   const [taskFilter, setTaskFilter] = useState("all");
+  const [pluginSort, setPluginSort] = useState({ key: "name", direction: "asc" });
   const [search, setSearch] = useState("");
   const [skillSearch, setSkillSearch] = useState("");
   const [pluginSearch, setPluginSearch] = useState(() => initialFreeParam("pluginSearch"));
@@ -2014,80 +2052,113 @@ export function App() {
     };
   }, [repositories]);
 
-  const filteredRepos = repositories.filter((repo) => {
-    const matchesSearch = fuzzyMatch(repositorySearchValues(repo, language), search);
-    const matchesFilter =
-      repoFilter === "all" ||
-      (repoFilter === "skill" && repo.type === "skill repo") ||
-      (repoFilter === "generic" && repo.type === "generic repo") ||
-      (repoFilter === "updated" && repo.backupStatus === "updated-not-backed-up") ||
-      (repoFilter === "failed" && repo.backupStatus === "check-failed") ||
-      (repoFilter === "never" && repo.backupStatus === "never-backed-up");
-    return matchesSearch && matchesFilter;
-  });
+  const filteredRepos = useMemo(() => {
+    const visible = repositories.filter((repo) => {
+      const matchesSearch = fuzzyMatch(repositorySearchValues(repo, language), search);
+      const matchesFilter =
+        repoFilter === "all" ||
+        (repoFilter === "skill" && repo.type === "skill repo") ||
+        (repoFilter === "generic" && repo.type === "generic repo") ||
+        (repoFilter === "updated" && repo.backupStatus === "updated-not-backed-up") ||
+        (repoFilter === "failed" && repo.backupStatus === "check-failed") ||
+        (repoFilter === "never" && repo.backupStatus === "never-backed-up");
+      return matchesSearch && matchesFilter;
+    });
+    return [...visible].sort((left, right) => {
+      if (repoSort.key === "addedAt") {
+        const compared = compareDates(left.addedAt, right.addedAt, repoSort.direction);
+        if (compared !== 0) return compared;
+      }
+      const compared = compareNames(displayRepoName(left.name, language), displayRepoName(right.name, language));
+      return repoSort.key === "name" && repoSort.direction === "desc" ? -compared : compared;
+    });
+  }, [repositories, language, search, repoFilter, repoSort]);
 
-  const filteredSkills = skills.filter((skill) => {
-    const matchesSearch = fuzzyMatch(
-      [
-        skill.name,
-        skill.description,
-        skill.repo,
-        displayRepoName(skill.repo, language),
-        skill.path,
-        skill.sourceType,
-        skill.localPath,
-        skill.installPath,
-        skill.note,
-      ],
-      skillSearch,
-    );
-    const sourceRepo = repositories.find((repo) => repo.id === skillRepoId(skill));
-    const matchesAllRepositories = fuzzyMatch([t("allRepositories"), "all", "全部仓库"], skillRepoQuery);
-    const matchesRepo = matchesAllRepositories || fuzzyMatch(
-      [
-        skill.repo,
-        displayRepoName(skill.repo, language),
-        skill.path,
-        skill.sourceType,
-        skill.localPath,
-        skill.installPath,
-        sourceRepo?.name,
-        sourceRepo ? displayRepoName(sourceRepo.name, language) : "",
-        sourceRepo?.ref,
-        sourceRepo?.url,
-        sourceRepo?.localPath,
-        sourceRepo?.type,
-        sourceRepo ? statusLabel(sourceRepo.type, language) : "",
-        sourceRepo?.sourceType,
-        sourceRepo?.note,
-      ],
-      skillRepoQuery,
-    );
-    const visibleByFilter =
-      skillFilter === "deleted"
-        ? skill.status === "deleted"
-        : skill.status !== "deleted" && (skillFilter === "all" || skill.status === skillFilter);
-    return matchesSearch && matchesRepo && visibleByFilter;
-  });
+  const filteredSkills = useMemo(() => {
+    const visible = skills.filter((skill) => {
+      const matchesSearch = fuzzyMatch(
+        [
+          skill.name,
+          skill.description,
+          skill.repo,
+          displayRepoName(skill.repo, language),
+          skill.path,
+          skill.sourceType,
+          skill.localPath,
+          skill.installPath,
+          skill.searchText,
+          skill.note,
+        ],
+        skillSearch,
+      );
+      const sourceRepo = repositories.find((repo) => repo.id === skillRepoId(skill));
+      const matchesAllRepositories = fuzzyMatch([t("allRepositories"), "all", "全部仓库"], skillRepoQuery);
+      const matchesRepo = matchesAllRepositories || fuzzyMatch(
+        [
+          skill.repo,
+          displayRepoName(skill.repo, language),
+          skill.path,
+          skill.sourceType,
+          skill.localPath,
+          skill.installPath,
+          sourceRepo?.name,
+          sourceRepo ? displayRepoName(sourceRepo.name, language) : "",
+          sourceRepo?.ref,
+          sourceRepo?.url,
+          sourceRepo?.localPath,
+          sourceRepo?.type,
+          sourceRepo ? statusLabel(sourceRepo.type, language) : "",
+          sourceRepo?.sourceType,
+          sourceRepo?.readmeSearchText,
+          sourceRepo?.note,
+        ],
+        skillRepoQuery,
+      );
+      const visibleByFilter =
+        skillFilter === "deleted"
+          ? skill.status === "deleted"
+          : skill.status !== "deleted" && (skillFilter === "all" || skill.status === skillFilter);
+      return matchesSearch && matchesRepo && visibleByFilter;
+    });
+    return [...visible].sort((left, right) => {
+      if (skillSort.key === "createdAt") {
+        const compared = compareDates(left.createdAt, right.createdAt, skillSort.direction);
+        if (compared !== 0) return compared;
+      }
+      const compared = compareNames(left.name, right.name);
+      return skillSort.key === "name" && skillSort.direction === "desc" ? -compared : compared;
+    });
+  }, [skills, repositories, language, skillSearch, skillRepoQuery, skillFilter, skillSort]);
 
-  const filteredPlugins = plugins.filter((plugin) =>
-    fuzzyMatch(
-      [
-        plugin.name,
-        plugin.description,
-        plugin.kind,
-        statusLabel(plugin.kind, language),
-        plugin.repoName,
-        displayRepoName(plugin.repoName, language),
-        plugin.installCommand,
-        plugin.updateCommand,
-        plugin.sourcePath,
-        plugin.status,
-        plugin.note,
-      ],
-      pluginSearch,
-    ),
-  );
+  const filteredPlugins = useMemo(() => {
+    const visible = plugins.filter((plugin) =>
+      fuzzyMatch(
+        [
+          plugin.name,
+          plugin.description,
+          plugin.kind,
+          statusLabel(plugin.kind, language),
+          plugin.repoName,
+          displayRepoName(plugin.repoName, language),
+          plugin.installCommand,
+          plugin.updateCommand,
+          plugin.sourcePath,
+          plugin.sourceExcerpt,
+          plugin.status,
+          plugin.note,
+        ],
+        pluginSearch,
+      ),
+    );
+    return [...visible].sort((left, right) => {
+      if (pluginSort.key === "createdAt") {
+        const compared = compareDates(left.createdAt, right.createdAt, pluginSort.direction);
+        if (compared !== 0) return compared;
+      }
+      const compared = compareNames(left.name, right.name);
+      return pluginSort.key === "name" && pluginSort.direction === "desc" ? -compared : compared;
+    });
+  }, [plugins, language, pluginSearch, pluginSort]);
 
   const filteredTasks = tasks.filter((task) => {
     return taskFilter === "all" || task.status === taskFilter;
@@ -3507,6 +3578,8 @@ export function App() {
               setInspectorRepoId={setInspectorRepoId}
               repoFilter={repoFilter}
               setRepoFilter={setRepoFilter}
+              repoSort={repoSort}
+              setRepoSort={setRepoSort}
               setModal={setModal}
               openAddRepoModal={openAddRepoModal}
               hasRepositories={repositories.length > 0}
@@ -3530,6 +3603,7 @@ export function App() {
               onTrackRepository={trackGithubRepository}
               onUntrackRepository={untrackGithubRepository}
               onOpenUrl={openGithubUrl}
+              onCopyUrl={copyUrl}
               onSaveNote={(repo, note) => saveItemNote("githubRepository", repo, note)}
               t={t}
             />
@@ -3540,6 +3614,8 @@ export function App() {
               skills={filteredSkills}
               skillFilter={skillFilter}
               setSkillFilter={setSkillFilter}
+              skillSort={skillSort}
+              setSkillSort={setSkillSort}
               handleSkillAction={handleSkillAction}
               openSkillDetail={openSkillDetail}
               setActiveTab={setActiveTab}
@@ -3571,6 +3647,8 @@ export function App() {
               hasInspector={Boolean(selectedPlugin)}
               selectedPluginId={selectedPluginId}
               focusPluginRow={demoFocus === "plugin-row"}
+              pluginSort={pluginSort}
+              setPluginSort={setPluginSort}
               language={language}
               t={t}
               Tag={Tag}
@@ -3979,6 +4057,8 @@ function RepositoriesView({
   setInspectorRepoId,
   repoFilter,
   setRepoFilter,
+  repoSort,
+  setRepoSort,
   setModal,
   openAddRepoModal,
   hasRepositories,
@@ -3993,6 +4073,13 @@ function RepositoriesView({
     ["never", t("neverBacked")],
     ["failed", t("checkFailed")],
   ];
+
+  function toggleSort(key) {
+    setRepoSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+  }
 
   return (
     <section className="main-pane">
@@ -4029,8 +4116,17 @@ function RepositoriesView({
                     type="checkbox"
                   />
                 </th>
-                <th>{t("repository")}</th>
+                <th>
+                  <button className="table-sort-button" onClick={() => toggleSort("name")} type="button">
+                    {t("repository")}{sortIndicator(repoSort.key === "name", repoSort.direction)}
+                  </button>
+                </th>
                 <th>{t("type")}</th>
+                <th>
+                  <button className="table-sort-button" onClick={() => toggleSort("addedAt")} type="button">
+                    {t("addedAt")}{sortIndicator(repoSort.key === "addedAt", repoSort.direction)}
+                  </button>
+                </th>
                 <th>{t("ref")}</th>
                 <th>{t("skills")}</th>
                 <th>{t("remoteSha")}</th>
@@ -4072,6 +4168,7 @@ function RepositoriesView({
                     <td>
                       <Tag value={repo.type} language={language} />
                     </td>
+                    <td className="mono">{repo.addedAt || "-"}</td>
                     <td>{repo.ref}</td>
                     <td>{repo.skills}</td>
                     <td className="mono" title={remoteSha}>{remoteSha}</td>
@@ -4374,6 +4471,8 @@ function SkillsView({
   skills,
   skillFilter,
   setSkillFilter,
+  skillSort,
+  setSkillSort,
   skillRepoQuery,
   setSkillRepoQuery,
   handleSkillAction,
@@ -4401,6 +4500,13 @@ function SkillsView({
     ["source-unavailable", t("sourceUnavailable")],
     ["deleted", t("deletedSkills")],
   ];
+
+  function toggleSort(key) {
+    setSkillSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+  }
 
   function jumpToRepo(skill) {
     const repo = repositories.find((item) => displayRepoName(item.name, language) === displayRepoName(skill.repo, language));
@@ -4470,9 +4576,18 @@ function SkillsView({
           <table className="data-table skills-table">
             <thead>
               <tr>
-                <th>{t("skill")}</th>
+                <th>
+                  <button className="table-sort-button" onClick={() => toggleSort("name")} type="button">
+                    {t("skill")}{sortIndicator(skillSort.key === "name", skillSort.direction)}
+                  </button>
+                </th>
                 <th>{t("source")}</th>
                 <th>{t("sourceRepository")}</th>
+                <th>
+                  <button className="table-sort-button" onClick={() => toggleSort("createdAt")} type="button">
+                    {t("createdAt")}{sortIndicator(skillSort.key === "createdAt", skillSort.direction)}
+                  </button>
+                </th>
                 <th>{t("path")}</th>
                 <th>{t("version")}</th>
                 <th>{t("status")}</th>
@@ -4502,6 +4617,7 @@ function SkillsView({
                     <td className="source-repo-cell" title={displayRepoName(skill.repo, language)}>
                       {displayRepoName(skill.repo, language)}
                     </td>
+                    <td className="mono">{skill.createdAt || "-"}</td>
                     <td className="mono" title={skill.path}>{skill.path}</td>
                     <td className="mono" title={versionSummary(skill, language)}>{versionSummary(skill, language)}</td>
                     <td>
