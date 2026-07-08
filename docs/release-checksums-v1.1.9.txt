@@ -1,0 +1,20 @@
+Skill Repo Tracker v1.1.9 local verification package
+Generated: 2026-07-08
+
+Artifact:
+src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.9_aarch64.dmg
+
+Size:
+7611101 bytes
+
+SHA-256:
+8a29fb4e696cc99f338d01d0af31e384b585e1df32518900093c58553647e46a
+
+Notes:
+This is an ad-hoc signed Apple Silicon macOS 12+ DMG for zero-cost GitHub
+Release testing. The DMG contains `Skill Repo Tracker.app` and an
+`Applications` alias for manual installation.
+
+It is not Developer ID signed or Apple notarized. First launch may require
+Control-click Open, System Settings -> Privacy & Security -> Open Anyway, or
+`xattr -cr` after download.

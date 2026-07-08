@@ -48,7 +48,7 @@ Skill Repo Tracker 是一个给 AI Skill 使用者准备的本地桌面工具。
 
 Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再按你的选择发布到工具目录。主库默认在 `~/SkillRepoTracker/skills`，当前默认发布到 Claude Code 和 Codex。Gemini、OpenCode、OpenClaw、Hermes 可以手动勾选，但不会默认打开。
 
-当前版本：`v1.1.8`
+当前版本：`v1.1.9`
 
 ### 它帮你完成什么
 
@@ -135,7 +135,7 @@ npm run tauri build -- --bundles app,dmg
 常见产物位置：
 
 - `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
-- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.8_*.dmg`
+- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.9_*.dmg`
 
 #### 免费分发测试包
 
@@ -143,14 +143,14 @@ npm run tauri build -- --bundles app,dmg
 
 ```bash
 codesign --force --deep --sign - "src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-codesign --force --sign - "src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.8_aarch64.dmg"
+codesign --force --sign - "src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.9_aarch64.dmg"
 ```
 
 这种包可以挂载、复制到 `/Applications` 并本机验证，但不是 Apple notarized 公开安装包。首次打开时，macOS 可能提示无法验证开发者；测试用户需要右键打开，或在“系统设置 -> 隐私与安全性”里选择“仍要打开”。技术用户也可以对下载后的 `.app` 执行：
 
 安装测试包时请注意：
 
-1. 从 GitHub Release 下载 `Skill.Repo.Tracker_1.1.8_aarch64.dmg`。
+1. 从 GitHub Release 下载 `Skill.Repo.Tracker_1.1.9_aarch64.dmg`。
 2. 双击打开 DMG，把 `Skill Repo Tracker.app` 拖入 `/Applications`。
 3. 首次启动如果提示“无法验证开发者”或类似安全提示，请在 Finder 里右键这个 App，选择“打开”，再在弹窗中确认“打开”。
 4. 如果右键打开仍被拦截，请进入“系统设置 -> 隐私与安全性”，在底部找到被拦截的 Skill Repo Tracker，点击“仍要打开”。
@@ -203,7 +203,7 @@ Skill Repo Tracker is a local-first macOS app for people who install, update, an
 
 Instead of treating Claude Code, Codex, Gemini, OpenCode, OpenClaw, or Hermes folders as the source of truth, the app keeps one independent Skill library at `~/SkillRepoTracker/skills`. Skills are installed there first, then copied to selected tool directories.
 
-Current version: `v1.1.8`
+Current version: `v1.1.9`
 
 ### What It Helps With
 
@@ -245,20 +245,20 @@ npm run tauri build -- --bundles app,dmg
 Generated artifacts:
 
 - `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
-- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.8_*.dmg`
+- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.9_*.dmg`
 
 Free test distribution without an Apple Developer ID can use ad-hoc signing for both the `.app` and the `.dmg`:
 
 ```bash
 codesign --force --deep --sign - "src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-codesign --force --sign - "src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.8_aarch64.dmg"
+codesign --force --sign - "src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.1.9_aarch64.dmg"
 ```
 
 This is suitable for GitHub Release test assets that users manually allow through Gatekeeper. It is not an Apple-notarized public installer. A no-warning public DMG still requires Developer ID signing and notarization.
 
 Install notes for the downloaded DMG:
 
-1. Download `Skill.Repo.Tracker_1.1.8_aarch64.dmg` from GitHub Releases.
+1. Download `Skill.Repo.Tracker_1.1.9_aarch64.dmg` from GitHub Releases.
 2. Open the DMG and drag `Skill Repo Tracker.app` into `/Applications`.
 3. On first launch, macOS may block the app because it is ad-hoc signed. Control-click the app in Finder, choose Open, then confirm Open.
 4. If it is still blocked, open System Settings -> Privacy & Security and choose Open Anyway for Skill Repo Tracker.
