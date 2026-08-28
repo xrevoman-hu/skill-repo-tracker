@@ -1,0 +1,16 @@
+Generated: 2026-08-29
+
+Artifact:
+Skill.Repo.Tracker_1.1.12_aarch64.dmg
+
+Size:
+6965475 bytes
+
+SHA-256:
+c25d918e279f3e1038022251fb24fad9b4951ac0e7f924a5e217567a10be0859
+
+Notes:
+Apple Silicon macOS 12+ DMG. The application bundle and disk image are ad-hoc
+signed for testing and sharing through GitHub Releases. The mounted app passed
+strict deep signature verification. The package is not Developer ID signed or
+Apple notarized, so first launch may require manual approval in macOS.

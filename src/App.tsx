@@ -1,11 +1,164 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { api, isDesktopRuntime } from "./api";
-import type { GitHubAccount, GitHubRepository } from "./api";
+import type {
+  GitHubAccount,
+  GitHubRepository,
+  PluginSkillSummary,
+  SkillDetail,
+  SkillPluginReference,
+  SkillUpdateConflict,
+  UiRepository,
+  UiSkill,
+  UiTask,
+} from "./api";
 import { GitHubWorkbench } from "./GitHubWorkbench";
 import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
 import { PluginInspector, PluginsView } from "./PluginsView";
+import {
+  REPOSITORY_PAGE_SIZES,
+  buildRepositoryPage,
+  isRepositorySelectable,
+  pageSelectionState,
+  repositoryPaginationReducer,
+  togglePageSelection,
+} from "./repositoryPagination";
+import { refreshStaleSkillConflict } from "./skillConflictRefresh";
 
-const initialRepos = [
+type RepositorySort = {
+  key: "name" | "addedAt";
+  direction: "asc" | "desc";
+};
+
+type RepositoryModal = {
+  type: string;
+  mode?: string;
+  repoIds?: string[];
+};
+
+type RepositoriesViewProps = {
+  repos: UiRepository[];
+  selectedRepo?: UiRepository | null;
+  selectedRows: string[];
+  selectAllVisible: (checked: boolean) => void;
+  toggleRow: (repoId: string) => void;
+  setSelectedRepoId: (repoId: string) => void;
+  setInspectorRepoId: (repoId: string) => void;
+  repoFilter: string;
+  setRepoFilter: (filter: string) => void;
+  repoSort: RepositorySort;
+  setRepoSort: (
+    next: RepositorySort | ((current: RepositorySort) => RepositorySort),
+  ) => void;
+  setModal: (modal: RepositoryModal) => void;
+  openAddRepoModal: () => void;
+  hasRepositories: boolean;
+  page?: number;
+  pageSize?: number;
+  totalItems?: number;
+  allItemsTotal?: number;
+  totalPages?: number;
+  onPageChange?: (page: number) => void;
+  onPageSizeChange?: (pageSize: number) => void;
+  language: string;
+  t: (key: string) => string;
+};
+
+type SyncTarget = {
+  id: string;
+  label: string;
+  path: string;
+  exists?: boolean;
+};
+
+type SkillSort = {
+  key: "name" | "createdAt";
+  direction: "asc" | "desc";
+};
+
+type SkillModal = {
+  type: string;
+  skillId?: string;
+};
+
+type SkillsViewProps = {
+  skills: UiSkill[];
+  skillFilter: string;
+  setSkillFilter: (filter: string) => void;
+  skillSort: SkillSort;
+  setSkillSort: (next: SkillSort | ((current: SkillSort) => SkillSort)) => void;
+  skillRepoQuery: string;
+  setSkillRepoQuery: (query: string) => void;
+  handleSkillAction: (skill: UiSkill) => void | Promise<void>;
+  openSkillConflict: (skill: UiSkill) => void | Promise<void>;
+  openSkillDetail: (skill: UiSkill) => void | Promise<void>;
+  setActiveTab: (tab: string) => void;
+  setSelectedRepoId: (repoId: string) => void;
+  setInspectorRepoId: (repoId: string) => void;
+  setModal: (modal: SkillModal) => void;
+  restoreSkill: (skillId: string) => void | Promise<void>;
+  repositories: UiRepository[];
+  availableSyncTargets: SyncTarget[];
+  hasSkills: boolean;
+  hasInspector: boolean;
+  selectedSkillId: string;
+  isPending: (key: string) => boolean;
+  language: string;
+  t: (key: string) => string;
+};
+
+type SkillInspectorProps = {
+  skill: UiSkill;
+  detail: SkillDetail | null;
+  loading: boolean;
+  error: string;
+  onClose: () => void;
+  setActiveTab: (tab: string) => void;
+  setSelectedRepoId: (repoId: string) => void;
+  setInspectorRepoId: (repoId: string) => void;
+  repositories: UiRepository[];
+  availableSyncTargets: SyncTarget[];
+  defaultSyncTargets: string[];
+  updateSkillSyncTargets: (
+    skillId: string,
+    mode: "inherit" | "custom",
+    targets: string[],
+  ) => void | Promise<void>;
+  openSkillConflict: (skill: UiSkill) => void | Promise<void>;
+  recheckSkillConflict: (skill: UiSkill) => void | Promise<void>;
+  openSkillFolder: (skillId: string) => void | Promise<void>;
+  isPending: (key: string) => boolean;
+  openPluginDetail: (plugin: SkillPluginReference) => void;
+  onSaveNote: (skill: UiSkill, note: string) => void | Promise<void>;
+  language: string;
+  t: (key: string) => string;
+};
+
+type TasksViewProps = {
+  tasks: UiTask[];
+  taskFilter: string;
+  setTaskFilter: (filter: string) => void;
+  retryTask: (task: UiTask) => void | Promise<void>;
+  copyTaskSummary: (task: UiTask) => void | Promise<void>;
+  hasTasks: boolean;
+  isPending: (key: string) => boolean;
+  language: string;
+  t: (key: string) => string;
+};
+
+type RunningTaskProps = {
+  tasks: UiTask[];
+  setActiveTab: (tab: string) => void;
+  language: string;
+  t: (key: string) => string;
+};
+
+type OptimisticTaskInput = Pick<UiTask, "kind" | "target"> &
+  Partial<Pick<UiTask, "progress" | "summary" | "log">>;
+
+type DemoTaskInput = Omit<UiTask, "id">;
+
+const initialRepos: UiRepository[] = [
   {
     id: "content",
     name: "example-org/content-skill-kit",
@@ -338,9 +491,9 @@ const initialRepos = [
     snapshotTime: "2026-06-14 05:46",
     recognizedSkills: [{ name: "ml-notes-reader", version: "v2.0.0" }],
   },
-];
+].map((repository) => ({ ...repository, sourceType: "github" }));
 
-const initialSkills = [
+const initialSkills: UiSkill[] = [
   {
     id: "prd",
     repoId: "spec",
@@ -351,8 +504,9 @@ const initialSkills = [
     ref: "main",
     localVersion: "08aa901",
     remoteVersion: "08ff12a",
-    status: "local-modified",
+    status: "update-conflict",
     installed: true,
+    installPath: "~/SkillRepoTracker/skills/spec-writer-skill",
     updatedAt: "2026-06-10 18:20",
   },
   {
@@ -482,7 +636,7 @@ const initialPlugins = [
   },
 ];
 
-const initialTasks = [
+const initialTasks: UiTask[] = [
   {
     id: "backup-213012",
     kind: "Backup repositories",
@@ -490,6 +644,7 @@ const initialTasks = [
     progress: "7 / 12",
     status: "partial-success",
     summary: "7 success, 1 failed, 4 queued",
+    retryable: false,
     log: [
       "refresh remote state for 17 repositories",
       "skip example-org/missing-skill because check failed",
@@ -506,6 +661,7 @@ const initialTasks = [
     progress: "17 / 17",
     status: "success",
     summary: "15 success, 2 failed",
+    retryable: false,
     log: [
       "resolve default refs",
       "record remote_head_sha for public repositories",
@@ -517,12 +673,13 @@ const initialTasks = [
     kind: "Update Skill",
     target: "spec-writer-skill",
     progress: "0 / 1",
-    status: "failed",
-    summary: "blocked by local modifications",
+    status: "waiting-user",
+    summary: "waiting for user to update local Skill",
+    retryable: false,
     log: [
       "calculate installed_skill_hash",
       "local content differs from installation record",
-      "waiting for user choice: skip, backup overwrite, force overwrite",
+      "waiting for user-managed update with Agent tools",
     ],
   },
   {
@@ -532,6 +689,7 @@ const initialTasks = [
     progress: "4 / 9",
     status: "interrupted",
     summary: "app closed during ZIP download",
+    retryable: false,
     log: ["task interrupted before manifest write", "last_backup_sha not updated"],
   },
 ];
@@ -635,6 +793,9 @@ const COPY = {
     checkAll: "检测全部",
     backupUpdated: "备份有更新",
     backupSelected: "备份选中",
+    backupSelectedCount: "备份选中（{count}）",
+    selectedOnOtherPages: "其他页 {count} 条",
+    clearSelection: "清空选择",
     addRepository: "添加仓库",
     settings: "设置",
     needBackup: "需要备份",
@@ -710,6 +871,14 @@ const COPY = {
     quickActions: "快捷操作",
     backupNow: "立即备份",
     openBackupFolder: "打开备份目录",
+    pageSize: "每页行数",
+    paginationRange: "{start}–{end} / {filtered}",
+    paginationFilteredSuffix: "（全部 {total}）",
+    paginationPage: "第 {page} / {pages} 页",
+    firstPage: "首页",
+    previousPage: "上一页",
+    nextPage: "下一页",
+    lastPage: "末页",
     viewGithub: "查看 GitHub",
     chooseBrowser: "选择浏览器",
     copyLink: "复制链接",
@@ -771,8 +940,11 @@ const COPY = {
     installedLocal: "本地已安装",
     notInstalled: "未安装",
     latest: "最新",
+    installedCustomized: "已更新，含本地定制",
     updateAvailable: "可更新",
     localModified: "本地有修改",
+    updateConflict: "待处理冲突",
+    handleConflict: "处理冲突",
     sourceUnavailable: "来源不可用",
     skill: "技能",
     sourceRepository: "来源仓库",
@@ -803,7 +975,7 @@ const COPY = {
     taskDetails: "任务详情",
     taskOperations: "任务操作",
     settingsTitle: "设置",
-    settingsSubtitle: "配置主题、语言、备份任务和本地覆盖保护。",
+    settingsSubtitle: "配置主题、语言、目录、同步与自动任务。",
     settingsHelp: "这些设置都保存在本地。",
     appearanceLanguage: "外观与语言",
     theme: "主题",
@@ -844,8 +1016,6 @@ const COPY = {
     helpMetadataConcurrency: "同时检测远端仓库元数据的数量。数值越高越快，也更容易触发限流。",
     helpRetryCount: "检测、备份或更新失败后自动重试的次数。",
     helpAutoCheckInterval: "应用打开期间自动检测远端 SHA 的间隔。",
-    helpOverwriteProtection: "更新 Skill 前检查本地内容是否被改动，避免静默覆盖。",
-    helpRequireConfirmation: "备份全部、强制覆盖等高风险操作会要求二次确认。",
     helpScheduleForegroundOnly: "定时任务只在 App 打开时运行，关闭后不会后台常驻。",
     helpAutoBackupUpdatedOnly: "启用后只备份“有更新未备份”的仓库，不会备份所有仓库。",
     helpCleanupKeep: "保留最近多少份备份历史，后续清理策略会按这个数值执行。",
@@ -859,11 +1029,6 @@ const COPY = {
     metadataConcurrency: "元数据并发",
     retryCount: "失败重试次数",
     autoCheckInterval: "自动检测间隔",
-    safetyDefaults: "安全默认项",
-    overwriteProtection: "本地 Skill 覆盖保护",
-    overwriteProtectionText: "更新前检测本地改动，默认要求确认。",
-    requireConfirmation: "高风险操作二次确认",
-    requireConfirmationText: "备份全部、强制覆盖等操作需要确认。",
     githubAuthentication: "GitHub 认证",
     p1Disabled: "P1 未启用",
     authP1Text: "Token 仅保存到系统安全存储，不写入 SQLite、manifest 或任务日志。",
@@ -955,13 +1120,6 @@ const COPY = {
     outputDirectory: "输出目录",
     outputDirectoryText: "将生成 ZIP 文件和 manifest.json。Token 不会被写入。",
     confirmBackup: "确认备份",
-    localSkillModified: "本地 Skill 有修改",
-    localSkillModifiedText: "本地内容不同于上次安装 hash。继续更新可能覆盖用户改动。",
-    recommendedDefault: "推荐默认",
-    recommendedOverwriteText: "先备份本地 Skill，再用远端版本覆盖。",
-    skipUpdate: "跳过更新",
-    backupThenOverwrite: "备份后覆盖",
-    forceOverwrite: "强制覆盖",
     backupCreated: "备份任务已创建。manifest 写入完成后会更新成功项。",
     remoteRefreshed: "远端状态已刷新。检测失败仓库保留上次已知 SHA。",
     repoExists: "该仓库和 ref 已经被追踪。",
@@ -970,9 +1128,37 @@ const COPY = {
     installedSkill: "已安装到 Skill 主库。",
     sourceUnavailableToast: "来源不可用。请先重新检测仓库。",
     skillUpdated: "已更新本地 Skill。不会触发仓库备份。",
-    updateSkipped: "已跳过更新，本地改动已保留。",
-    localBackupDone: "已先备份本地副本再覆盖。",
-    forceOverwriteDone: "已用远端版本强制覆盖 Skill。",
+    localSkillConflictTitle: "Skill 更新冲突",
+    localSkillConflictText: "未执行更新。这个 Skill 在本地存在修改，与远端新版本不一致。为避免覆盖，本应用已停止更新。请自行使用 Agent 工具处理，完成后回到这里重新检测。",
+    agentConflictGuidance: "应用不会替你安装、覆盖或合并文件。打开主库目录后，可以使用 Codex、Claude Code 或其他 Agent 工具检查差异并完成更新。",
+    openLocalFolder: "打开本地目录",
+    recheckConflict: "重新检测",
+    handleLater: "稍后处理",
+    confirmAgentUpdate: "确认已通过 Agent 完成更新",
+    verificationResult: "检测结果",
+    verificationPending: "等待本地更新",
+    conflictReadyCustomized: "检测到稳定的本地修改。请确认你已通过 Agent 完成更新。",
+    conflictReadyLatest: "本地文件已经与目标版本一致。请确认更新已经完成。",
+    conflictUnchanged: "尚未检测到文件变化。请完成本地更新后再重新检测。",
+    conflictStale: "远端目标 SHA 已变化。请基于新的目标重新检测后再确认。",
+    conflictQualityLimit: "只能验证文件变化和目标 SHA，不能证明合并质量。",
+    conflictHashes: "冲突指纹",
+    currentLocalHash: "当前本地 hash",
+    remoteHash: "目标 hash",
+    conflictDetected: "检测到本地修改，更新已暂停，请自行处理本地文件。",
+    conflictOpenedFolder: "已请求打开 Skill 主库目录。",
+    conflictVerified: "检测完成。请核对结果后显式确认。",
+    conflictStillWaiting: "尚未检测到可确认的稳定更新，请继续处理后重新检测。",
+    conflictRemoteChanged: "远端目标已变化，请基于新的 SHA 重新处理并检测。",
+    conflictTargetRefreshed: "已读取新的远端目标。请基于弹窗中的目标 SHA 继续处理。",
+    conflictConfirmedLatest: "已确认，本地 Skill 与目标版本一致。",
+    conflictConfirmedCustomized: "已确认保留自定义更新；这里只验证文件变化与目标 SHA。",
+    conflictLoadFailed: "无法读取 Skill 更新冲突。",
+    conflictVerifyFailed: "无法验证本地 Skill，请稍后重试。",
+    conflictConfirmFailed: "无法确认本地 Skill 更新，请重新检测。",
+    conflictInspectorTitle: "更新等待你处理",
+    waitingUser: "等待用户处理",
+    waitingUserTask: "等待你处理的任务",
     retryAdded: "已重新执行任务。",
     retryRejected: "此任务不可重试。",
     taskCopied: "任务摘要已复制。",
@@ -1037,6 +1223,9 @@ const COPY = {
     checkAll: "Check All",
     backupUpdated: "Backup Updated",
     backupSelected: "Backup Selected",
+    backupSelectedCount: "Backup Selected ({count})",
+    selectedOnOtherPages: "{count} selected on other pages",
+    clearSelection: "Clear selection",
     addRepository: "Add Repository",
     settings: "Settings",
     needBackup: "need backup",
@@ -1112,6 +1301,14 @@ const COPY = {
     quickActions: "Quick actions",
     backupNow: "Backup Now",
     openBackupFolder: "Open Backup Folder",
+    pageSize: "Rows per page",
+    paginationRange: "{start}–{end} / {filtered}",
+    paginationFilteredSuffix: " (all {total})",
+    paginationPage: "Page {page} / {pages}",
+    firstPage: "First page",
+    previousPage: "Previous page",
+    nextPage: "Next page",
+    lastPage: "Last page",
     viewGithub: "View on GitHub",
     chooseBrowser: "Choose Browser",
     copyLink: "Copy Link",
@@ -1173,8 +1370,11 @@ const COPY = {
     installedLocal: "Installed local",
     notInstalled: "Not installed",
     latest: "Latest",
+    installedCustomized: "Updated with local customizations",
     updateAvailable: "Update available",
     localModified: "Local modified",
+    updateConflict: "Update conflict",
+    handleConflict: "Handle conflict",
     sourceUnavailable: "Source unavailable",
     skill: "Skill",
     sourceRepository: "Source repository",
@@ -1205,7 +1405,7 @@ const COPY = {
     taskDetails: "Task details",
     taskOperations: "Task actions",
     settingsTitle: "Settings",
-    settingsSubtitle: "Configure theme, language, backup tasks, and local overwrite protection.",
+    settingsSubtitle: "Configure theme, language, folders, sync, and automatic tasks.",
     settingsHelp: "These settings are stored locally.",
     appearanceLanguage: "Appearance and language",
     theme: "Theme",
@@ -1246,8 +1446,6 @@ const COPY = {
     helpMetadataConcurrency: "Number of remote repository metadata checks to run at once. Higher is faster but can hit rate limits.",
     helpRetryCount: "Automatic retry count after detection, backup, or update failures.",
     helpAutoCheckInterval: "Interval for checking remote SHA while the app is open.",
-    helpOverwriteProtection: "Checks whether local Skill content changed before updating to avoid silent overwrites.",
-    helpRequireConfirmation: "Risky actions such as backup-all and force-overwrite require a second confirmation.",
     helpScheduleForegroundOnly: "Schedules run only while the app is open; they do not continue after quitting.",
     helpAutoBackupUpdatedOnly: "When enabled, only repositories with unbacked updates are backed up.",
     helpCleanupKeep: "Number of recent backup history items to keep for future cleanup.",
@@ -1261,11 +1459,6 @@ const COPY = {
     metadataConcurrency: "Metadata concurrency",
     retryCount: "Retry count",
     autoCheckInterval: "Auto-check interval",
-    safetyDefaults: "Safety defaults",
-    overwriteProtection: "Local Skill overwrite protection",
-    overwriteProtectionText: "Detect local changes before update and require confirmation by default.",
-    requireConfirmation: "Confirm risky operations",
-    requireConfirmationText: "Backup-all and force-overwrite actions require confirmation.",
     githubAuthentication: "GitHub authentication",
     p1Disabled: "P1 disabled",
     authP1Text: "Tokens are stored only in the secure system store, never in SQLite, manifests, or task logs.",
@@ -1357,13 +1550,6 @@ const COPY = {
     outputDirectory: "Output directory",
     outputDirectoryText: "ZIP files and manifest.json will be generated. Token values are never written.",
     confirmBackup: "Confirm Backup",
-    localSkillModified: "Local Skill Modified",
-    localSkillModifiedText: "Local content differs from the last installed hash. Updating it can overwrite user edits.",
-    recommendedDefault: "Recommended default",
-    recommendedOverwriteText: "Back up the local Skill first, then overwrite with the remote version.",
-    skipUpdate: "Skip Update",
-    backupThenOverwrite: "Backup Then Overwrite",
-    forceOverwrite: "Force Overwrite",
     backupCreated: "Backup task created. Successful items update after manifest writing completes.",
     remoteRefreshed: "Remote state refreshed. Failed repositories kept their last known SHA.",
     repoExists: "This repository and ref are already tracked.",
@@ -1372,9 +1558,37 @@ const COPY = {
     installedSkill: "installed to the Skill library.",
     sourceUnavailableToast: "Source unavailable. Re-check the repository before updating this Skill.",
     skillUpdated: "updated locally. Repository backup was not triggered.",
-    updateSkipped: "Update skipped. Local changes were preserved.",
-    localBackupDone: "Local copy backed up before overwrite.",
-    forceOverwriteDone: "Skill force overwritten with remote version.",
+    localSkillConflictTitle: "Skill update conflict",
+    localSkillConflictText: "The update did not run. This Skill has local changes that differ from the new remote version. To avoid overwriting them, the app stopped. Use Agent tools to handle the files, then return here and re-check.",
+    agentConflictGuidance: "The app will not install, overwrite, or merge files for you. Open the library folder and use Codex, Claude Code, or other Agent tools to inspect the differences and complete the update.",
+    openLocalFolder: "Open local folder",
+    recheckConflict: "Re-check",
+    handleLater: "Handle later",
+    confirmAgentUpdate: "Confirm Agent update",
+    verificationResult: "Verification result",
+    verificationPending: "Waiting for local update",
+    conflictReadyCustomized: "Local files changed and are stable. Confirm that you completed the update with Agent.",
+    conflictReadyLatest: "Local files match the target version. Confirm completion.",
+    conflictUnchanged: "No file change was detected yet. Complete the local update, then re-check.",
+    conflictStale: "The remote target SHA changed. Re-check against the new target before confirming.",
+    conflictQualityLimit: "Verification only checks file changes and the target SHA. It cannot prove merge quality.",
+    conflictHashes: "Conflict fingerprints",
+    currentLocalHash: "Current local hash",
+    remoteHash: "Target hash",
+    conflictDetected: "Local changes were detected. The update paused without changing local files.",
+    conflictOpenedFolder: "Requested the Skill library folder to open.",
+    conflictVerified: "Verification finished. Review the result and confirm explicitly.",
+    conflictStillWaiting: "No stable update can be confirmed yet. Continue the local work, then re-check.",
+    conflictRemoteChanged: "The remote target changed. Rework and re-check against the new SHA.",
+    conflictTargetRefreshed: "Loaded the new remote target. Continue using the target SHA shown in the dialog.",
+    conflictConfirmedLatest: "Confirmed. The local Skill matches the target version.",
+    conflictConfirmedCustomized: "Customized update confirmed. This only verifies file changes and target SHA.",
+    conflictLoadFailed: "Could not load the Skill update conflict.",
+    conflictVerifyFailed: "Could not verify the local Skill. Try again.",
+    conflictConfirmFailed: "Could not confirm the local Skill update. Re-check it.",
+    conflictInspectorTitle: "Update needs your attention",
+    waitingUser: "Waiting for user",
+    waitingUserTask: "Tasks waiting for you",
     retryAdded: "Task retried.",
     retryRejected: "This task cannot be retried.",
     taskCopied: "Task summary copied.",
@@ -1428,15 +1642,18 @@ const STATUS_LABELS = {
     "local-only": "本地",
     "check-failed": "检测失败",
     "local-modified": "本地修改",
+    "update-conflict": "待处理冲突",
     "source-unavailable": "来源不可用",
     "update-available": "可更新",
     "installed-latest": "最新",
+    "installed-customized": "已更新，含本地定制",
     "not-installed": "未安装",
     deleted: "已删除",
     "partial-success": "部分成功",
     success: "成功",
     failed: "失败",
     interrupted: "已中断",
+    "waiting-user": "等待用户处理",
     unknown: "未知",
     "skill repo": "技能仓库",
     "generic repo": "普通仓库",
@@ -1454,15 +1671,18 @@ const STATUS_LABELS = {
     "local-only": "local",
     "check-failed": "check failed",
     "local-modified": "local modified",
+    "update-conflict": "update conflict",
     "source-unavailable": "source unavailable",
     "update-available": "update available",
     "installed-latest": "latest",
+    "installed-customized": "updated with local customizations",
     "not-installed": "not installed",
     deleted: "deleted",
     "partial-success": "partial success",
     success: "success",
     failed: "failed",
     interrupted: "interrupted",
+    "waiting-user": "waiting for user",
     unknown: "unknown",
     "skill repo": "skill repo",
     "generic repo": "generic repo",
@@ -1475,8 +1695,24 @@ const STATUS_LABELS = {
   },
 };
 
-function getCopy(language, key) {
+export function getCopy(language, key) {
   return COPY[language]?.[key] || COPY.en[key] || key;
+}
+
+function formatCopy(template: string, values: Record<string, string | number>) {
+  return Object.entries(values).reduce(
+    (message, [key, value]) => message.replaceAll(`{${key}}`, String(value)),
+    template,
+  );
+}
+
+function errorMessage(error: unknown, fallback: string) {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
+function errorCode(error: unknown) {
+  if (!error || typeof error !== "object" || !("code" in error)) return "";
+  return typeof error.code === "string" ? error.code : "";
 }
 
 function statusLabel(value, language = "zh") {
@@ -1520,12 +1756,8 @@ const TASK_TEXT_ZH = {
   "Skill install started": "已开始安装 Skill",
   "delete Skill started": "已开始删除 Skill",
   "restore Skill started": "已开始恢复 Skill",
-  "local conflict resolution started": "已开始处理本地冲突",
   "retry task started": "已开始重试任务",
   "local Skill updated": "本地 Skill 已更新",
-  "skipped to preserve local modifications": "已跳过以保留本地修改",
-  "local copy backed up, then overwritten": "已备份本地副本后覆盖",
-  "force overwritten": "已强制覆盖",
   "1 Skill recognized": "识别到 1 个 Skill",
   "generic repo, 0 Skills": "普通仓库，0 个 Skill",
   "refresh remote state for 17 repositories": "刷新 17 个仓库的远端状态",
@@ -1539,7 +1771,6 @@ const TASK_TEXT_ZH = {
   "keep previous SHA for failed repositories": "检测失败仓库保留上次 SHA",
   "calculate installed_skill_hash": "计算 installed_skill_hash",
   "local content differs from installation record": "本地内容不同于安装记录",
-  "waiting for user choice: skip, backup overwrite, force overwrite": "等待用户选择：跳过、备份后覆盖、强制覆盖",
   "task interrupted before manifest write": "manifest 写入前任务中断",
   "last_backup_sha not updated": "last_backup_sha 未更新",
   "refresh all remote refs": "刷新全部远端 ref",
@@ -1556,9 +1787,6 @@ const TASK_TEXT_ZH = {
   "replace local files": "替换本地文件",
   "record installed_skill_hash": "记录 installed_skill_hash",
   "local hash differs from installed_skill_hash": "本地 hash 不同于 installed_skill_hash",
-  "user chose skip update": "用户选择跳过更新",
-  "backup local Skill before overwrite": "覆盖前备份本地 Skill",
-  "force overwrite local Skill": "强制覆盖本地 Skill",
   "record new installed_skill_hash": "记录新的 installed_skill_hash",
   "retry failed item": "重试失败项",
   "complete without changing unrelated state": "完成且不改变无关状态",
@@ -1613,7 +1841,7 @@ function displayValue(value, language) {
   return value;
 }
 
-const fallbackSyncTargets = [
+const fallbackSyncTargets: SyncTarget[] = [
   { id: "claude", label: "Claude Code", path: "~/.claude/skills", exists: false },
   { id: "codex", label: "Codex", path: "~/.codex/skills", exists: false },
   { id: "gemini", label: "Gemini", path: "~/.gemini/skills", exists: false },
@@ -1840,23 +2068,80 @@ function Tag({ value, tone, language = "zh" }: any) {
   return <span className={`tag ${tone || value}`}>{statusLabel(value, language)}</span>;
 }
 
-function Modal({ title, children, footer, onClose, closeLabel = "Close" }: any) {
+type ModalProps = {
+  title: string;
+  children: ReactNode;
+  footer: ReactNode;
+  onClose: () => void;
+  closeLabel?: string;
+};
+
+function Modal({ title, children, footer, onClose, closeLabel = "Close" }: ModalProps) {
+  const titleId = useId();
+  const bodyId = useId();
+  const modalRef = useRef<HTMLElement | null>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const previousFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const modalElement = modalRef.current;
+    const focusableSelector =
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
+    const initialFocus = modalElement?.querySelector<HTMLElement>("[data-autofocus]")
+      || modalElement?.querySelector<HTMLElement>("[autofocus]")
+      || modalElement?.querySelector<HTMLElement>(focusableSelector);
+    initialFocus?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !modalElement) return;
+      const focusable = Array.from(
+        modalElement.querySelectorAll<HTMLElement>(focusableSelector),
+      ) as HTMLElement[];
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, []);
+
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
       <section
+        aria-describedby={bodyId}
+        aria-labelledby={titleId}
         className="modal"
         role="dialog"
         aria-modal="true"
-        aria-label={title}
         onMouseDown={(event) => event.stopPropagation()}
+        ref={modalRef}
       >
         <header className="modal-header">
-          <h2>{title}</h2>
-          <button className="icon-button" onClick={onClose} type="button">
+          <h2 id={titleId}>{title}</h2>
+          <button aria-label={closeLabel} className="icon-button" onClick={onClose} type="button">
             {closeLabel}
           </button>
         </header>
-        <div className="modal-body">{children}</div>
+        <div className="modal-body" id={bodyId}>{children}</div>
         <footer className="modal-footer">{footer}</footer>
       </section>
     </div>
@@ -1878,7 +2163,7 @@ export function App() {
   const [selectedRepoId, setSelectedRepoId] = useState("content");
   const [inspectorRepoId, setInspectorRepoId] = useState(() => initialFreeParam("inspectorRepo"));
   const [selectedSkillId, setSelectedSkillId] = useState(() => initialFreeParam("selectedSkill"));
-  const [skillDetail, setSkillDetail] = useState(null);
+  const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null);
   const [skillDetailLoading, setSkillDetailLoading] = useState(false);
   const [skillDetailError, setSkillDetailError] = useState("");
   const skillDetailRequestRef = useRef("");
@@ -1889,9 +2174,13 @@ export function App() {
   const pluginDetailRequestRef = useRef("");
   const [selectedRows, setSelectedRows] = useState(["content"]);
   const [repoFilter, setRepoFilter] = useState("all");
-  const [repoSort, setRepoSort] = useState({ key: "name", direction: "asc" });
+  const [repoSort, setRepoSort] = useState<RepositorySort>({ key: "name", direction: "asc" });
+  const [repoPagination, dispatchRepoPagination] = useReducer(repositoryPaginationReducer, {
+    page: 1,
+    pageSize: 15,
+  });
   const [skillFilter, setSkillFilter] = useState("all");
-  const [skillSort, setSkillSort] = useState({ key: "name", direction: "asc" });
+  const [skillSort, setSkillSort] = useState<SkillSort>({ key: "name", direction: "asc" });
   const [skillRepoQuery, setSkillRepoQuery] = useState("");
   const [taskFilter, setTaskFilter] = useState("all");
   const [pluginSort, setPluginSort] = useState({ key: "name", direction: "asc" });
@@ -1902,6 +2191,10 @@ export function App() {
   const [pluginSearch, setPluginSearch] = useState(() => initialFreeParam("pluginSearch"));
   const [pluginContentSearch, setPluginContentSearch] = useState("");
   const [modal, setModal] = useState(null);
+  const [activeSkillConflict, setActiveSkillConflict] = useState<SkillUpdateConflict | null>(null);
+  const [skillConflictPendingAction, setSkillConflictPendingAction] = useState<
+    "" | "open" | "verify" | "confirm"
+  >("");
   const [toast, setToast] = useState("");
   const toastTimerRef = useRef<number | undefined>(undefined);
   const [pendingActions, setPendingActions] = useState({});
@@ -1917,8 +2210,6 @@ export function App() {
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(false);
   const [autoBackupEnabled, setAutoBackupEnabled] = useState(false);
   const [cleanupKeep, setCleanupKeep] = useState(20);
-  const [overwriteProtection, setOverwriteProtection] = useState(true);
-  const [requireConfirmation, setRequireConfirmation] = useState(true);
   const [githubTokenConfigured, setGithubTokenConfigured] = useState(false);
   const [githubTokenStatus, setGithubTokenStatus] = useState("not_configured");
   const [githubTokenLastVerified, setGithubTokenLastVerified] = useState(null);
@@ -1960,16 +2251,17 @@ export function App() {
     });
   }
 
-  function beginOptimisticTask(actionKey, task) {
+  function beginOptimisticTask(actionKey: string, task: OptimisticTaskInput) {
     setActionPending(actionKey, true);
     const id = `pending-${actionKey}-${Date.now()}`;
-    const optimisticTask = {
+    const optimisticTask: UiTask = {
       id,
       kind: task.kind,
       target: task.target,
       progress: task.progress || "…",
       status: "running",
       summary: task.summary || "task started",
+      retryable: false,
       log: task.log || ["task started"],
       optimistic: true,
     };
@@ -2087,10 +2379,6 @@ export function App() {
     setAutoBackupEnabled,
     cleanupKeep,
     setCleanupKeep,
-    overwriteProtection,
-    setOverwriteProtection,
-    requireConfirmation,
-    setRequireConfirmation,
     githubTokenConfigured,
     githubTokenStatus,
     githubTokenLastVerified,
@@ -2131,28 +2419,51 @@ export function App() {
     };
   }, [repositories]);
 
-  const filteredRepos = useMemo(() => {
-    const visible = repositories.filter((repo) => {
-      const matchesSearch = fuzzyMatch(repositoryNameSearchValues(repo, language), search);
-      const matchesContentSearch = fuzzyMatch(repositoryContentSearchValues(repo), repoContentSearch);
-      const matchesFilter =
-        repoFilter === "all" ||
-        (repoFilter === "skill" && repo.type === "skill repo") ||
-        (repoFilter === "generic" && repo.type === "generic repo") ||
-        (repoFilter === "updated" && repo.backupStatus === "updated-not-backed-up") ||
-        (repoFilter === "failed" && repo.backupStatus === "check-failed") ||
-        (repoFilter === "never" && repo.backupStatus === "never-backed-up");
-      return matchesSearch && matchesContentSearch && matchesFilter;
-    });
-    return [...visible].sort((left, right) => {
-      if (repoSort.key === "addedAt") {
-        const compared = compareDates(left.addedAt, right.addedAt, repoSort.direction);
-        if (compared !== 0) return compared;
-      }
-      const compared = compareNames(displayRepoName(left.name, language), displayRepoName(right.name, language));
-      return repoSort.key === "name" && repoSort.direction === "desc" ? -compared : compared;
-    });
-  }, [repositories, language, search, repoContentSearch, repoFilter, repoSort]);
+  const repositoryPage = useMemo(
+    () =>
+      buildRepositoryPage<UiRepository>(repositories, {
+        page: repoPagination.page,
+        pageSize: repoPagination.pageSize,
+        filter: (repo) => {
+          const matchesSearch = fuzzyMatch(repositoryNameSearchValues(repo, language), search);
+          const matchesContentSearch = fuzzyMatch(repositoryContentSearchValues(repo), repoContentSearch);
+          const matchesFilter =
+            repoFilter === "all" ||
+            (repoFilter === "skill" && repo.type === "skill repo") ||
+            (repoFilter === "generic" && repo.type === "generic repo") ||
+            (repoFilter === "updated" && repo.backupStatus === "updated-not-backed-up") ||
+            (repoFilter === "failed" && repo.backupStatus === "check-failed") ||
+            (repoFilter === "never" && repo.backupStatus === "never-backed-up");
+          return matchesSearch && matchesContentSearch && matchesFilter;
+        },
+        compare: (left, right) => {
+          if (repoSort.key === "addedAt") {
+            const compared = compareDates(left.addedAt, right.addedAt, repoSort.direction);
+            if (compared !== 0) return compared;
+          }
+          const compared = compareNames(
+            displayRepoName(left.name, language),
+            displayRepoName(right.name, language),
+          );
+          return repoSort.key === "name" && repoSort.direction === "desc" ? -compared : compared;
+        },
+      }),
+    [repositories, language, search, repoContentSearch, repoFilter, repoSort, repoPagination],
+  );
+  const filteredRepos = repositoryPage.items;
+
+  useEffect(() => {
+    dispatchRepoPagination({ type: "criteria-changed" });
+  }, [language, search, repoContentSearch, repoFilter, repoSort.key, repoSort.direction]);
+
+  useEffect(() => {
+    dispatchRepoPagination({ type: "items-changed", totalItems: repositoryPage.totalItems });
+  }, [repositoryPage.totalItems]);
+
+  useEffect(() => {
+    const selectableIds = new Set(repositories.filter(isRepositorySelectable).map((repo) => repo.id));
+    setSelectedRows((rows) => rows.filter((id) => selectableIds.has(id)));
+  }, [repositories]);
 
   const filteredSkills = useMemo(() => {
     const visible = skills.filter((skill) => {
@@ -2227,10 +2538,10 @@ export function App() {
   function backupTargetRepos(mode = "updated", repoIds = []) {
     if (mode === "selected") {
       const targetIds = repoIds.length ? repoIds : selectedRows;
-      return repositories.filter((repo) => targetIds.includes(repo.id) && repo.sourceType !== "local");
+      return repositories.filter((repo) => targetIds.includes(repo.id) && isRepositorySelectable(repo));
     }
     return repositories.filter((repo) =>
-      repo.sourceType !== "local" &&
+      isRepositorySelectable(repo) &&
       ["updated-not-backed-up", "never-backed-up", "check-failed"].includes(repo.backupStatus),
     );
   }
@@ -2268,15 +2579,15 @@ export function App() {
   }
 
   function toggleRow(repoId) {
+    const repository = repositories.find((repo) => repo.id === repoId);
+    if (!repository || !isRepositorySelectable(repository)) return;
     setSelectedRows((rows) =>
       rows.includes(repoId) ? rows.filter((id) => id !== repoId) : [...rows, repoId],
     );
   }
 
-  function selectAllVisible() {
-    const visibleIds = filteredRepos.map((repo) => repo.id);
-    const allSelected = visibleIds.every((id) => selectedRows.includes(id));
-    setSelectedRows(allSelected ? [] : visibleIds);
+  function selectAllVisible(checked) {
+    setSelectedRows((rows) => togglePageSelection(filteredRepos, rows, checked));
   }
 
   async function checkAllRepos() {
@@ -2322,13 +2633,14 @@ export function App() {
       progress: `${repositories.length} / ${repositories.length}`,
       status: "success",
       summary: `${repositories.length - 1} success, 1 failed`,
+      retryable: false,
       log: ["refresh all remote refs", "preserve failed repository SHA", "recalculate backup states"],
     });
     showToast(t("remoteRefreshed"));
     finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
-  function addTask(task) {
+  function addTask(task: DemoTaskInput) {
     const id = `${task.kind.toLowerCase().replaceAll(" ", "-")}-${Date.now()}`;
     setTasks((items) => [{ id, ...task }, ...items]);
   }
@@ -2432,7 +2744,11 @@ export function App() {
     finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
-  async function updateSkillSyncTargets(skillId, mode, targets) {
+  async function updateSkillSyncTargets(
+    skillId: string,
+    mode: "inherit" | "custom",
+    targets: string[],
+  ) {
     const actionKey = `syncTargets:${skillId}`;
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
@@ -3003,6 +3319,7 @@ export function App() {
       backupPath: `${backupRoot}/${name}`,
       snapshotTime: "Never",
       recognizedSkills: isSkillRepo ? [{ name: name.split("/")[1], version: "v0.1.0" }] : [],
+      sourceType: "github",
       note: newRepo.note,
     };
     setRepositories((repos) => [repo, ...repos]);
@@ -3014,6 +3331,7 @@ export function App() {
       progress: "1 / 1",
       status: "success",
       summary: isSkillRepo ? "1 Skill recognized" : "generic repo, 0 Skills",
+      retryable: false,
       log: [
         `normalize ${name}`,
         "fetch remote HEAD SHA",
@@ -3078,6 +3396,7 @@ export function App() {
       progress: `${successRepos.length} / ${targetRepos.length}`,
       status: failedCount ? "partial-success" : "success",
       summary: `${successRepos.length} success, ${failedCount} skipped`,
+      retryable: false,
       log: [
         "refresh remote state before backup",
         `create ${backupRoot}/2026-06-14_101212`,
@@ -3092,13 +3411,72 @@ export function App() {
     finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
-  async function handleSkillAction(skill) {
-    if (skill.status === "installed-latest") {
+  async function openSkillConflict(skill: UiSkill) {
+    if (!skill) return;
+    if (desktopRuntime) {
+      try {
+        const conflict = await api.getSkillUpdateConflict(skill.id);
+        setActiveSkillConflict(conflict);
+        setModal({ type: "skill-conflict", skillId: skill.id });
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("conflictLoadFailed")));
+      }
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const conflict = activeSkillConflict?.skillId === skill.id
+      ? activeSkillConflict
+      : {
+          id: `demo-conflict-${skill.id}`,
+          skillId: skill.id,
+          taskId: `demo-conflict-task-${skill.id}`,
+          status: "pending",
+          localHash: skill.localVersion || "local-modified",
+          installedHash: skill.localVersion || null,
+          remoteSha: skill.remoteVersion || "remote-target",
+          remoteHash: skill.remoteHash || skill.remoteVersion || "remote-target",
+          verificationState: "pending" as const,
+          verifiedLocalHash: null,
+          createdAt: now,
+          updatedAt: now,
+          verifiedAt: null,
+          resolvedAt: null,
+        };
+    setActiveSkillConflict(conflict);
+    setSkills((items) =>
+      items.map((item) => item.id === skill.id ? { ...item, status: "update-conflict" } : item),
+    );
+    setTasks((items) => {
+      if (items.some((task) => task.id === conflict.taskId)) return items;
+      return [
+        {
+          id: conflict.taskId,
+          kind: "Update Skill",
+          target: skill.name,
+          progress: "0 / 1",
+          status: "waiting-user",
+          summary: "waiting for user to update local Skill",
+          retryable: false,
+          log: ["local changes detected", "waiting for user-managed update with Agent tools"],
+        },
+        ...items,
+      ];
+    });
+    setModal({ type: "skill-conflict", skillId: skill.id });
+  }
+
+  async function handleSkillAction(skill: UiSkill) {
+    if (["installed-latest", "installed-customized"].includes(skill.status)) {
       showToast(t("noActionNeeded"));
       return;
     }
     if (skill.status === "source-unavailable") {
       showToast(t("sourceUnavailableToast"));
+      return;
+    }
+    if (skill.status === "update-conflict") {
+      await openSkillConflict(skill);
       return;
     }
     const actionKey = `skillAction:${skill.id}`;
@@ -3111,19 +3489,26 @@ export function App() {
     });
     if (desktopRuntime) {
       try {
-        const nextSkills = skill.installed
+        const outcome = skill.installed
           ? await api.updateSkill(skill.id)
           : await api.installSkill(skill.id);
         const nextTasks = await api.listTasks();
-        setSkills(nextSkills);
+        setSkills(outcome.skills);
         setTasks(nextTasks);
-        showToast(skill.installed ? `${skill.name} ${t("skillUpdated")}` : `${skill.name} ${t("installedSkill")}`);
-      } catch (error) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
-        if (error.code === "local_skill_modified") {
-          setModal({ type: "skill-risk", skillId: skill.id });
+        if (outcome.kind === "conflict") {
+          setActiveSkillConflict(outcome.conflict);
+          setModal({ type: "skill-conflict", skillId: skill.id });
+          showToast(t("conflictDetected"));
         } else {
-          showToast(error.message || t("sourceUnavailableToast"));
+          setActiveSkillConflict((conflict) => conflict?.skillId === skill.id ? null : conflict);
+          showToast(skill.installed ? `${skill.name} ${t("skillUpdated")}` : `${skill.name} ${t("installedSkill")}`);
+        }
+      } catch (error: unknown) {
+        finishOptimisticTask(actionKey, optimisticTaskId);
+        if (errorCode(error) === "local_skill_modified") {
+          await openSkillConflict(skill);
+        } else {
+          showToast(errorMessage(error, t("sourceUnavailableToast")));
         }
         return;
       }
@@ -3148,9 +3533,9 @@ export function App() {
       finishOptimisticTask(actionKey, optimisticTaskId);
       return;
     }
-    if (skill.status === "local-modified") {
+    if (["local-modified", "update-conflict"].includes(skill.status)) {
       finishOptimisticTask(actionKey, optimisticTaskId);
-      setModal({ type: "skill-risk", skillId: skill.id });
+      await openSkillConflict(skill);
       return;
     }
     setSkills((items) =>
@@ -3171,98 +3556,205 @@ export function App() {
       progress: "1 / 1",
       status: "success",
       summary: "local Skill updated",
+      retryable: false,
       log: ["download remote Skill directory", "replace local files", "record installed_skill_hash"],
     });
     showToast(`${skill.name} ${t("skillUpdated")}`);
     finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
-  async function resolveSkillRisk(choice) {
-    const skillId = modal?.skillId;
-    const actionKey = `resolveSkill:${skillId}:${choice}`;
-    if (!skillId || isPending(actionKey)) return;
-    const skillForTask = skills.find((item) => item.id === skillId);
-    const optimisticTaskId = beginOptimisticTask(actionKey, {
-      kind: "Update Skill",
-      target: skillForTask?.name || skillId,
-      summary: "local conflict resolution started",
-      log: ["local conflict resolution started"],
-    });
-    if (desktopRuntime) {
-      try {
-        const nextSkills = await api.resolveSkillLocalConflict(skillId, choice);
-        const nextTasks = await api.listTasks();
-        setSkills(nextSkills);
-        setTasks(nextTasks);
-        setModal(null);
-        showToast(
-          choice === "skip"
-            ? t("updateSkipped")
-            : choice === "backup"
-              ? t("localBackupDone")
-            : t("forceOverwriteDone"),
-        );
-      } catch (error) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(error.message || t("sourceUnavailableToast"));
-        return;
-      }
-      setActionPending(actionKey, false);
-      return;
+  async function requestOpenSkillFolder(skillId: string) {
+    try {
+      if (desktopRuntime) await api.openSkillFolder(skillId);
+      showToast(t("conflictOpenedFolder"));
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("conflictLoadFailed")));
     }
-    const skill = skills.find((item) => item.id === skillId);
-    if (!skill) {
-      finishOptimisticTask(actionKey, optimisticTaskId);
-      return;
-    }
-    if (choice === "skip") {
-      addTask({
-        kind: "Update Skill",
-        target: skill.name,
-        progress: "0 / 1",
-        status: "failed",
-        summary: "skipped to preserve local modifications",
-        log: ["local hash differs from installed_skill_hash", "user chose skip update"],
-      });
-      setModal(null);
-      showToast(t("updateSkipped"));
-      finishOptimisticTask(actionKey, optimisticTaskId);
-      return;
-    }
-    setSkills((items) =>
-      items.map((item) =>
-        item.id === skill.id
-          ? {
-              ...item,
-              status: "installed-latest",
-              localVersion: item.remoteVersion,
-              updatedAt: "2026-06-14 10:20",
-            }
-          : item,
-      ),
-    );
-    addTask({
-      kind: "Update Skill",
-      target: skill.name,
-      progress: "1 / 1",
-      status: "success",
-      summary: choice === "backup" ? "local copy backed up, then overwritten" : "force overwritten",
-      log: [
-        "local hash differs from installed_skill_hash",
-        choice === "backup" ? "backup local Skill before overwrite" : "force overwrite local Skill",
-        "record new installed_skill_hash",
-      ],
-    });
-    setModal(null);
-    showToast(
-      choice === "backup"
-        ? t("localBackupDone")
-        : t("forceOverwriteDone"),
-    );
-    finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
-  async function retryTask(task) {
+  async function openActiveSkillConflictFolder() {
+    if (!activeSkillConflict || skillConflictPendingAction) return;
+    setSkillConflictPendingAction("open");
+    await requestOpenSkillFolder(activeSkillConflict.skillId);
+    setSkillConflictPendingAction("");
+  }
+
+  async function runSkillConflictVerification(
+    resolveConflict: () => SkillUpdateConflict | null | Promise<SkillUpdateConflict | null>,
+  ) {
+    if (skillConflictPendingAction) return;
+    setSkillConflictPendingAction("verify");
+    try {
+      const conflict = await resolveConflict();
+      if (!conflict) throw new Error(t("conflictLoadFailed"));
+
+      if (conflict.verificationState === "stale") {
+        const skill = skills.find((item) => item.id === conflict.skillId);
+        if (!skill) throw new Error(t("conflictLoadFailed"));
+
+        if (desktopRuntime) {
+          const refreshResult = await refreshStaleSkillConflict({
+            previousConflict: conflict,
+            skillId: skill.id,
+            repoId: skill.repoId,
+            dependencies: {
+              getConflict: api.getSkillUpdateConflict,
+              checkRepositories: api.checkRepositories,
+              listRepositories: api.listRepositories,
+              listSkills: api.listSkills,
+              listTasks: api.listTasks,
+            },
+          });
+          if (refreshResult.kind === "failed") {
+            setActiveSkillConflict(refreshResult.conflict);
+            showToast(errorMessage(refreshResult.error, t("conflictVerifyFailed")));
+            return;
+          }
+          setRepositories(refreshResult.repositories);
+          setSkills(refreshResult.skills);
+          setTasks(refreshResult.tasks);
+          setActiveSkillConflict(refreshResult.conflict);
+          showToast(t("conflictTargetRefreshed"));
+          return;
+        }
+
+        const now = new Date().toISOString();
+        setActiveSkillConflict({
+          ...conflict,
+          remoteSha: skill.remoteVersion || conflict.remoteSha,
+          remoteHash: skill.remoteHash || skill.remoteVersion || conflict.remoteHash,
+          verificationState: "pending",
+          verifiedLocalHash: null,
+          verifiedAt: null,
+          updatedAt: now,
+        });
+        showToast(t("conflictTargetRefreshed"));
+        return;
+      }
+
+      const verified = desktopRuntime
+        ? await api.verifySkillUpdateConflict(conflict.id)
+        : {
+            ...conflict,
+            verificationState: "customized" as const,
+            verifiedLocalHash: `${conflict.localHash}-verified`,
+            verifiedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+      setActiveSkillConflict(verified);
+      if (desktopRuntime) setTasks(await api.listTasks());
+      if (["latest", "customized"].includes(verified.verificationState)) {
+        showToast(t("conflictVerified"));
+      } else if (verified.verificationState === "stale") {
+        showToast(t("conflictRemoteChanged"));
+      } else {
+        showToast(t("conflictStillWaiting"));
+      }
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("conflictVerifyFailed")));
+    } finally {
+      setSkillConflictPendingAction("");
+    }
+  }
+
+  async function verifyActiveSkillConflict() {
+    await runSkillConflictVerification(() => activeSkillConflict);
+  }
+
+  async function recheckSkillConflictFromInspector(skill: UiSkill) {
+    await runSkillConflictVerification(async () => {
+      if (activeSkillConflict?.skillId === skill.id) return activeSkillConflict;
+
+      if (desktopRuntime) {
+        const conflict = await api.getSkillUpdateConflict(skill.id);
+        setActiveSkillConflict(conflict);
+        return conflict;
+      }
+
+      const now = new Date().toISOString();
+      const conflict: SkillUpdateConflict = {
+        id: `demo-conflict-${skill.id}`,
+        skillId: skill.id,
+        taskId: `demo-conflict-task-${skill.id}`,
+        status: "pending",
+        localHash: skill.localVersion || "local-modified",
+        installedHash: skill.localVersion || null,
+        remoteSha: skill.remoteVersion || "remote-target",
+        remoteHash: skill.remoteHash || skill.remoteVersion || "remote-target",
+        verificationState: "pending",
+        verifiedLocalHash: null,
+        createdAt: now,
+        updatedAt: now,
+        verifiedAt: null,
+        resolvedAt: null,
+      };
+      setActiveSkillConflict(conflict);
+      return conflict;
+    });
+  }
+
+  async function confirmActiveSkillConflict() {
+    if (
+      !activeSkillConflict ||
+      skillConflictPendingAction ||
+      !["latest", "customized"].includes(activeSkillConflict.verificationState)
+    ) return;
+    const confirmedState = activeSkillConflict.verificationState;
+    setSkillConflictPendingAction("confirm");
+    try {
+      if (desktopRuntime) {
+        const outcome = await api.confirmSkillUpdateConflict(activeSkillConflict.id);
+        setSkills(outcome.skills);
+        setTasks(await api.listTasks());
+        if (outcome.kind === "conflict") {
+          setActiveSkillConflict(outcome.conflict);
+          showToast(
+            outcome.conflict.verificationState === "stale"
+              ? t("conflictRemoteChanged")
+              : t("conflictStillWaiting"),
+          );
+          return;
+        }
+      } else {
+        setSkills((items) => items.map((item) =>
+          item.id === activeSkillConflict.skillId
+            ? {
+                ...item,
+                status: confirmedState === "latest" ? "installed-latest" : "installed-customized",
+                localVersion: confirmedState === "latest" ? item.remoteVersion : item.localVersion,
+                updatedAt: new Date().toISOString(),
+              }
+            : item,
+        ));
+        setTasks((items) => items.map((task) =>
+          task.id === activeSkillConflict.taskId
+            ? {
+                ...task,
+                progress: "1 / 1",
+                status: "success",
+                summary: confirmedState === "latest"
+                  ? "local Skill matches target version"
+                  : "customized local Skill update confirmed",
+                log: [...task.log, "user confirmed Agent-managed update"],
+              }
+            : task,
+        ));
+      }
+      setActiveSkillConflict(null);
+      setModal(null);
+      showToast(
+        confirmedState === "latest"
+          ? t("conflictConfirmedLatest")
+          : t("conflictConfirmedCustomized"),
+      );
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("conflictConfirmFailed")));
+    } finally {
+      setSkillConflictPendingAction("");
+    }
+  }
+
+  async function retryTask(task: UiTask) {
     const actionKey = `retryTask:${task.id}`;
     if (isPending(actionKey)) return;
     if (!canRetryTask(task)) {
@@ -3292,7 +3784,7 @@ export function App() {
     finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
-  async function copyTaskSummary(task) {
+  async function copyTaskSummary(task: UiTask) {
     const summary = `${taskText(task.kind, language)}: ${taskText(task.summary, language)}`;
     if (desktopRuntime) {
       try {
@@ -3322,17 +3814,23 @@ export function App() {
     showToast(t("openBackupFolder"));
   }
 
-  async function openSkillDetail(skill) {
+  async function openSkillDetail(skill: UiSkill | PluginSkillSummary) {
     const requestedSkillId = skill.id;
     skillDetailRequestRef.current = requestedSkillId;
     setSelectedSkillId(skill.id);
     setSkillDetail(null);
     setSkillDetailError("");
     if (!desktopRuntime) {
+      const fullSkill = "repo" in skill ? skill : skills.find((item) => item.id === skill.id);
+      if (!fullSkill) {
+        setSkillDetailError(t("skillDetailUnavailable"));
+        return;
+      }
       setSkillDetail({
-        ...skill,
-        skillMd: `# ${skill.name}\n\n${skillDescription(skill, language) || t("noSkillMarkdown")}`,
-        filePath: skill.installPath || skill.localPath || skill.path,
+        ...fullSkill,
+        plugins: fullSkill.plugins || [],
+        skillMd: `# ${fullSkill.name}\n\n${skillDescription(fullSkill, language) || t("noSkillMarkdown")}`,
+        filePath: fullSkill.installPath || fullSkill.localPath || fullSkill.path,
       });
       return;
     }
@@ -3342,9 +3840,9 @@ export function App() {
       if (skillDetailRequestRef.current === requestedSkillId) {
         setSkillDetail(detail);
       }
-    } catch (error) {
+    } catch (error: unknown) {
       if (skillDetailRequestRef.current === requestedSkillId) {
-        setSkillDetailError(error.message || t("skillDetailUnavailable"));
+        setSkillDetailError(errorMessage(error, t("skillDetailUnavailable")));
       }
     } finally {
       if (skillDetailRequestRef.current === requestedSkillId) {
@@ -3383,7 +3881,7 @@ export function App() {
     }
   }
 
-  function openPluginEntry(plugin) {
+  function openPluginEntry(plugin: SkillPluginReference) {
     const fullPlugin = plugins.find((item) => item.id === plugin.id) || plugin;
     setActiveTab("plugins");
     openPluginDetail(fullPlugin);
@@ -3586,6 +4084,8 @@ export function App() {
             setModal={setModal}
             openAddRepoModal={openAddRepoModal}
             selectedRows={selectedRows}
+            currentRepositoryPageIds={filteredRepos.map((repository) => repository.id)}
+            clearSelectedRows={() => setSelectedRows([])}
             repositories={repositories}
             skills={skills}
             plugins={plugins}
@@ -3624,6 +4124,15 @@ export function App() {
               setModal={setModal}
               openAddRepoModal={openAddRepoModal}
               hasRepositories={repositories.length > 0}
+              page={repositoryPage.page}
+              pageSize={repositoryPage.pageSize}
+              totalItems={repositoryPage.totalItems}
+              allItemsTotal={repositories.length}
+              totalPages={repositoryPage.totalPages}
+              onPageChange={(page) => dispatchRepoPagination({ type: "go-to-page", page })}
+              onPageSizeChange={(pageSize) =>
+                dispatchRepoPagination({ type: "page-size-changed", pageSize })
+              }
               language={language}
               t={t}
             />
@@ -3659,6 +4168,7 @@ export function App() {
               skillSort={skillSort}
               setSkillSort={setSkillSort}
               handleSkillAction={handleSkillAction}
+              openSkillConflict={openSkillConflict}
               openSkillDetail={openSkillDetail}
               setActiveTab={setActiveTab}
               setSelectedRepoId={setSelectedRepoId}
@@ -3754,6 +4264,9 @@ export function App() {
               availableSyncTargets={availableSyncTargets}
               defaultSyncTargets={defaultSyncTargets}
               updateSkillSyncTargets={updateSkillSyncTargets}
+              openSkillConflict={openSkillConflict}
+              recheckSkillConflict={recheckSkillConflictFromInspector}
+              openSkillFolder={requestOpenSkillFolder}
               isPending={isPending}
               openPluginDetail={openPluginEntry}
               onSaveNote={(skill, note) => saveItemNote("skill", skill, note)}
@@ -3854,12 +4367,15 @@ export function App() {
         />
       )}
 
-      {modal?.type === "skill-risk" && (
-        <SkillRiskModal
-          skill={skills.find((item) => item.id === modal.skillId)}
+      {modal?.type === "skill-conflict" && activeSkillConflict && (
+        <SkillUpdateConflictModal
+          conflict={activeSkillConflict}
+          skill={skills.find((item) => item.id === activeSkillConflict.skillId)}
           onClose={() => setModal(null)}
-          onResolve={resolveSkillRisk}
-          isPending={isPending}
+          onOpenFolder={openActiveSkillConflictFolder}
+          onVerify={verifyActiveSkillConflict}
+          onConfirm={confirmActiveSkillConflict}
+          pendingAction={skillConflictPendingAction}
           t={t}
         />
       )}
@@ -3904,7 +4420,9 @@ export function App() {
         />
       )}
 
-      {toast && <div className="toast">{toast}</div>}
+      <div aria-live="polite" aria-atomic="true" className="toast-region">
+        {toast && <div className="toast" role="status">{toast}</div>}
+      </div>
     </main>
   );
 }
@@ -3943,6 +4461,40 @@ function EmptyState({ title, body, actionLabel, onAction }: any) {
   );
 }
 
+type RepositorySelectionActionsProps = {
+  selectedCount: number;
+  otherPageCount: number;
+  onBackup: () => void;
+  onClear: () => void;
+  t: (key: string) => string;
+};
+
+export function RepositorySelectionActions({
+  selectedCount,
+  otherPageCount,
+  onBackup,
+  onClear,
+  t,
+}: RepositorySelectionActionsProps) {
+  return (
+    <>
+      <Button disabled={selectedCount === 0} onClick={onBackup}>
+        {formatCopy(t("backupSelectedCount"), { count: selectedCount })}
+      </Button>
+      {selectedCount > 0 && (
+        <span className="repository-selection-status">
+          {otherPageCount > 0 && (
+            <span>{formatCopy(t("selectedOnOtherPages"), { count: otherPageCount })}</span>
+          )}
+          <button className="selection-clear-button" onClick={onClear} type="button">
+            {t("clearSelection")}
+          </button>
+        </span>
+      )}
+    </>
+  );
+}
+
 function Toolbar({
   activeTab,
   search,
@@ -3961,6 +4513,8 @@ function Toolbar({
   setModal,
   openAddRepoModal,
   selectedRows,
+  currentRepositoryPageIds,
+  clearSelectedRows,
   repositories,
   skills,
   plugins,
@@ -3974,11 +4528,17 @@ function Toolbar({
 }: any) {
   const titleKey = navItems.find((item) => item.id === activeTab)?.labelKey || "nav.repositories";
   const needsBackup = repositories.filter((repo) =>
-    repo.sourceType !== "local" && ["updated-not-backed-up", "never-backed-up"].includes(repo.backupStatus),
+    isRepositorySelectable(repo) && ["updated-not-backed-up", "never-backed-up"].includes(repo.backupStatus),
   ).length;
-  const selectedBackupable = repositories.some((repo) => selectedRows.includes(repo.id) && repo.sourceType !== "local");
+  const selectedBackupableRepositories = repositories.filter(
+    (repo) => selectedRows.includes(repo.id) && isRepositorySelectable(repo),
+  );
+  const currentRepositoryPageIdSet = new Set(currentRepositoryPageIds);
+  const otherPageSelectedCount = selectedBackupableRepositories.filter(
+    (repository) => !currentRepositoryPageIdSet.has(repository.id),
+  ).length;
   const updatedSkills = skills.filter((skill) =>
-    ["update-available", "local-modified", "source-unavailable"].includes(skill.status),
+    ["update-available", "update-conflict", "local-modified", "source-unavailable"].includes(skill.status),
   ).length;
   const detectedPlugins = plugins.filter((plugin) => plugin.status === "detected").length;
   const failedTasks = tasks.filter((task) => ["failed", "interrupted", "partial-success"].includes(task.status)).length;
@@ -4000,12 +4560,19 @@ function Toolbar({
           <Button onClick={() => setModal({ type: "backup", mode: "updated" })} disabled={!needsBackup}>
             {t("backupUpdated")}
           </Button>
-          <Button
-            onClick={() => setModal({ type: "backup", mode: "selected", repoIds: selectedRows })}
-            disabled={!selectedBackupable}
-          >
-            {t("backupSelected")}
-          </Button>
+          <RepositorySelectionActions
+            onBackup={() =>
+              setModal({
+                type: "backup",
+                mode: "selected",
+                repoIds: selectedBackupableRepositories.map((repository) => repository.id),
+              })
+            }
+            onClear={clearSelectedRows}
+            otherPageCount={otherPageSelectedCount}
+            selectedCount={selectedBackupableRepositories.length}
+            t={t}
+          />
           <Button variant="primary" onClick={openAddRepoModal}>
             {t("addRepository")}
           </Button>
@@ -4135,7 +4702,7 @@ function Toolbar({
   );
 }
 
-function RepositoriesView({
+export function RepositoriesView({
   repos,
   selectedRepo,
   selectedRows,
@@ -4150,9 +4717,16 @@ function RepositoriesView({
   setModal,
   openAddRepoModal,
   hasRepositories,
+  page = 1,
+  pageSize = 15,
+  totalItems = repos.length,
+  allItemsTotal = totalItems,
+  totalPages = 1,
+  onPageChange = () => {},
+  onPageSizeChange = () => {},
   language,
   t,
-}: any) {
+}: RepositoriesViewProps) {
   const filters = [
     ["all", t("all")],
     ["skill", t("skillRepos")],
@@ -4161,6 +4735,19 @@ function RepositoriesView({
     ["never", t("neverBacked")],
     ["failed", t("checkFailed")],
   ];
+  const pageSelection = pageSelectionState(repos, selectedRows);
+  const pageSelectionRef = useRef<HTMLInputElement | null>(null);
+  const rangeStart = totalItems === 0 ? 0 : (page - 1) * pageSize + 1;
+  const rangeEnd = totalItems === 0 ? 0 : Math.min(totalItems, page * pageSize);
+  const filteredSuffix = totalItems === allItemsTotal
+    ? ""
+    : formatCopy(t("paginationFilteredSuffix"), { total: allItemsTotal });
+
+  useEffect(() => {
+    if (pageSelectionRef.current) {
+      pageSelectionRef.current.indeterminate = pageSelection.mixed;
+    }
+  }, [pageSelection.mixed]);
 
   function toggleSort(key) {
     setRepoSort((current) => ({
@@ -4170,7 +4757,7 @@ function RepositoriesView({
   }
 
   return (
-    <section className="main-pane">
+    <section className="main-pane has-pagination">
       <div className="pane-header">
         <div>
           <h1>{t("repositoriesTitle")}</h1>
@@ -4199,8 +4786,11 @@ function RepositoriesView({
                 <th className="select-cell">
                   <input
                     aria-label={t("allRepositories")}
-                    checked={repos.length > 0 && repos.every((repo) => selectedRows.includes(repo.id))}
-                    onChange={selectAllVisible}
+                    aria-checked={pageSelection.mixed ? "mixed" : pageSelection.checked}
+                    checked={pageSelection.checked}
+                    disabled={pageSelection.selectableCount === 0}
+                    onChange={(event) => selectAllVisible(event.target.checked)}
+                    ref={pageSelectionRef}
                     type="checkbox"
                   />
                 </th>
@@ -4245,6 +4835,7 @@ function RepositoriesView({
                       <input
                         aria-label={`${t("repository")}: ${repoName}`}
                         checked={rowChecked}
+                        disabled={!isRepositorySelectable(repo)}
                         onChange={() => toggleRow(repo.id)}
                         type="checkbox"
                       />
@@ -4276,7 +4867,7 @@ function RepositoriesView({
                             setSelectedRepoId(repo.id);
                             setModal({ type: "backup", mode: "selected", repoIds: [repo.id] });
                           }}
-                          disabled={repo.sourceType === "local"}
+                          disabled={!isRepositorySelectable(repo)}
                           title={`${t("backup")}: ${repoName}`}
                           type="button"
                         >
@@ -4309,6 +4900,63 @@ function RepositoriesView({
             onAction={openAddRepoModal}
           />
         )}
+      </div>
+      <div className="table-pagination" data-testid="repository-pagination">
+        <span className="pagination-summary">
+          {formatCopy(t("paginationRange"), {
+            start: rangeStart,
+            end: rangeEnd,
+            filtered: totalItems,
+          })}
+          {filteredSuffix}
+          <span className="pagination-page">
+            {formatCopy(t("paginationPage"), { page, pages: totalPages })}
+          </span>
+        </span>
+        <label className="page-size-control">
+          <span>{t("pageSize")}</span>
+          <select
+            aria-label={t("pageSize")}
+            onChange={(event) => onPageSizeChange(Number(event.target.value))}
+            value={pageSize}
+          >
+            {REPOSITORY_PAGE_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="pagination-actions">
+          <Button
+            aria-label={t("firstPage")}
+            disabled={page <= 1}
+            onClick={() => onPageChange(1)}
+          >
+            {t("firstPage")}
+          </Button>
+          <Button
+            aria-label={t("previousPage")}
+            disabled={page <= 1}
+            onClick={() => onPageChange(page - 1)}
+          >
+            {t("previousPage")}
+          </Button>
+          <Button
+            aria-label={t("nextPage")}
+            disabled={page >= totalPages}
+            onClick={() => onPageChange(page + 1)}
+          >
+            {t("nextPage")}
+          </Button>
+          <Button
+            aria-label={t("lastPage")}
+            disabled={page >= totalPages}
+            onClick={() => onPageChange(totalPages)}
+          >
+            {t("lastPage")}
+          </Button>
+        </div>
       </div>
     </section>
   );
@@ -4476,7 +5124,7 @@ function Inspector({
 
       <Section title={t("quickActions")}>
         <div className="action-grid">
-          <Button onClick={() => setModal({ type: "backup", mode: "selected", repoIds: [repo.id] })} disabled={repo.sourceType === "local"}>
+          <Button onClick={() => setModal({ type: "backup", mode: "selected", repoIds: [repo.id] })} disabled={!isRepositorySelectable(repo)}>
             {t("backupNow")}
           </Button>
           <Button onClick={() => openBackupFolder(repo.backupPath)} disabled={!hasManifest}>{t("openBackupFolder")}</Button>
@@ -4555,7 +5203,7 @@ function NoteEditor({ actionKey, isPending, note, onChange, onClear, onSave, t }
   );
 }
 
-function SkillsView({
+export function SkillsView({
   skills,
   skillFilter,
   setSkillFilter,
@@ -4564,6 +5212,7 @@ function SkillsView({
   skillRepoQuery,
   setSkillRepoQuery,
   handleSkillAction,
+  openSkillConflict,
   openSkillDetail,
   setActiveTab,
   setSelectedRepoId,
@@ -4578,25 +5227,27 @@ function SkillsView({
   isPending,
   language,
   t,
-}: any) {
+}: SkillsViewProps) {
   const filters = [
     ["all", t("all")],
     ["not-installed", t("notInstalled")],
     ["installed-latest", t("latest")],
+    ["installed-customized", t("installedCustomized")],
     ["update-available", t("updateAvailable")],
+    ["update-conflict", t("updateConflict")],
     ["local-modified", t("localModified")],
     ["source-unavailable", t("sourceUnavailable")],
     ["deleted", t("deletedSkills")],
   ];
 
-  function toggleSort(key) {
+  function toggleSort(key: SkillSort["key"]) {
     setSkillSort((current) => ({
       key,
       direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
     }));
   }
 
-  function jumpToRepo(skill) {
+  function jumpToRepo(skill: UiSkill) {
     const repo = repositories.find((item) => displayRepoName(item.name, language) === displayRepoName(skill.repo, language));
     if (repo) {
       setSelectedRepoId(repo.id);
@@ -4605,7 +5256,11 @@ function SkillsView({
     setActiveTab("repositories");
   }
 
-  function skillPrimaryAction(skill) {
+  function skillPrimaryAction(skill: UiSkill): {
+    label: string;
+    disabled: boolean;
+    handler: (() => void | Promise<void>) | null;
+  } {
     if (skill.status === "deleted") {
       return {
         label: t("restoreSkill"),
@@ -4613,8 +5268,15 @@ function SkillsView({
         handler: () => restoreSkill(skill.id),
       };
     }
-    if (skill.status === "installed-latest") {
+    if (["installed-latest", "installed-customized"].includes(skill.status)) {
       return { label: t("noActionNeeded"), disabled: true, handler: null };
+    }
+    if (skill.status === "update-conflict") {
+      return {
+        label: t("handleConflict"),
+        disabled: false,
+        handler: () => openSkillConflict(skill),
+      };
     }
     if (skill.status === "source-unavailable") {
       return { label: t("recheckSource"), disabled: false, handler: () => jumpToRepo(skill) };
@@ -4784,12 +5446,15 @@ function SkillInspector({
   availableSyncTargets,
   defaultSyncTargets,
   updateSkillSyncTargets,
+  openSkillConflict,
+  recheckSkillConflict,
+  openSkillFolder,
   isPending,
   openPluginDetail,
   onSaveNote,
   language,
   t,
-}: any) {
+}: SkillInspectorProps) {
   const activeDetail = detail || skill;
   const syncMode = activeDetail.syncTargetsMode || "inherit";
   const customTargets = activeDetail.syncTargets || [];
@@ -4812,12 +5477,12 @@ function SkillInspector({
     setActiveTab("repositories");
   }
 
-  function setSyncMode(nextMode) {
+  function setSyncMode(nextMode: "inherit" | "custom") {
     const nextTargets = nextMode === "custom" ? resolvedTargets : defaultSyncTargets;
     updateSkillSyncTargets(skill.id, nextMode, nextTargets);
   }
 
-  function toggleCustomTarget(targetId, checked) {
+  function toggleCustomTarget(targetId: string, checked: boolean) {
     const nextTargets = checked
       ? [...customTargets, targetId]
       : customTargets.filter((id) => id !== targetId);
@@ -4835,6 +5500,16 @@ function SkillInspector({
           x
         </button>
       </header>
+
+      {skill.status === "update-conflict" && (
+        <SkillConflictNotice
+          onOpen={() => openSkillConflict(skill)}
+          onOpenFolder={() => openSkillFolder(skill.id)}
+          onRecheck={() => recheckSkillConflict(skill)}
+          skill={skill}
+          t={t}
+        />
+      )}
 
       <Section title={t("skillOverview")}>
         <Detail label={t("source")} value={sourceLabel(skill, language)} />
@@ -4937,8 +5612,8 @@ function SkillInspector({
         {error && <p className="empty-note error-note">{error}</p>}
         {!loading && !error && (
           <div className="markdown-preview-block">
-            {activeDetail.filePath && <div className="preview-meta mono">{activeDetail.filePath}</div>}
-            <pre>{activeDetail.skillMd || t("noSkillMarkdown")}</pre>
+            {detail?.filePath && <div className="preview-meta mono">{detail.filePath}</div>}
+            <pre>{detail?.skillMd || t("noSkillMarkdown")}</pre>
           </div>
         )}
       </Section>
@@ -4946,15 +5621,37 @@ function SkillInspector({
   );
 }
 
+type SkillConflictNoticeProps = {
+  skill: { name: string };
+  onOpen: () => void;
+  onOpenFolder: () => void;
+  onRecheck: () => void;
+  t: (key: string) => string;
+};
+
+export function SkillConflictNotice({ skill, onOpen, onOpenFolder, onRecheck, t }: SkillConflictNoticeProps) {
+  return (
+    <section className="skill-conflict-notice" aria-label={t("conflictInspectorTitle")}>
+      <strong>{t("conflictInspectorTitle")}</strong>
+      <p>{skill.name}：{t("conflictDetected")}</p>
+      <div className="inline-action-row">
+        <Button onClick={onOpenFolder}>{t("openLocalFolder")}</Button>
+        <Button onClick={onRecheck}>{t("recheckConflict")}</Button>
+        <Button onClick={onOpen}>{t("handleConflict")}</Button>
+      </div>
+    </section>
+  );
+}
+
 function isRetryStatus(status: string) {
   return ["failed", "interrupted", "partial-success"].includes(status);
 }
 
-function canRetryTask(task: any) {
+function canRetryTask(task: UiTask) {
   return Boolean(task?.retryable) && isRetryStatus(task.status);
 }
 
-function retryTaskTitle(task: any, language: string, t: (key: string) => string) {
+function retryTaskTitle(task: UiTask, language: string, t: (key: string) => string) {
   if (!isRetryStatus(task.status)) {
     return t("retryOnlyFailed");
   }
@@ -4964,9 +5661,20 @@ function retryTaskTitle(task: any, language: string, t: (key: string) => string)
   return `${t("retry")}: ${taskText(task.target, language)}`;
 }
 
-function TasksView({ tasks, taskFilter, setTaskFilter, retryTask, copyTaskSummary, hasTasks, isPending, language, t }: any) {
+export function TasksView({
+  tasks,
+  taskFilter,
+  setTaskFilter,
+  retryTask,
+  copyTaskSummary,
+  hasTasks,
+  isPending,
+  language,
+  t,
+}: TasksViewProps) {
   const filters = [
     ["all", t("all")],
+    ["waiting-user", t("waitingUser")],
     ["success", t("success")],
     ["partial-success", t("partial")],
     ["failed", t("failed")],
@@ -5214,10 +5922,6 @@ function PreferencesPanel({
   setAutoBackupEnabled,
   cleanupKeep,
   setCleanupKeep,
-  overwriteProtection,
-  setOverwriteProtection,
-  requireConfirmation,
-  setRequireConfirmation,
   githubTokenConfigured,
   githubTokenStatus,
   githubTokenLastVerified,
@@ -5465,29 +6169,6 @@ function PreferencesPanel({
           </p>
         </SettingsSection>
 
-        <SettingsSection title={t("safetyDefaults")}>
-          <SettingRow label={t("overwriteProtection")}>
-            <label className="switch-row compact-switch">
-              <input
-                checked={overwriteProtection}
-                onChange={(event) => setOverwriteProtection(event.target.checked)}
-                type="checkbox"
-              />
-              <span>{t("overwriteProtectionText")}</span>
-            </label>
-          </SettingRow>
-          <SettingRow label={t("requireConfirmation")}>
-            <label className="switch-row compact-switch">
-              <input
-                checked={requireConfirmation}
-                onChange={(event) => setRequireConfirmation(event.target.checked)}
-                type="checkbox"
-              />
-              <span>{t("requireConfirmationText")}</span>
-            </label>
-          </SettingRow>
-        </SettingsSection>
-
         <SettingsSection title={t("schedule")} note={t("scheduleSavedOnly")}>
           <SettingRow label={t("autoCheckEnabled")}>
             <label className="switch-row compact-switch">
@@ -5705,14 +6386,14 @@ function AboutPanel({ appMetadata = APP_METADATA, desktopRuntime, language, show
   );
 }
 
-function RunningTask({ tasks, setActiveTab, language, t }: any) {
-  const task = tasks.find((item) => ["queued", "running"].includes(item.status));
+function RunningTask({ tasks, setActiveTab, language, t }: RunningTaskProps) {
+  const task = tasks.find((item) => ["waiting-user", "queued", "running"].includes(item.status));
   if (!task) return null;
   const indeterminate = task.optimistic || task.progress === "…";
   return (
     <section className="running-task">
       <div>
-        <h2>{t("runningTasks")}</h2>
+        <h2>{task.status === "waiting-user" ? t("waitingUserTask") : t("runningTasks")}</h2>
         <p>{taskText(task.kind, language)}: {taskText(task.summary, language)}</p>
       </div>
       <div className="progress-track">
@@ -5907,52 +6588,124 @@ function BackupModal({
   );
 }
 
-function SkillRiskModal({ skill, onClose, onResolve, isPending, t }: any) {
-  const skipPending = isPending(`resolveSkill:${skill?.id}:skip`);
-  const backupPending = isPending(`resolveSkill:${skill?.id}:backup`);
-  const forcePending = isPending(`resolveSkill:${skill?.id}:force`);
-  const anyPending = skipPending || backupPending || forcePending;
+type SkillUpdateConflictModalProps = {
+  skill?: {
+    id: string;
+    name: string;
+    installPath?: string | null;
+    repo?: string;
+  } | null;
+  conflict: SkillUpdateConflict;
+  pendingAction: "" | "open" | "verify" | "confirm";
+  onClose: () => void;
+  onOpenFolder: () => void;
+  onVerify: () => void;
+  onConfirm: () => void;
+  t: (key: string) => string;
+};
+
+export function SkillUpdateConflictModal({
+  skill,
+  conflict,
+  pendingAction,
+  onClose,
+  onOpenFolder,
+  onVerify,
+  onConfirm,
+  t,
+}: SkillUpdateConflictModalProps) {
+  const verified = ["customized", "latest"].includes(
+    conflict.verificationState,
+  );
+  const verificationMessage = conflict.verificationState === "customized"
+    ? t("conflictReadyCustomized")
+    : conflict.verificationState === "latest"
+      ? t("conflictReadyLatest")
+      : conflict.verificationState === "unchanged"
+        ? t("conflictUnchanged")
+        : conflict.verificationState === "stale"
+          ? t("conflictStale")
+          : t("verificationPending");
+  const anyPending = pendingAction !== "";
+
   return (
     <Modal
-      title={t("localSkillModified")}
+      title={t("localSkillConflictTitle")}
       onClose={onClose}
       closeLabel={t("close")}
       footer={
         <>
           <Button
-            onClick={() => onResolve("skip")}
+            data-autofocus
             disabled={anyPending}
-            pending={skipPending}
-            pendingLabel={t("updating")}
+            onClick={onOpenFolder}
+            pending={pendingAction === "open"}
+            pendingLabel={t("openLocalFolder")}
           >
-            {t("skipUpdate")}
+            {t("openLocalFolder")}
           </Button>
-          <Button
-            onClick={() => onResolve("backup")}
-            disabled={anyPending}
-            pending={backupPending}
-            pendingLabel={t("updating")}
-          >
-            {t("backupThenOverwrite")}
-          </Button>
-          <Button
-            variant="danger"
-            onClick={() => onResolve("force")}
-            disabled={anyPending}
-            pending={forcePending}
-            pendingLabel={t("updating")}
-          >
-            {t("forceOverwrite")}
+          {verified ? (
+            <Button
+              disabled={anyPending}
+              onClick={onConfirm}
+              pending={pendingAction === "confirm"}
+              pendingLabel={t("validating")}
+              variant="primary"
+            >
+              {t("confirmAgentUpdate")}
+            </Button>
+          ) : (
+            <Button
+              disabled={anyPending}
+              onClick={onVerify}
+              pending={pendingAction === "verify"}
+              pendingLabel={t("validating")}
+              variant="primary"
+            >
+              {t("recheckConflict")}
+            </Button>
+          )}
+          <Button disabled={anyPending} onClick={onClose}>
+            {t("handleLater")}
           </Button>
         </>
       }
     >
       <p className="modal-copy">
-        {skill?.name} {t("localSkillModifiedText")}
+        <strong>{skill?.name}</strong> {t("localSkillConflictText")}
       </p>
-      <div className="result-box warning">
-        <strong>{t("recommendedDefault")}</strong>
-        <p>{t("recommendedOverwriteText")}</p>
+      <div className="result-box warning skill-conflict-guidance">
+        <p>{t("agentConflictGuidance")}</p>
+      </div>
+      <div className="result-box conflict-verification">
+        <strong>{t("verificationResult")}</strong>
+        <p>{verificationMessage}</p>
+        {verified && <p className="conflict-quality-limit">{t("conflictQualityLimit")}</p>}
+      </div>
+      <div className="result-box conflict-fingerprints">
+        <strong>{t("conflictHashes")}</strong>
+        <dl>
+          <div>
+            <dt>{t("localSource")}</dt>
+            <dd className="mono">{skill?.installPath || "-"}</dd>
+          </div>
+          <div>
+            <dt>{t("sourceRepository")}</dt>
+            <dd>{skill?.repo || "-"}</dd>
+          </div>
+          <div>
+            <dt>{t("currentLocalHash")}</dt>
+            <dd className="mono">{conflict.verifiedLocalHash || conflict.localHash}</dd>
+          </div>
+          <div>
+            <dt>{t("remoteSha")}</dt>
+            <dd className="mono">{conflict.remoteSha}</dd>
+          </div>
+          <div>
+            <dt>{t("remoteHash")}</dt>
+            <dd className="mono">{conflict.remoteHash}</dd>
+          </div>
+        </dl>
       </div>
     </Modal>
   );

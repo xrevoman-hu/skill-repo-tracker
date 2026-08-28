@@ -13,6 +13,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::Mutex,
+    time::{Duration, SystemTime},
 };
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -20,11 +21,17 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 
 mod plugins;
+mod temp_artifacts;
 
 use plugins::{scan_plugins_from_directory, scan_plugins_from_zip, sync_plugins, PluginScan};
+use temp_artifacts::{
+    classify_sync_destination, cleanup_stale_temp_artifacts, unique_operation_id,
+    validate_skill_directory_name, CleanupReport, CleanupRequest, FilesystemMutationLock,
+    SyncDestination, TempArtifactError, TempArtifactGuard, TempArtifactKind, TempArtifactRegistry,
+};
 
-const APP_VERSION: &str = "1.1.11";
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.11";
+const APP_VERSION: &str = "1.1.12";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.12";
 const MIGRATION_SCHEMA_VERSION: i64 = 1;
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
@@ -35,6 +42,7 @@ const LEGACY_LOCAL_SKILLS_LIBRARY_NAME: &str = "Local Skills Library";
 const PREVIEW_MAX_CHARS: usize = 120_000;
 const SEARCH_INDEX_MAX_CHARS: usize = 60_000;
 const DEFAULT_SYNC_BACKUP_KEEP: i64 = 5;
+const SKILL_LIBRARY_ROOT_HISTORY_KEY: &str = "skill_library_root_history";
 const SYNC_TARGET_IDS: [&str; 6] = [
     "claude", "codex", "gemini", "opencode", "openclaw", "hermes",
 ];
@@ -46,9 +54,11 @@ const RETRY_BACKUP_REPOSITORIES: &str = "backup_repositories";
 const RETRY_CHECK_REPOSITORIES: &str = "check_repositories";
 const RETRY_INSTALL_SKILL: &str = "install_skill";
 const RETRY_SCAN_LOCAL_SKILLS: &str = "scan_local_skills";
+const RETRY_SYNC_SKILL: &str = "sync_skill";
 const RETRY_SYNC_INSTALLED_SKILLS: &str = "sync_installed_skills";
 const RETRY_UPDATE_SKILL: &str = "update_skill";
 const RETRY_UPDATE_SKILL_SYNC_TARGETS: &str = "update_skill_sync_targets";
+const RETRY_TEMP_ARTIFACT_CLEANUP: &str = "temp_artifact_cleanup";
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -131,6 +141,16 @@ impl From<std::io::Error> for AppError {
     }
 }
 
+impl From<TempArtifactError> for AppError {
+    fn from(value: TempArtifactError) -> Self {
+        Self::with_details(
+            "temp_artifact_error",
+            "临时目录操作失败。",
+            value.to_string(),
+        )
+    }
+}
+
 impl From<zip::result::ZipError> for AppError {
     fn from(value: zip::result::ZipError) -> Self {
         Self::with_details("zip_error", "ZIP 读取失败。", value.to_string())
@@ -145,6 +165,8 @@ struct AppState {
     db: Mutex<Connection>,
     http: reqwest::Client,
     data_dir: PathBuf,
+    filesystem_lock: FilesystemMutationLock,
+    temp_registry: TempArtifactRegistry,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -215,14 +237,23 @@ impl AppState {
     fn new(data_dir: PathBuf) -> Result<Self, AppError> {
         fs::create_dir_all(&data_dir)?;
         let db_path = data_dir.join("skill-repo-tracker.sqlite");
-        let conn = Connection::open(db_path)?;
+        let conn = Connection::open(&db_path)?;
         migrate(&conn)?;
+        let filesystem_lock = FilesystemMutationLock::new(&data_dir)?;
+        let temp_registry = TempArtifactRegistry::open(&db_path).map_err(|error| {
+            AppError::with_details(
+                "temp_registry_error",
+                "临时目录登记表初始化失败。",
+                error.to_string(),
+            )
+        })?;
 
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let default_backup_root = home.join("SkillRepoBackups");
         let default_library_root = default_skill_library_root(&home);
         let legacy_skills_root = get_setting(&conn, "skills_root")?;
-        let had_library_setting = get_setting(&conn, "skill_library_root")?.is_some();
+        let previous_library_root = get_setting(&conn, "skill_library_root")?;
+        let had_library_setting = previous_library_root.is_some();
 
         seed_settings(&conn, &home, &default_backup_root, &default_library_root)?;
         cleanup_legacy_github_account_metadata(&conn)?;
@@ -236,11 +267,44 @@ impl AppState {
             had_library_setting,
         )?;
         migrate_local_library_names(&conn)?;
+        let mut roots_to_remember = [previous_library_root, legacy_skills_root.clone()]
+            .into_iter()
+            .flatten()
+            .map(|value| expand_tilde(&value))
+            .collect::<Vec<_>>();
+        if let Some(current) = get_setting(&conn, "skill_library_root")? {
+            roots_to_remember.push(expand_tilde(&current));
+        }
+        remember_skill_library_roots(&conn, &roots_to_remember)?;
+
+        let cleanup_report = match filesystem_lock.try_acquire() {
+            Ok(Some(_guard)) => {
+                cleanup_temp_artifacts_with_lock_held(&conn, &temp_registry, &data_dir, &home)
+            }
+            Ok(None) => CleanupReport {
+                deferred: 1,
+                log: vec![
+                    "defer startup temp cleanup because another filesystem mutation is active"
+                        .to_string(),
+                ],
+                ..Default::default()
+            },
+            Err(error) => CleanupReport {
+                failed: 1,
+                log: vec![format!("startup temp cleanup lock failed: {error}")],
+                ..Default::default()
+            },
+        };
+        if let Err(error) = record_temp_cleanup_task(&conn, &cleanup_report) {
+            eprintln!("record startup temp cleanup task failed: {}", error.message);
+        }
 
         Ok(Self {
             db: Mutex::new(conn),
             http: reqwest::Client::new(),
             data_dir,
+            filesystem_lock,
+            temp_registry,
         })
     }
 
@@ -369,6 +433,9 @@ pub struct UiSkill {
     ref_name: String,
     local_version: String,
     remote_version: String,
+    remote_hash: Option<String>,
+    handled_remote_sha: Option<String>,
+    handled_remote_hash: Option<String>,
     status: String,
     installed: bool,
     created_at: String,
@@ -411,6 +478,37 @@ pub struct SkillDetail {
     skill_md: String,
     file_path: Option<String>,
     note: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct SkillUpdateConflict {
+    id: String,
+    skill_id: String,
+    task_id: String,
+    status: String,
+    local_hash: String,
+    installed_hash: Option<String>,
+    remote_sha: String,
+    remote_hash: String,
+    verification_state: String,
+    verified_local_hash: Option<String>,
+    created_at: String,
+    updated_at: String,
+    verified_at: Option<String>,
+    resolved_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum SkillActionOutcome {
+    Updated {
+        skills: Vec<UiSkill>,
+    },
+    Conflict {
+        skills: Vec<UiSkill>,
+        conflict: SkillUpdateConflict,
+    },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -714,6 +812,12 @@ pub struct MigrationSkill {
     created_at: Option<String>,
     updated_at: Option<String>,
     installed_hash: Option<String>,
+    #[serde(default)]
+    remote_hash: Option<String>,
+    #[serde(default)]
+    handled_remote_sha: Option<String>,
+    #[serde(default)]
+    handled_remote_hash: Option<String>,
     source_type: String,
     local_path: Option<String>,
     install_path: Option<String>,
@@ -723,6 +827,41 @@ pub struct MigrationSkill {
     sync_targets: Option<String>,
     #[serde(default)]
     search_text: String,
+}
+
+fn normalized_optional_migration_value(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalize_skill_for_migration_transport(mut skill: MigrationSkill) -> MigrationSkill {
+    skill.remote_hash = normalized_optional_migration_value(skill.remote_hash);
+    let handled_remote_sha = normalized_optional_migration_value(skill.handled_remote_sha);
+    let handled_remote_hash = normalized_optional_migration_value(skill.handled_remote_hash);
+    if handled_remote_sha.is_some() && handled_remote_hash.is_some() {
+        skill.handled_remote_sha = handled_remote_sha;
+        skill.handled_remote_hash = handled_remote_hash;
+    } else {
+        skill.handled_remote_sha = None;
+        skill.handled_remote_hash = None;
+    }
+
+    // Migration packages contain metadata only. They never carry the local Skill tree,
+    // active conflict/task rows, deleted copies, or paths from the source machine.
+    skill.installed = false;
+    skill.status = if skill.remote_hash.is_some() {
+        "not-installed".to_string()
+    } else {
+        "source-unavailable".to_string()
+    };
+    skill.local_version = None;
+    skill.installed_hash = None;
+    skill.local_path = None;
+    skill.install_path = None;
+    skill.deleted_at = None;
+    skill.deleted_path = None;
+    skill
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -818,6 +957,12 @@ pub struct SkillActionRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SkillConflictIdRequest {
+    conflict_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PluginActionRequest {
     plugin_id: String,
 }
@@ -840,13 +985,6 @@ pub struct OpenUrlRequest {
 #[serde(rename_all = "camelCase")]
 pub struct GithubPreviewRequest {
     url: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SkillConflictRequest {
-    skill_id: String,
-    choice: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1097,6 +1235,9 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           created_at TEXT,
           updated_at TEXT,
           installed_hash TEXT,
+          remote_hash TEXT,
+          handled_remote_sha TEXT,
+          handled_remote_hash TEXT,
           source_type TEXT NOT NULL DEFAULT 'github_repo',
           local_path TEXT,
           install_path TEXT,
@@ -1118,6 +1259,28 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
           PRIMARY KEY(skill_id, target_id),
           FOREIGN KEY(skill_id) REFERENCES skills(id) ON DELETE CASCADE
         );
+
+        CREATE TABLE IF NOT EXISTS skill_update_conflicts (
+          id TEXT PRIMARY KEY,
+          skill_id TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          local_hash TEXT NOT NULL,
+          installed_hash TEXT,
+          remote_sha TEXT NOT NULL,
+          remote_hash TEXT NOT NULL,
+          verification_state TEXT NOT NULL DEFAULT 'pending',
+          verified_local_hash TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          verified_at TEXT,
+          resolved_at TEXT,
+          FOREIGN KEY(skill_id) REFERENCES skills(id) ON DELETE CASCADE
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS skill_update_conflicts_one_active
+          ON skill_update_conflicts(skill_id)
+          WHERE status = 'pending';
 
         CREATE TABLE IF NOT EXISTS plugins (
           id TEXT PRIMARY KEY,
@@ -1335,6 +1498,24 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
     )?;
     add_column_if_missing(
         conn,
+        "skills",
+        "remote_hash",
+        "ALTER TABLE skills ADD COLUMN remote_hash TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
+        "skills",
+        "handled_remote_sha",
+        "ALTER TABLE skills ADD COLUMN handled_remote_sha TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
+        "skills",
+        "handled_remote_hash",
+        "ALTER TABLE skills ADD COLUMN handled_remote_hash TEXT",
+    )?;
+    add_column_if_missing(
+        conn,
         "plugins",
         "created_at",
         "ALTER TABLE plugins ADD COLUMN created_at TEXT",
@@ -1452,6 +1633,7 @@ fn seed_settings(
         ("backup_root", path_string(default_backup_root)),
         ("skills_root", path_string(default_library_root)),
         ("skill_library_root", path_string(default_library_root)),
+        (SKILL_LIBRARY_ROOT_HISTORY_KEY, "[]".to_string()),
         ("default_sync_targets", default_targets),
         ("sync_backup_keep", DEFAULT_SYNC_BACKUP_KEEP.to_string()),
         ("concurrency", "5".to_string()),
@@ -1788,6 +1970,176 @@ fn path_string(path: &Path) -> String {
 
 fn default_skill_library_root(home: &Path) -> PathBuf {
     home.join("SkillRepoTracker").join("skills")
+}
+
+fn normalize_cleanup_root(path: &Path) -> PathBuf {
+    // Keep the configured lexical path so the cleanup scanner can inspect the
+    // root itself with symlink_metadata before any canonicalization occurs.
+    path.to_path_buf()
+}
+
+fn skill_library_root_history(conn: &Connection) -> Result<Vec<PathBuf>, AppError> {
+    let raw = get_setting(conn, SKILL_LIBRARY_ROOT_HISTORY_KEY)?;
+    let values = raw
+        .as_deref()
+        .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+        .unwrap_or_default();
+    let mut seen = HashSet::new();
+    let mut roots = Vec::new();
+    for value in values {
+        if value.trim().is_empty() {
+            continue;
+        }
+        let root = normalize_cleanup_root(&expand_tilde(&value));
+        if seen.insert(root.clone()) {
+            roots.push(root);
+        }
+    }
+    Ok(roots)
+}
+
+fn remember_skill_library_roots<I, P>(conn: &Connection, roots: I) -> Result<(), AppError>
+where
+    I: IntoIterator<Item = P>,
+    P: AsRef<Path>,
+{
+    let mut history = skill_library_root_history(conn)?;
+    let mut seen = history.iter().cloned().collect::<HashSet<_>>();
+    for root in roots {
+        let root = root.as_ref();
+        if root.as_os_str().is_empty() {
+            continue;
+        }
+        let root = normalize_cleanup_root(root);
+        if seen.insert(root.clone()) {
+            history.push(root);
+        }
+    }
+    let serialized = serde_json::to_string(
+        &history
+            .iter()
+            .map(|path| path_string(path))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(|error| {
+        AppError::with_details(
+            "json_error",
+            "Skill 主库历史路径保存失败。",
+            error.to_string(),
+        )
+    })?;
+    set_setting(conn, SKILL_LIBRARY_ROOT_HISTORY_KEY, serialized)
+}
+
+fn temp_artifact_cleanup_roots(conn: &Connection, home: &Path) -> Result<Vec<PathBuf>, AppError> {
+    let mut candidates = vec![default_skill_library_root(home)];
+    for key in ["skill_library_root", "skills_root"] {
+        if let Some(value) = get_setting(conn, key)? {
+            if !value.trim().is_empty() {
+                candidates.push(expand_tilde(&value));
+            }
+        }
+    }
+    candidates.extend(skill_library_root_history(conn)?);
+    candidates.extend(
+        sync_target_specs(home)
+            .into_iter()
+            .map(|target| target.path),
+    );
+
+    let mut seen = HashSet::new();
+    Ok(candidates
+        .into_iter()
+        .map(|path| normalize_cleanup_root(&path))
+        .filter(|path| seen.insert(path.clone()))
+        .collect())
+}
+
+fn cleanup_temp_artifacts_with_lock_held(
+    conn: &Connection,
+    registry: &TempArtifactRegistry,
+    data_dir: &Path,
+    home: &Path,
+) -> CleanupReport {
+    let roots = match temp_artifact_cleanup_roots(conn, home) {
+        Ok(roots) => roots,
+        Err(error) => {
+            return CleanupReport {
+                failed: 1,
+                log: vec![format_error_for_log("build temp cleanup allowlist", &error)],
+                ..Default::default()
+            };
+        }
+    };
+    cleanup_stale_temp_artifacts(CleanupRequest {
+        registry,
+        roots: &roots,
+        quarantine_root: &data_dir.join("temp-quarantine"),
+        now: SystemTime::now(),
+        stale_after: Duration::from_secs(24 * 60 * 60),
+        quarantine_retention: Duration::from_secs(30 * 24 * 60 * 60),
+        dry_run: false,
+    })
+    .unwrap_or_else(|error| CleanupReport {
+        failed: 1,
+        log: vec![format!("temp artifact cleanup failed: {error}")],
+        ..Default::default()
+    })
+}
+
+fn temp_cleanup_has_activity(report: &CleanupReport) -> bool {
+    report.found > 0
+        || report.removed > 0
+        || report.quarantined > 0
+        || report.deferred > 0
+        || report.failed > 0
+}
+
+fn record_temp_cleanup_task(conn: &Connection, report: &CleanupReport) -> Result<bool, AppError> {
+    if !temp_cleanup_has_activity(report) {
+        return Ok(false);
+    }
+    let task_id = unique_operation_id("temp-cleanup");
+    let status = if report.failed == 0 {
+        "success"
+    } else if report.removed > 0 || report.quarantined > 0 || report.deferred > 0 {
+        "partial-success"
+    } else {
+        "failed"
+    };
+    let progress = format!(
+        "{} / {}",
+        report.removed + report.quarantined,
+        report.found + report.removed.saturating_sub(report.found)
+    );
+    if report.failed > 0 {
+        insert_retryable_task(
+            conn,
+            &task_id,
+            "Temp artifact cleanup",
+            "Configured Skill roots",
+            &progress,
+            status,
+            &report.task_summary(),
+            None,
+            &report.log,
+            RETRY_TEMP_ARTIFACT_CLEANUP,
+            &serde_json::json!({}),
+        )?;
+    } else {
+        insert_task(
+            conn,
+            &task_id,
+            "Temp artifact cleanup",
+            "Configured Skill roots",
+            &progress,
+            status,
+            &report.task_summary(),
+            None,
+            &report.log,
+        )?;
+    }
+    Ok(true)
 }
 
 fn sync_backup_root(home: &Path) -> PathBuf {
@@ -2174,7 +2526,8 @@ fn load_repositories(conn: &Connection) -> Result<Vec<RepoRecord>, AppError> {
              WHEN 'check-failed' THEN 2
              ELSE 3
            END,
-           updated_at DESC",
+           updated_at DESC,
+           id ASC",
     )?;
     let rows = stmt.query_map([], repo_from_row)?;
     let mut repos = Vec::new();
@@ -2290,7 +2643,8 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
     let mut stmt = conn.prepare(
         "SELECT id, repo_id, name, description, repo_name, path, ref_name, local_version,
                 remote_version, status, installed, created_at, updated_at, source_type, local_path,
-                install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets, search_text
+                install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets, search_text,
+                remote_hash, handled_remote_sha, handled_remote_hash
          FROM skills
          ORDER BY
            CASE WHEN deleted_at IS NOT NULL THEN 5 ELSE 0 END,
@@ -2332,6 +2686,9 @@ fn load_ui_skills(conn: &Connection) -> Result<Vec<UiSkill>, AppError> {
                 .get::<_, Option<String>>(7)?
                 .unwrap_or_else(|| "not installed".into()),
             remote_version: row.get(8)?,
+            remote_hash: row.get(21)?,
+            handled_remote_sha: row.get(22)?,
+            handled_remote_hash: row.get(23)?,
             status,
             installed,
             created_at: local_display(row.get::<_, Option<String>>(11)?.as_deref()),
@@ -2650,7 +3007,7 @@ fn insert_failed_task(
     log.push(format_error_for_log(target, error));
     let _ = insert_task(
         conn,
-        &format!("{id_prefix}-{}", Local::now().format("%Y%m%d%H%M%S")),
+        &temp_artifacts::unique_operation_id(id_prefix),
         kind,
         target,
         "0 / 1",
@@ -3665,28 +4022,61 @@ fn sync_skills(
     for scan in scans {
         let id = skill_id(repo_id, &scan.path);
         seen.push(id.clone());
-        let existing: Option<(i64, Option<String>, String, Option<String>)> = conn
+        let existing: Option<(
+            i64,
+            Option<String>,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        )> = conn
             .query_row(
-                "SELECT installed, installed_hash, status, local_version FROM skills WHERE id = ?1",
+                "SELECT installed, installed_hash, status, local_version,
+                        handled_remote_sha, handled_remote_hash
+                 FROM skills WHERE id = ?1",
                 params![id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
             )
             .optional()?;
-        let (installed, installed_hash, status, local_version) =
-            existing.unwrap_or((0, None, "not-installed".into(), None));
+        let (
+            installed,
+            installed_hash,
+            status,
+            local_version,
+            handled_remote_sha,
+            handled_remote_hash,
+        ) = existing.unwrap_or((0, None, "not-installed".into(), None, None, None));
         let remote_hash_matches = installed_hash.as_deref() == Some(scan.content_hash.as_str());
+        let handled_current_remote = handled_remote_sha.as_deref() == Some(repo.sha.as_str())
+            && handled_remote_hash.as_deref() == Some(scan.content_hash.as_str());
         let next_status = if installed == 0 {
             "not-installed".to_string()
-        } else if status == "local-modified" {
-            "local-modified".to_string()
         } else if remote_hash_matches {
             "installed-latest".to_string()
+        } else if matches!(status.as_str(), "local-modified" | "update-conflict") {
+            status.clone()
+        } else if handled_current_remote {
+            "installed-customized".to_string()
+        } else if status == "installed-customized" {
+            "update-conflict".to_string()
         } else {
             "update-available".to_string()
         };
         let next_local_version = if installed == 0 {
             None
-        } else if status != "local-modified" && remote_hash_matches {
+        } else if matches!(
+            next_status.as_str(),
+            "installed-latest" | "installed-customized"
+        ) {
             Some(scan.version.as_str())
         } else {
             local_version.as_deref()
@@ -3694,8 +4084,9 @@ fn sync_skills(
         conn.execute(
             "INSERT INTO skills
              (id, repo_id, name, description, repo_name, path, ref_name, local_version,
-              remote_version, status, installed, created_at, updated_at, installed_hash, source_type, local_path, install_path, deleted_at, search_text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 'github_repo', NULL, NULL, NULL, ?15)
+              remote_version, status, installed, created_at, updated_at, installed_hash, remote_hash,
+              source_type, local_path, install_path, deleted_at, search_text)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 'github_repo', NULL, NULL, NULL, ?16)
              ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               description = excluded.description,
@@ -3703,6 +4094,7 @@ fn sync_skills(
               ref_name = excluded.ref_name,
               local_version = excluded.local_version,
               remote_version = excluded.remote_version,
+              remote_hash = excluded.remote_hash,
               status = excluded.status,
               source_type = excluded.source_type,
               search_text = excluded.search_text,
@@ -3723,6 +4115,7 @@ fn sync_skills(
                 now,
                 if installed == 1 { Some(now.as_str()) } else { None },
                 installed_hash,
+                scan.content_hash,
                 scan.search_text
             ],
         )?;
@@ -4055,11 +4448,41 @@ fn safe_zip_name(repo_name: &str, ref_name: &str, sha: &str) -> String {
 }
 
 fn hash_directory(path: &Path) -> Result<String, AppError> {
-    if !path.exists() {
-        return Ok("missing".into());
+    match fs::symlink_metadata(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("missing".into()),
+        Err(error) => return Err(error.into()),
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(AppError::with_details(
+                "skill_hash_symlink_unsupported",
+                "Skill 内容包含符号链接，无法安全计算哈希。",
+                path_string(path),
+            ))
+        }
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(AppError::with_details(
+                "skill_hash_not_directory",
+                "Skill 哈希目标不是目录。",
+                path_string(path),
+            ))
+        }
+        Ok(_) => {}
     }
     let mut entries = Vec::new();
-    for entry in WalkDir::new(path).into_iter().filter_map(Result::ok) {
+    for entry in WalkDir::new(path) {
+        let entry = entry.map_err(|error| {
+            AppError::with_details(
+                "skill_hash_walk_failed",
+                "Skill 目录遍历失败，未使用不完整内容计算哈希。",
+                error.to_string(),
+            )
+        })?;
+        if entry.file_type().is_symlink() {
+            return Err(AppError::with_details(
+                "skill_hash_symlink_unsupported",
+                "Skill 内容包含符号链接，无法安全计算哈希。",
+                path_string(entry.path()),
+            ));
+        }
         if entry.file_type().is_file() {
             entries.push(entry.path().to_path_buf());
         }
@@ -4116,84 +4539,392 @@ fn hash_skill_from_zip(bytes: &[u8], skill_path: &str) -> Result<String, AppErro
     Ok(hex::encode(hasher.finalize()))
 }
 
-fn extract_skill_from_zip(bytes: &[u8], skill_path: &str, dest: &Path) -> Result<(), AppError> {
-    let parent = dest.parent().ok_or_else(|| {
+fn normalized_skill_zip_path(skill_path: &str) -> Result<PathBuf, AppError> {
+    if skill_path == "." || skill_path.trim().is_empty() {
+        return Ok(PathBuf::new());
+    }
+    if skill_path.contains(['\\', '\0']) {
+        return Err(AppError::with_details(
+            "zip_path_unsafe",
+            "Skill ZIP 内路径不安全，已停止安装。",
+            skill_path,
+        ));
+    }
+    let path = Path::new(skill_path.trim_matches('/'));
+    if path.as_os_str().is_empty()
+        || !path
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(AppError::with_details(
+            "zip_path_unsafe",
+            "Skill ZIP 内路径不安全，已停止安装。",
+            skill_path,
+        ));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn extract_skill_to_registered_temp(
+    bytes: &[u8],
+    skill_path: &str,
+    destination: &Path,
+    skill_name: &str,
+    registry: &TempArtifactRegistry,
+) -> Result<TempArtifactGuard, AppError> {
+    validate_skill_directory_name(skill_name).map_err(|details| {
+        AppError::with_details(
+            "skill_name_unsafe",
+            "Skill 名称不能作为安全目录名。",
+            details,
+        )
+    })?;
+    let parent = destination.parent().ok_or_else(|| {
         AppError::with_details(
             "filesystem_error",
             "Skill 安装目录缺少父目录。",
-            path_string(dest),
+            path_string(destination),
         )
     })?;
-    fs::create_dir_all(parent)?;
-    let temp = unique_temp_path(
+    let requested_path = normalized_skill_zip_path(skill_path)?;
+    let mut guard = TempArtifactGuard::create(
+        registry.clone(),
         parent,
-        dest.file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("skill"),
-        "install-tmp",
-    );
-    remove_path(&temp)?;
-    fs::create_dir_all(&temp)?;
+        destination,
+        skill_name,
+        TempArtifactKind::Install,
+    )?;
+    let payload = guard.payload_path();
+    fs::create_dir(&payload)?;
+
     let mut archive = ZipArchive::new(Cursor::new(bytes))?;
-    let normalized_skill_path = if skill_path == "." {
-        String::new()
-    } else {
-        format!("{}/", skill_path.trim_matches('/'))
-    };
+    let mut extracted_files = 0_usize;
     for index in 0..archive.len() {
         let mut file = archive.by_index(index)?;
-        let relative = strip_zip_root(file.name());
-        if !normalized_skill_path.is_empty() && !relative.starts_with(&normalized_skill_path) {
-            continue;
-        }
-        let output_relative = if normalized_skill_path.is_empty() {
-            relative
-        } else {
-            relative
-                .strip_prefix(&normalized_skill_path)
-                .unwrap_or("")
-                .to_string()
+        let enclosed = file.enclosed_name().ok_or_else(|| {
+            AppError::with_details(
+                "zip_path_unsafe",
+                "Skill ZIP 包含越界路径，已停止安装。",
+                file.name(),
+            )
+        })?;
+        let mut components = enclosed.components();
+        let Some(std::path::Component::Normal(_archive_root)) = components.next() else {
+            return Err(AppError::with_details(
+                "zip_path_unsafe",
+                "Skill ZIP 顶层路径无效，已停止安装。",
+                file.name(),
+            ));
         };
-        if output_relative.is_empty() {
+        let archive_relative = components.as_path();
+        let output_relative = if requested_path.as_os_str().is_empty() {
+            archive_relative
+        } else {
+            let Ok(relative) = archive_relative.strip_prefix(&requested_path) else {
+                continue;
+            };
+            relative
+        };
+        if output_relative.as_os_str().is_empty() {
             continue;
         }
-        let output_path = temp.join(output_relative);
+        if !output_relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        {
+            return Err(AppError::with_details(
+                "zip_path_unsafe",
+                "Skill ZIP 输出路径不安全，已停止安装。",
+                output_relative.to_string_lossy(),
+            ));
+        }
+        let output_path = payload.join(output_relative);
+        if !output_path.starts_with(&payload) {
+            return Err(AppError::with_details(
+                "zip_path_unsafe",
+                "Skill ZIP 输出路径越界，已停止安装。",
+                output_path.to_string_lossy(),
+            ));
+        }
         if file.is_dir() {
-            fs::create_dir_all(output_path)?;
+            fs::create_dir_all(&output_path)?;
         } else {
             if let Some(parent) = output_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            let mut output = fs::File::create(output_path)?;
+            let mut output = fs::File::create(&output_path)?;
             std::io::copy(&mut file, &mut output)?;
+            extracted_files += 1;
         }
     }
-    remove_path(dest)?;
-    match fs::rename(&temp, dest) {
-        Ok(()) => {}
-        Err(_) => {
-            copy_dir_all(&temp, dest)?;
-            remove_path(&temp)?;
-        }
+    if extracted_files == 0 {
+        return Err(AppError::new(
+            "skill_archive_empty",
+            "ZIP 中未找到可安装的 Skill 文件。",
+        ));
     }
-    Ok(())
+    guard.mark_ready()?;
+    Ok(guard)
 }
 
-fn backup_local_skill(
-    source: &Path,
-    data_dir: &Path,
-    skill_name: &str,
-) -> Result<Option<PathBuf>, AppError> {
-    if !source.exists() {
-        return Ok(None);
+struct PendingRegisteredReplacement {
+    guard: Option<TempArtifactGuard>,
+    destination: PathBuf,
+    original: PathBuf,
+    had_original: bool,
+    final_hash: String,
+}
+
+impl PendingRegisteredReplacement {
+    fn commit(mut self) -> Result<String, AppError> {
+        let mut guard = self.guard.take().ok_or_else(|| {
+            AppError::new(
+                "skill_replacement_finalized",
+                "Skill 安全替换已经结束，不能重复提交。",
+            )
+        })?;
+        if self.had_original {
+            if let Err(error) = fs::remove_dir_all(&self.original) {
+                let details = format!("installed new Skill but old temp cleanup failed: {error}");
+                guard.mark_recovery_required(&details)?;
+                return Err(AppError::with_details(
+                    "skill_replace_recovery_required",
+                    "Skill 已写入，但旧目录清理失败，已保留恢复记录。",
+                    details,
+                ));
+            }
+        }
+        guard.mark_completed()?;
+        Ok(self.final_hash.clone())
     }
-    let backup_dir = data_dir.join("local-skill-backups").join(format!(
-        "{}-{}",
-        skill_name,
-        Local::now().format("%Y%m%d%H%M%S")
-    ));
-    copy_dir_all(source, &backup_dir)?;
-    Ok(Some(backup_dir))
+
+    fn rollback(mut self) -> Result<(), AppError> {
+        let mut guard = self.guard.take().ok_or_else(|| {
+            AppError::new(
+                "skill_replacement_finalized",
+                "Skill 安全替换已经结束，不能重复回滚。",
+            )
+        })?;
+        let payload = guard.payload_path();
+        let preserve_new = fs::rename(&self.destination, &payload);
+        let restore_original = if preserve_new.is_ok() && self.had_original {
+            fs::rename(&self.original, &self.destination)
+        } else {
+            Ok(())
+        };
+        if preserve_new.is_ok() && restore_original.is_ok() {
+            guard.mark_rolled_back()?;
+            return Ok(());
+        }
+        let details = format!(
+            "database write failed; preserve new failed: {:?}; restore original failed: {:?}",
+            preserve_new.err(),
+            restore_original.err()
+        );
+        guard.mark_recovery_required(&details)?;
+        Err(AppError::with_details(
+            "skill_replace_recovery_required",
+            "数据库写入失败且 Skill 自动恢复未完成，已保留恢复材料。",
+            details,
+        ))
+    }
+}
+
+fn commit_replacement_after_database(
+    replacement: PendingRegisteredReplacement,
+    database_operation: impl FnOnce() -> Result<(), AppError>,
+) -> Result<String, AppError> {
+    match database_operation() {
+        Ok(()) => replacement.commit(),
+        Err(database_error) => match replacement.rollback() {
+            Ok(()) => Err(database_error),
+            Err(recovery_error) => Err(AppError::with_details(
+                "skill_replace_recovery_required",
+                "数据库写入失败且 Skill 自动恢复未完成，已保留恢复材料。",
+                format!(
+                    "database={}; recovery={}",
+                    format_error_for_log("database", &database_error),
+                    format_error_for_log("filesystem", &recovery_error)
+                ),
+            )),
+        },
+    }
+}
+
+fn begin_registered_temp_replacement(
+    mut guard: TempArtifactGuard,
+    destination: &Path,
+    expected_hash: &str,
+) -> Result<PendingRegisteredReplacement, AppError> {
+    let parent = destination.parent().ok_or_else(|| {
+        AppError::with_details(
+            "filesystem_error",
+            "Skill 安装目录缺少父目录。",
+            path_string(destination),
+        )
+    })?;
+    let file_name = destination.file_name().ok_or_else(|| {
+        AppError::with_details(
+            "filesystem_error",
+            "Skill 安装目录缺少名称。",
+            path_string(destination),
+        )
+    })?;
+    let normalized_destination = parent.canonicalize()?.join(file_name);
+    if guard.destination() != normalized_destination {
+        return Err(AppError::with_details(
+            "skill_destination_changed",
+            "Skill 安装目标已变化，未修改本地文件。",
+            format!(
+                "registered={}; requested={}",
+                guard.destination().display(),
+                normalized_destination.display()
+            ),
+        ));
+    }
+
+    let payload = guard.payload_path();
+    let payload_metadata = fs::symlink_metadata(&payload)?;
+    if !payload_metadata.is_dir() || payload_metadata.file_type().is_symlink() {
+        return Err(AppError::with_details(
+            "temp_payload_unsafe",
+            "Skill 临时目录异常，未修改本地文件。",
+            path_string(&payload),
+        ));
+    }
+    let payload_hash = hash_directory(&payload)?;
+    if payload_hash != expected_hash {
+        return Err(AppError::with_details(
+            "skill_install_hash_mismatch",
+            "Skill 临时内容哈希校验失败，未修改本地文件。",
+            format!("expected={expected_hash}; actual={payload_hash}"),
+        ));
+    }
+
+    let had_original = match fs::symlink_metadata(&normalized_destination) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(AppError::with_details(
+                "skill_destination_symlink_conflict",
+                "Skill 安装目标是符号链接，未覆盖该路径。",
+                path_string(&normalized_destination),
+            ));
+        }
+        Ok(metadata) if metadata.is_dir() => true,
+        Ok(_) => {
+            return Err(AppError::with_details(
+                "skill_destination_unsafe",
+                "Skill 安装目标不是目录，未覆盖该路径。",
+                path_string(&normalized_destination),
+            ));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+
+    let original = guard.path().join("original");
+    guard.mark_replacing()?;
+    if had_original {
+        guard.record_original_path(&original)?;
+        if let Err(error) = fs::rename(&normalized_destination, &original) {
+            let details = format!("move existing destination failed: {error}");
+            return match guard.mark_rolled_back() {
+                Ok(()) => Err(AppError::with_details(
+                    "skill_replace_failed",
+                    "Skill 原目录无法进入安全替换流程，未修改本地文件。",
+                    details,
+                )),
+                Err(cleanup_error) => Err(AppError::with_details(
+                    "skill_replace_recovery_required",
+                    "Skill 安全替换失败，临时目录需要人工恢复。",
+                    format!("{details}; temp cleanup failed: {cleanup_error}"),
+                )),
+            };
+        }
+    }
+
+    if let Err(replace_error) = fs::rename(&payload, &normalized_destination) {
+        if had_original {
+            match fs::rename(&original, &normalized_destination) {
+                Ok(()) => {
+                    let details = format!("place new destination failed: {replace_error}");
+                    return match guard.mark_rolled_back() {
+                        Ok(()) => Err(AppError::with_details(
+                            "skill_replace_failed",
+                            "Skill 新目录写入失败，原目录已恢复。",
+                            details,
+                        )),
+                        Err(cleanup_error) => Err(AppError::with_details(
+                            "skill_replace_recovery_required",
+                            "Skill 原目录已恢复，但临时目录清理失败。",
+                            format!("{details}; temp cleanup failed: {cleanup_error}"),
+                        )),
+                    };
+                }
+                Err(restore_error) => {
+                    let details = format!(
+                        "place new destination failed: {replace_error}; restore failed: {restore_error}"
+                    );
+                    guard.mark_recovery_required(&details)?;
+                    return Err(AppError::with_details(
+                        "skill_replace_recovery_required",
+                        "Skill 写入和原目录恢复均失败，已保留恢复材料。",
+                        details,
+                    ));
+                }
+            }
+        }
+        let details = format!("place new destination failed: {replace_error}");
+        guard.mark_recovery_required(&details)?;
+        return Err(AppError::with_details(
+            "skill_replace_recovery_required",
+            "Skill 写入失败，已保留临时目录。",
+            details,
+        ));
+    }
+
+    let final_hash = hash_directory(&normalized_destination)?;
+    if final_hash != expected_hash {
+        let validation_error = format!("expected={expected_hash}; actual={final_hash}");
+        let payload_restore = fs::rename(&normalized_destination, &payload);
+        let original_restore = if payload_restore.is_ok() && had_original {
+            fs::rename(&original, &normalized_destination)
+        } else {
+            Ok(())
+        };
+        if payload_restore.is_ok() && original_restore.is_ok() {
+            return match guard.mark_rolled_back() {
+                Ok(()) => Err(AppError::with_details(
+                    "skill_install_hash_mismatch",
+                    "Skill 写入后哈希校验失败，原目录已恢复。",
+                    validation_error,
+                )),
+                Err(cleanup_error) => Err(AppError::with_details(
+                    "skill_replace_recovery_required",
+                    "Skill 原目录已恢复，但临时目录清理失败。",
+                    format!("{validation_error}; temp cleanup failed: {cleanup_error}"),
+                )),
+            };
+        }
+        let recovery_details = format!(
+            "{validation_error}; preserve new failed: {:?}; restore original failed: {:?}",
+            payload_restore.err(),
+            original_restore.err()
+        );
+        guard.mark_recovery_required(&recovery_details)?;
+        return Err(AppError::with_details(
+            "skill_replace_recovery_required",
+            "Skill 哈希校验失败且自动恢复未完成，已保留恢复材料。",
+            recovery_details,
+        ));
+    }
+
+    Ok(PendingRegisteredReplacement {
+        guard: Some(guard),
+        destination: normalized_destination,
+        original,
+        had_original,
+        final_hash,
+    })
 }
 
 fn move_skill_to_deleted(
@@ -4278,13 +5009,6 @@ fn remove_path(path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn unique_temp_path(parent: &Path, name: &str, suffix: &str) -> PathBuf {
-    let timestamp = Utc::now()
-        .timestamp_nanos_opt()
-        .unwrap_or_else(|| Utc::now().timestamp_micros() * 1_000);
-    parent.join(format!(".{}-{}-{suffix}", slugify(name), timestamp))
-}
-
 fn backup_sync_target(
     target_id: &str,
     skill_name: &str,
@@ -4346,13 +5070,36 @@ fn prune_sync_backups(target_id: &str, skill_slug: &str, keep: usize) -> Result<
     Ok(())
 }
 
-fn replace_dir_from_source(
+struct PreparedSyncReplacement {
+    backup: Option<PathBuf>,
+    replacement: Option<PendingRegisteredReplacement>,
+}
+
+impl std::fmt::Debug for PreparedSyncReplacement {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PreparedSyncReplacement")
+            .field("backup", &self.backup)
+            .field("has_replacement", &self.replacement.is_some())
+            .finish()
+    }
+}
+
+fn prepare_dir_replacement_from_source(
     source: &Path,
     dest: &Path,
     target_id: &str,
     skill_name: &str,
     keep: i64,
-) -> Result<Option<PathBuf>, AppError> {
+    registry: &TempArtifactRegistry,
+) -> Result<PreparedSyncReplacement, AppError> {
+    validate_skill_directory_name(skill_name).map_err(|details| {
+        AppError::with_details(
+            "skill_name_unsafe",
+            "Skill 名称不能作为安全目录名。",
+            details,
+        )
+    })?;
     let parent = dest.parent().ok_or_else(|| {
         AppError::with_details(
             "filesystem_error",
@@ -4361,19 +5108,45 @@ fn replace_dir_from_source(
         )
     })?;
     fs::create_dir_all(parent)?;
-    let temp = unique_temp_path(parent, skill_name, "sync-tmp");
-    remove_path(&temp)?;
-    copy_dir_all(source, &temp)?;
-    let backup = backup_sync_target(target_id, skill_name, dest, keep)?;
-    remove_path(dest)?;
-    match fs::rename(&temp, dest) {
-        Ok(()) => {}
-        Err(_) => {
-            copy_dir_all(&temp, dest)?;
-            remove_path(&temp)?;
+    match classify_sync_destination(source, dest)? {
+        SyncDestination::SameSourceSymlink => {
+            return Ok(PreparedSyncReplacement {
+                backup: None,
+                replacement: None,
+            })
         }
+        SyncDestination::OtherSymlink { target } | SyncDestination::BrokenSymlink { target } => {
+            return Err(AppError::with_details(
+                "sync_target_symlink_conflict",
+                "同步目标是其他位置或失效的符号链接，未覆盖该路径。",
+                format!(
+                    "destination={}; target={}",
+                    dest.display(),
+                    target.display()
+                ),
+            ));
+        }
+        SyncDestination::Missing | SyncDestination::Normal => {}
     }
-    Ok(backup)
+
+    let source_hash = hash_directory(source)?;
+    let mut guard = TempArtifactGuard::create(
+        registry.clone(),
+        parent,
+        dest,
+        skill_name,
+        TempArtifactKind::Sync,
+    )?;
+    let payload = guard.payload_path();
+    fs::create_dir(&payload)?;
+    copy_dir_all(source, &payload)?;
+    guard.mark_ready()?;
+    let backup = backup_sync_target(target_id, skill_name, dest, keep)?;
+    let replacement = begin_registered_temp_replacement(guard, dest, &source_hash)?;
+    Ok(PreparedSyncReplacement {
+        backup,
+        replacement: Some(replacement),
+    })
 }
 
 fn skill_destination(settings: &AppSettings, skill_name: &str) -> PathBuf {
@@ -4440,6 +5213,40 @@ fn upsert_sync_record(
     Ok(())
 }
 
+fn commit_prepared_sync_replacement(
+    conn: &Connection,
+    prepared: PreparedSyncReplacement,
+    skill_id: &str,
+    target_id: &str,
+    target_path: &Path,
+    skill_path: &Path,
+    content_hash: &str,
+) -> Result<Option<PathBuf>, AppError> {
+    let PreparedSyncReplacement {
+        backup,
+        replacement,
+    } = prepared;
+    let persist_sync_record = || -> Result<(), AppError> {
+        let transaction = conn.unchecked_transaction()?;
+        upsert_sync_record(
+            &transaction,
+            skill_id,
+            target_id,
+            target_path,
+            skill_path,
+            content_hash,
+        )?;
+        transaction.commit()?;
+        Ok(())
+    };
+    if let Some(replacement) = replacement {
+        commit_replacement_after_database(replacement, persist_sync_record)?;
+    } else {
+        persist_sync_record()?;
+    }
+    Ok(backup)
+}
+
 fn delete_sync_record(conn: &Connection, skill_id: &str, target_id: &str) -> Result<(), AppError> {
     conn.execute(
         "DELETE FROM skill_sync_records WHERE skill_id = ?1 AND target_id = ?2",
@@ -4452,6 +5259,7 @@ fn reconcile_skill_sync(
     conn: &Connection,
     settings: &AppSettings,
     skill: &SkillRecord,
+    registry: &TempArtifactRegistry,
 ) -> SyncReport {
     let mut report = SyncReport::default();
     if !skill.installed {
@@ -4500,23 +5308,24 @@ fn reconcile_skill_sync(
             continue;
         };
         let target_path = spec.path.join(&skill.name);
-        match replace_dir_from_source(
+        match prepare_dir_replacement_from_source(
             &source,
             &target_path,
             spec.id,
             &skill.name,
             settings.sync_backup_keep,
+            registry,
         )
-        .and_then(|backup| {
-            upsert_sync_record(
+        .and_then(|prepared| {
+            commit_prepared_sync_replacement(
                 conn,
+                prepared,
                 &skill.id,
                 spec.id,
                 &spec.path,
                 &target_path,
                 &source_hash,
-            )?;
-            Ok(backup)
+            )
         }) {
             Ok(Some(backup)) => {
                 report.success_count += 1;
@@ -4675,6 +5484,14 @@ fn sync_task_status(report: &SyncReport) -> &'static str {
     }
 }
 
+fn completed_local_skill_task_status(report: &SyncReport) -> &'static str {
+    if report.failure_count > 0 {
+        "partial-success"
+    } else {
+        "success"
+    }
+}
+
 fn sync_task_summary(report: &SyncReport) -> String {
     match (
         report.success_count,
@@ -4686,6 +5503,91 @@ fn sync_task_summary(report: &SyncReport) -> String {
             format!("{success} synced, {failed} failed, {skipped} skipped")
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn insert_skill_sync_result_task(
+    conn: &Connection,
+    id: &str,
+    kind: &str,
+    target: &str,
+    progress: &str,
+    status: &str,
+    summary: &str,
+    log: &[String],
+    skill_id_value: &str,
+    sync_failed: bool,
+) -> Result<(), AppError> {
+    if sync_failed {
+        insert_retryable_task(
+            conn,
+            id,
+            kind,
+            target,
+            progress,
+            status,
+            summary,
+            None,
+            log,
+            RETRY_SYNC_SKILL,
+            &SkillActionRequest {
+                skill_id: skill_id_value.to_string(),
+            },
+        )
+    } else {
+        insert_task(conn, id, kind, target, progress, status, summary, None, log)
+    }
+}
+
+fn set_waiting_conflict_task_sync_result(
+    conn: &Connection,
+    task_id: &str,
+    skill_id_value: &str,
+    progress: &str,
+    status: &str,
+    summary: &str,
+    completed_at: &str,
+    sync_failed: bool,
+) -> Result<(), AppError> {
+    let retry_payload = if sync_failed {
+        Some(
+            serde_json::to_string(&SkillActionRequest {
+                skill_id: skill_id_value.to_string(),
+            })
+            .map_err(|error| {
+                AppError::with_details(
+                    "retry_payload_invalid",
+                    "任务重试参数序列化失败。",
+                    error.to_string(),
+                )
+            })?,
+        )
+    } else {
+        None
+    };
+    conn.execute(
+        "UPDATE backup_jobs
+         SET progress = ?2,
+             status = ?3,
+             summary = ?4,
+             retryable = ?5,
+             retry_action = ?6,
+             retry_payload = ?7,
+             retry_reason = NULL,
+             completed_at = ?8
+         WHERE id = ?1 AND status = 'waiting-user'",
+        params![
+            task_id,
+            progress,
+            status,
+            summary,
+            if sync_failed { 1 } else { 0 },
+            sync_failed.then_some(RETRY_SYNC_SKILL),
+            retry_payload,
+            completed_at
+        ],
+    )?;
+    Ok(())
 }
 
 fn browser_candidates() -> Vec<BrowserInfo> {
@@ -5234,6 +6136,13 @@ fn update_settings(
                     validation.message,
                 ));
             }
+            let mut roots_to_remember = get_setting(&db, "skill_library_root")?
+                .or(get_setting(&db, "skills_root")?)
+                .into_iter()
+                .map(|root| expand_tilde(&root))
+                .collect::<Vec<_>>();
+            roots_to_remember.push(expand_tilde(&value));
+            remember_skill_library_roots(&db, &roots_to_remember)?;
             set_setting(&db, "skill_library_root", value.clone())?;
             set_setting(&db, "skills_root", value)?;
         }
@@ -5386,7 +6295,7 @@ async fn add_repository(
         }
         insert_retryable_task(
             &db,
-            &format!("scan-{}", Local::now().format("%Y%m%d%H%M%S")),
+            &temp_artifacts::unique_operation_id("scan"),
             "Scan repository",
             &remote.full_name,
             "1 / 1",
@@ -5550,7 +6459,7 @@ async fn check_repositories(
     let result = (|| -> Result<Vec<UiRepository>, AppError> {
         insert_retryable_task(
             &db,
-            &format!("check-{}", Local::now().format("%Y%m%d%H%M%S")),
+            &temp_artifacts::unique_operation_id("check"),
             "Check remote state",
             "All repositories",
             &format!(
@@ -5822,7 +6731,7 @@ async fn backup_repositories(
             successful_repo_updates.len(),
             manifest_failures.len()
         );
-        let job_id = format!("backup-{backup_id}");
+        let job_id = temp_artifacts::unique_operation_id("backup");
         insert_retryable_task(
             &db,
             &job_id,
@@ -5872,24 +6781,34 @@ async fn backup_repositories(
 async fn install_skill(
     request: SkillActionRequest,
     state: State<'_, AppState>,
-) -> CommandResult<Vec<UiSkill>> {
-    update_skill_inner(request.skill_id, "install".into(), state).await
+) -> CommandResult<SkillActionOutcome> {
+    update_skill_inner(request.skill_id, SkillActionMode::Install, state).await
 }
 
 #[tauri::command]
 async fn update_skill(
     request: SkillActionRequest,
     state: State<'_, AppState>,
-) -> CommandResult<Vec<UiSkill>> {
-    update_skill_inner(request.skill_id, "update".into(), state).await
+) -> CommandResult<SkillActionOutcome> {
+    update_skill_inner(request.skill_id, SkillActionMode::Update, state).await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkillActionMode {
+    Install,
+    Update,
 }
 
 async fn update_skill_inner(
     skill_id_value: String,
-    mode: String,
+    mode: SkillActionMode,
     state: State<'_, AppState>,
-) -> CommandResult<Vec<UiSkill>> {
-    let (skill, repo, settings) = {
+) -> CommandResult<SkillActionOutcome> {
+    let (skill, repo, dest) = {
+        let _filesystem_guard = match state.filesystem_lock.acquire() {
+            Ok(guard) => guard,
+            Err(error) => return Ok(api_err(AppError::from(error))),
+        };
         let db = state.db.lock().expect("db mutex poisoned");
         let skill = match load_skill_record(&db, &skill_id_value) {
             Ok(Some(skill)) => skill,
@@ -5910,27 +6829,41 @@ async fn update_skill_inner(
             Ok(settings) => settings,
             Err(error) => return Ok(api_err(error)),
         };
-        (skill, repo, settings)
-    };
-
-    let dest = skill_destination(&settings, &skill.name);
-    if skill.installed && mode == "update" {
-        match hash_directory(&dest) {
-            Ok(current_hash) if skill.installed_hash.as_deref() != Some(current_hash.as_str()) => {
-                let db = state.db.lock().expect("db mutex poisoned");
-                let _ = db.execute(
-                    "UPDATE skills SET status = 'local-modified' WHERE id = ?1",
-                    params![skill.id],
-                );
-                return Ok(api_err(AppError::new(
-                    "local_skill_modified",
-                    "本地 Skill 有修改，请先选择处理方式。",
-                )));
-            }
-            Ok(_) => {}
-            Err(error) => return Ok(api_err(error)),
+        if let Err(error) = validate_skill_action_mode(&skill, mode) {
+            return Ok(api_err(error));
         }
-    }
+
+        let dest = skill_destination(&settings, &skill.name);
+        if mode == SkillActionMode::Update {
+            let current_hash = match hash_directory(&dest) {
+                Ok(hash) => hash,
+                Err(error) => return Ok(api_err(error)),
+            };
+            match classify_skill_update_preflight(&skill, &repo.remote_sha, &current_hash) {
+                SkillUpdatePreflight::AlreadyHandled => {
+                    return Ok(match load_ui_skills(&db) {
+                        Ok(skills) => ApiResponse::ok(SkillActionOutcome::Updated { skills }),
+                        Err(error) => api_err(error),
+                    });
+                }
+                SkillUpdatePreflight::Conflict => {
+                    let result = persist_skill_update_conflict(&db, &skill, &repo, &current_hash)
+                        .and_then(|conflict| {
+                            Ok(SkillActionOutcome::Conflict {
+                                skills: load_ui_skills(&db)?,
+                                conflict,
+                            })
+                        });
+                    return Ok(match result {
+                        Ok(outcome) => ApiResponse::ok(outcome),
+                        Err(error) => api_err(error),
+                    });
+                }
+                SkillUpdatePreflight::Proceed => {}
+            }
+        }
+        (skill, repo, dest)
+    };
 
     let auth = state.github_auth_for_repo(&repo);
     if let Err(error) = auth.usable() {
@@ -5949,40 +6882,119 @@ async fn update_skill_inner(
         Ok(zip) => zip,
         Err(error) => return Ok(api_err(error)),
     };
-    if let Err(error) = extract_skill_from_zip(&zip, &skill.path, &dest) {
-        return Ok(api_err(error));
-    }
-    let hash = match hash_directory(&dest) {
+    let downloaded_hash = match hash_skill_from_zip(&zip, &skill.path) {
         Ok(hash) => hash,
         Err(error) => return Ok(api_err(error)),
     };
+    if skill.remote_hash.as_deref() != Some(downloaded_hash.as_str()) {
+        return Ok(api_err(AppError::with_details(
+            "skill_remote_hash_mismatch",
+            "下载的 Skill 内容与检测记录不一致，未修改本地文件。",
+            format!(
+                "expected={}; actual={downloaded_hash}",
+                skill.remote_hash.as_deref().unwrap_or("missing")
+            ),
+        )));
+    }
 
+    let _filesystem_guard = match state.filesystem_lock.acquire() {
+        Ok(guard) => guard,
+        Err(error) => return Ok(api_err(AppError::from(error))),
+    };
     let db = state.db.lock().expect("db mutex poisoned");
-    let result = (|| -> Result<Vec<UiSkill>, AppError> {
-        let now = utc_now();
-        db.execute(
-            "UPDATE skills
-                 SET installed = 1,
-                     status = 'installed-latest',
-                     local_version = remote_version,
-                     installed_hash = ?2,
-                     updated_at = ?3,
-                     install_path = ?4,
-                     deleted_at = NULL,
-                     deleted_path = NULL
-                 WHERE id = ?1",
-            params![skill_id_value, hash, now, path_string(&dest)],
+    let result = (|| -> Result<SkillActionOutcome, AppError> {
+        let current_skill = load_skill_record(&db, &skill_id_value)?
+            .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
+        validate_skill_action_mode(&current_skill, mode)?;
+        let current_repo = load_repository(&db, &current_skill.repo_id)?
+            .ok_or_else(|| AppError::new("github_not_found", "来源仓库不存在。"))?;
+        if current_repo.remote_sha != repo.remote_sha
+            || current_skill.remote_hash.as_deref() != Some(downloaded_hash.as_str())
+        {
+            return Err(AppError::new(
+                "skill_update_target_changed",
+                "Skill 远端目标已变化，请重新执行更新。",
+            ));
+        }
+        let current_settings = settings_from_db(&db, github_auth_configured(&db))?;
+        let current_dest = skill_destination(&current_settings, &current_skill.name);
+        if current_skill.installed && mode == SkillActionMode::Update {
+            let current_hash = hash_directory(&current_dest)?;
+            match classify_skill_update_preflight(
+                &current_skill,
+                &current_repo.remote_sha,
+                &current_hash,
+            ) {
+                SkillUpdatePreflight::AlreadyHandled => {
+                    return Ok(SkillActionOutcome::Updated {
+                        skills: load_ui_skills(&db)?,
+                    });
+                }
+                SkillUpdatePreflight::Conflict => {
+                    let conflict = persist_skill_update_conflict(
+                        &db,
+                        &current_skill,
+                        &current_repo,
+                        &current_hash,
+                    )?;
+                    return Ok(SkillActionOutcome::Conflict {
+                        skills: load_ui_skills(&db)?,
+                        conflict,
+                    });
+                }
+                SkillUpdatePreflight::Proceed => {}
+            }
+        }
+        let prepared = extract_skill_to_registered_temp(
+            &zip,
+            &current_skill.path,
+            &current_dest,
+            &current_skill.name,
+            &state.temp_registry,
         )?;
+        let replacement =
+            begin_registered_temp_replacement(prepared, &current_dest, &downloaded_hash)?;
+        let now = utc_now();
+        commit_replacement_after_database(replacement, || {
+            let transaction = db.unchecked_transaction()?;
+            transaction.execute(
+                "UPDATE skills
+                     SET installed = 1,
+                         status = 'installed-latest',
+                         local_version = remote_version,
+                         installed_hash = ?2,
+                         updated_at = ?3,
+                         install_path = ?4,
+                         handled_remote_sha = ?5,
+                         handled_remote_hash = ?6,
+                         deleted_at = NULL,
+                         deleted_path = NULL
+                     WHERE id = ?1",
+                params![
+                    skill_id_value,
+                    downloaded_hash,
+                    now,
+                    path_string(&current_dest),
+                    current_repo.remote_sha,
+                    downloaded_hash
+                ],
+            )?;
+            transaction.commit()?;
+            Ok(())
+        })?;
         let synced_skill = load_skill_record(&db, &skill_id_value)?
             .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
-        let sync_report = reconcile_skill_sync(&db, &settings, &synced_skill);
+        let sync_report =
+            reconcile_skill_sync(&db, &current_settings, &synced_skill, &state.temp_registry);
         let mut task_log = vec![
-            format!("download remote Skill directory {}", skill.path),
-            format!("replace local files at {}", path_string(&dest)),
+            format!("download remote Skill directory {}", current_skill.path),
+            format!("replace local files at {}", path_string(&current_dest)),
             "record installed_skill_hash".into(),
         ];
         task_log.extend(sync_report.log.clone());
-        let task_status = sync_task_status(&sync_report);
+        // The local install/update has already committed successfully. A sync-only
+        // failure is therefore partial success even when every target failed.
+        let task_status = completed_local_skill_task_status(&sync_report);
         let task_summary = if sync_report.failure_count > 0 {
             format!(
                 "local Skill updated; sync {}",
@@ -5991,60 +7003,30 @@ async fn update_skill_inner(
         } else {
             "local Skill updated".to_string()
         };
-        let task_id = format!("skill-{}", Local::now().format("%Y%m%d%H%M%S"));
+        let task_id = temp_artifacts::unique_operation_id("skill-update");
         let task_progress = format!(
             "{} / {}",
             sync_report.success_count + 1,
             sync_report.success_count + sync_report.failure_count + 1
         );
-        let retry_payload = SkillActionRequest {
-            skill_id: skill_id_value.clone(),
-        };
-        if mode == "install" {
-            insert_retryable_task(
-                &db,
-                &task_id,
-                "Update Skill",
-                &skill.name,
-                &task_progress,
-                task_status,
-                &task_summary,
-                None,
-                &task_log,
-                RETRY_INSTALL_SKILL,
-                &retry_payload,
-            )?;
-        } else if mode == "update" {
-            insert_retryable_task(
-                &db,
-                &task_id,
-                "Update Skill",
-                &skill.name,
-                &task_progress,
-                task_status,
-                &task_summary,
-                None,
-                &task_log,
-                RETRY_UPDATE_SKILL,
-                &retry_payload,
-            )?;
-        } else {
-            insert_task(
-                &db,
-                &task_id,
-                "Update Skill",
-                &skill.name,
-                &task_progress,
-                task_status,
-                &task_summary,
-                None,
-                &task_log,
-            )?;
-        }
-        load_ui_skills(&db)
+        insert_skill_sync_result_task(
+            &db,
+            &task_id,
+            "Update Skill",
+            &current_skill.name,
+            &task_progress,
+            task_status,
+            &task_summary,
+            &task_log,
+            &skill_id_value,
+            sync_report.failure_count > 0,
+        )?;
+        Ok(SkillActionOutcome::Updated {
+            skills: load_ui_skills(&db)?,
+        })
     })();
     Ok(match result {
-        Ok(items) => ApiResponse::ok(items),
+        Ok(outcome) => ApiResponse::ok(outcome),
         Err(error) => {
             insert_failed_task(
                 &db,
@@ -6066,6 +7048,10 @@ struct SkillRecord {
     path: String,
     installed: bool,
     installed_hash: Option<String>,
+    status: String,
+    remote_hash: Option<String>,
+    handled_remote_sha: Option<String>,
+    handled_remote_hash: Option<String>,
     source_type: String,
     install_path: Option<String>,
     sync_targets_mode: String,
@@ -6075,7 +7061,8 @@ struct SkillRecord {
 fn load_skill_record(conn: &Connection, id: &str) -> Result<Option<SkillRecord>, AppError> {
     conn.query_row(
         "SELECT id, repo_id, name, path, installed, installed_hash, source_type, install_path,
-                sync_targets_mode, sync_targets
+                sync_targets_mode, sync_targets, remote_hash, handled_remote_sha, handled_remote_hash,
+                status
          FROM skills WHERE id = ?1 AND deleted_at IS NULL",
         params![id],
         |row| {
@@ -6092,6 +7079,10 @@ fn load_skill_record(conn: &Connection, id: &str) -> Result<Option<SkillRecord>,
                     .get::<_, Option<String>>(8)?
                     .unwrap_or_else(|| "inherit".to_string()),
                 sync_targets: parse_sync_targets(row.get::<_, Option<String>>(9)?.as_deref()),
+                remote_hash: row.get(10)?,
+                handled_remote_sha: row.get(11)?,
+                handled_remote_hash: row.get(12)?,
+                status: row.get(13)?,
             })
         },
     )
@@ -6099,61 +7090,916 @@ fn load_skill_record(conn: &Connection, id: &str) -> Result<Option<SkillRecord>,
     .map_err(AppError::from)
 }
 
-#[tauri::command]
-async fn resolve_skill_local_conflict(
-    request: SkillConflictRequest,
-    state: State<'_, AppState>,
-) -> CommandResult<Vec<UiSkill>> {
-    if request.choice == "skip" {
-        let db = state.db.lock().expect("db mutex poisoned");
-        let result = (|| -> Result<Vec<UiSkill>, AppError> {
-            db.execute(
-                "UPDATE skills SET status = 'local-modified' WHERE id = ?1",
-                params![request.skill_id],
-            )?;
-            insert_task(
-                &db,
-                &format!("skill-{}", Local::now().format("%Y%m%d%H%M%S")),
-                "Update Skill",
-                "Local modified Skill",
-                "0 / 1",
-                "failed",
-                "skipped to preserve local modifications",
-                None,
-                &[
-                    "local hash differs from installed_skill_hash".into(),
-                    "user chose skip update".into(),
-                ],
-            )?;
-            load_ui_skills(&db)
-        })();
-        return Ok(match result {
-            Ok(items) => ApiResponse::ok(items),
-            Err(error) => api_err(error),
-        });
-    }
+fn skill_update_conflict_from_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<SkillUpdateConflict> {
+    Ok(SkillUpdateConflict {
+        id: row.get(0)?,
+        skill_id: row.get(1)?,
+        task_id: row.get(2)?,
+        status: row.get(3)?,
+        local_hash: row.get(4)?,
+        installed_hash: row.get(5)?,
+        remote_sha: row.get(6)?,
+        remote_hash: row.get(7)?,
+        verification_state: row.get(8)?,
+        verified_local_hash: row.get(9)?,
+        created_at: row.get(10)?,
+        updated_at: row.get(11)?,
+        verified_at: row.get(12)?,
+        resolved_at: row.get(13)?,
+    })
+}
 
-    if request.choice == "backup" {
-        let (skill, settings) = {
-            let db = state.db.lock().expect("db mutex poisoned");
-            let skill = match load_skill_record(&db, &request.skill_id) {
-                Ok(Some(skill)) => skill,
-                Ok(None) => return Ok(api_err(AppError::new("skill_not_found", "Skill 不存在。"))),
-                Err(error) => return Ok(api_err(error)),
-            };
-            let settings = match settings_from_db(&db, github_auth_configured(&db)) {
-                Ok(settings) => settings,
-                Err(error) => return Ok(api_err(error)),
-            };
-            (skill, settings)
-        };
-        let dest = skill_destination(&settings, &skill.name);
-        if let Err(error) = backup_local_skill(&dest, &state.data_dir, &skill.name) {
-            return Ok(api_err(error));
+fn load_skill_update_conflict_by_id(
+    conn: &Connection,
+    conflict_id: &str,
+) -> Result<Option<SkillUpdateConflict>, AppError> {
+    conn.query_row(
+        "SELECT id, skill_id, task_id, status, local_hash, installed_hash, remote_sha,
+                remote_hash, verification_state, verified_local_hash, created_at, updated_at,
+                verified_at, resolved_at
+         FROM skill_update_conflicts
+         WHERE id = ?1",
+        params![conflict_id],
+        skill_update_conflict_from_row,
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+fn load_active_skill_update_conflict(
+    conn: &Connection,
+    skill_id: &str,
+) -> Result<Option<SkillUpdateConflict>, AppError> {
+    conn.query_row(
+        "SELECT id, skill_id, task_id, status, local_hash, installed_hash, remote_sha,
+                remote_hash, verification_state, verified_local_hash, created_at, updated_at,
+                verified_at, resolved_at
+         FROM skill_update_conflicts
+         WHERE skill_id = ?1 AND status = 'pending'
+         ORDER BY created_at DESC
+         LIMIT 1",
+        params![skill_id],
+        skill_update_conflict_from_row,
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+fn load_latest_skill_update_conflict(
+    conn: &Connection,
+    skill_id: &str,
+) -> Result<Option<SkillUpdateConflict>, AppError> {
+    conn.query_row(
+        "SELECT id, skill_id, task_id, status, local_hash, installed_hash, remote_sha,
+                remote_hash, verification_state, verified_local_hash, created_at, updated_at,
+                verified_at, resolved_at
+         FROM skill_update_conflicts
+         WHERE skill_id = ?1
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1",
+        params![skill_id],
+        skill_update_conflict_from_row,
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+fn persist_skill_update_conflict(
+    conn: &Connection,
+    skill: &SkillRecord,
+    repo: &RepoRecord,
+    local_hash: &str,
+) -> Result<SkillUpdateConflict, AppError> {
+    let remote_hash = skill.remote_hash.clone().ok_or_else(|| {
+        AppError::new(
+            "skill_remote_hash_missing",
+            "缺少远端 Skill 内容哈希，请先重新检查来源仓库。",
+        )
+    })?;
+    if let Some(active) = load_active_skill_update_conflict(conn, &skill.id)? {
+        if active.remote_sha == repo.remote_sha && active.remote_hash == remote_hash {
+            conn.execute(
+                "UPDATE skills SET status = 'update-conflict', updated_at = ?2 WHERE id = ?1",
+                params![skill.id, utc_now()],
+            )?;
+            return Ok(active);
         }
     }
+    let now = utc_now();
+    let conflict_id = temp_artifacts::unique_operation_id("skill-conflict");
+    let task_id = temp_artifacts::unique_operation_id("skill-update");
+    let transaction = conn.unchecked_transaction()?;
+    transaction.execute(
+        "UPDATE backup_jobs
+         SET status = 'interrupted',
+             summary = '远端 Skill 版本已变化，请重新处理更新冲突',
+             completed_at = ?2
+         WHERE id IN (
+           SELECT task_id FROM skill_update_conflicts
+           WHERE skill_id = ?1 AND status = 'pending'
+         )",
+        params![skill.id, now],
+    )?;
+    transaction.execute(
+        "UPDATE skill_update_conflicts
+         SET status = 'stale',
+             verification_state = 'stale',
+             updated_at = ?2,
+             resolved_at = ?2
+         WHERE skill_id = ?1 AND status = 'pending'",
+        params![skill.id, now],
+    )?;
+    transaction.execute(
+        "INSERT INTO skill_update_conflicts
+         (id, skill_id, task_id, status, local_hash, installed_hash, remote_sha, remote_hash,
+          verification_state, created_at, updated_at)
+         VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, 'pending', ?8, ?8)",
+        params![
+            conflict_id,
+            skill.id,
+            task_id,
+            local_hash,
+            skill.installed_hash,
+            repo.remote_sha,
+            remote_hash,
+            now
+        ],
+    )?;
+    transaction.execute(
+        "UPDATE skills SET status = 'update-conflict', updated_at = ?2 WHERE id = ?1",
+        params![skill.id, now],
+    )?;
+    insert_task(
+        &transaction,
+        &task_id,
+        "Update Skill",
+        &skill.name,
+        "0 / 1",
+        "waiting-user",
+        "检测到本地修改，等待用户使用 Agent 工具处理",
+        None,
+        &[
+            "本地内容哈希与已安装版本不一致".into(),
+            "已停止自动更新：未下载、未备份、未覆盖、未同步".into(),
+        ],
+    )?;
+    transaction.execute(
+        "UPDATE backup_jobs
+         SET retryable = 0,
+             retry_action = NULL,
+             retry_payload = NULL,
+             retry_reason = NULL,
+             completed_at = NULL
+         WHERE id = ?1",
+        params![task_id],
+    )?;
+    transaction.commit()?;
 
-    update_skill_inner(request.skill_id, "force".into(), state).await
+    Ok(SkillUpdateConflict {
+        id: conflict_id,
+        skill_id: skill.id.clone(),
+        task_id,
+        status: "pending".into(),
+        local_hash: local_hash.into(),
+        installed_hash: skill.installed_hash.clone(),
+        remote_sha: repo.remote_sha.clone(),
+        remote_hash,
+        verification_state: "pending".into(),
+        verified_local_hash: None,
+        created_at: now.clone(),
+        updated_at: now,
+        verified_at: None,
+        resolved_at: None,
+    })
+}
+
+fn classify_skill_update_conflict(
+    conflict: &SkillUpdateConflict,
+    current_remote_sha: &str,
+    current_local_hash: &str,
+) -> &'static str {
+    if current_remote_sha != conflict.remote_sha {
+        "stale"
+    } else if current_local_hash == conflict.remote_hash {
+        "latest"
+    } else if current_local_hash == conflict.local_hash {
+        "unchanged"
+    } else {
+        "customized"
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SkillUpdatePreflight {
+    Proceed,
+    Conflict,
+    AlreadyHandled,
+}
+
+fn classify_skill_update_preflight(
+    skill: &SkillRecord,
+    current_remote_sha: &str,
+    current_local_hash: &str,
+) -> SkillUpdatePreflight {
+    if !skill.installed {
+        return SkillUpdatePreflight::Proceed;
+    }
+    if skill.remote_hash.as_deref() == Some(current_local_hash) {
+        return SkillUpdatePreflight::AlreadyHandled;
+    }
+    if skill.status == "update-conflict" {
+        return SkillUpdatePreflight::Conflict;
+    }
+    let handled_current_remote = skill.handled_remote_sha.as_deref() == Some(current_remote_sha)
+        && skill.handled_remote_hash.as_deref() == skill.remote_hash.as_deref();
+    if handled_current_remote && skill.installed_hash.as_deref() == Some(current_local_hash) {
+        return SkillUpdatePreflight::AlreadyHandled;
+    }
+    if skill.status == "installed-customized" {
+        return SkillUpdatePreflight::Conflict;
+    }
+    if skill.installed_hash.as_deref() != Some(current_local_hash) {
+        SkillUpdatePreflight::Conflict
+    } else {
+        SkillUpdatePreflight::Proceed
+    }
+}
+
+fn validate_skill_action_mode(skill: &SkillRecord, mode: SkillActionMode) -> Result<(), AppError> {
+    match (mode, skill.installed) {
+        (SkillActionMode::Install, true) => Err(AppError::new(
+            "skill_already_installed",
+            "Skill 已安装，请使用更新操作。",
+        )),
+        (SkillActionMode::Update, false) => Err(AppError::new(
+            "skill_not_installed",
+            "Skill 尚未安装，请使用安装操作。",
+        )),
+        _ => Ok(()),
+    }
+}
+
+fn record_skill_update_conflict_verification(
+    conn: &Connection,
+    conflict: &SkillUpdateConflict,
+    verification_state: &str,
+    verified_local_hash: Option<&str>,
+) -> Result<SkillUpdateConflict, AppError> {
+    let now = utc_now();
+    let transaction = conn.unchecked_transaction()?;
+    if verification_state == "stale" {
+        transaction.execute(
+            "UPDATE skill_update_conflicts
+             SET status = 'stale',
+                 verification_state = 'stale',
+                 verified_local_hash = NULL,
+                 verified_at = ?2,
+                 updated_at = ?2,
+                 resolved_at = ?2
+             WHERE id = ?1 AND status = 'pending'",
+            params![conflict.id, now],
+        )?;
+        transaction.execute(
+            "UPDATE skills
+             SET status = 'update-conflict', updated_at = ?2
+             WHERE id = ?1 AND status = 'update-conflict'",
+            params![conflict.skill_id, now],
+        )?;
+        transaction.execute(
+            "UPDATE backup_jobs
+             SET status = 'interrupted',
+                 summary = '远端 Skill 版本已变化，请先重新检测仓库再处理更新',
+                 completed_at = ?2
+             WHERE id = ?1 AND status = 'waiting-user'",
+            params![conflict.task_id, now],
+        )?;
+    } else {
+        let task_summary = match verification_state {
+            "unchanged" => {
+                "重新检测完成（unchanged），本地内容仍未处理，请继续使用 Agent 工具处理".to_string()
+            }
+            "latest" | "customized" => {
+                format!("重新检测完成（{verification_state}），等待用户显式确认")
+            }
+            _ => format!("重新检测完成（{verification_state}）"),
+        };
+        transaction.execute(
+            "UPDATE skill_update_conflicts
+             SET verification_state = ?2,
+                 verified_local_hash = ?3,
+                 verified_at = ?4,
+                 updated_at = ?4
+             WHERE id = ?1 AND status = 'pending'",
+            params![conflict.id, verification_state, verified_local_hash, now],
+        )?;
+        transaction.execute(
+            "UPDATE backup_jobs
+             SET summary = ?2
+             WHERE id = ?1 AND status = 'waiting-user'",
+            params![conflict.task_id, task_summary],
+        )?;
+    }
+    transaction.commit()?;
+    load_skill_update_conflict_by_id(conn, &conflict.id)?
+        .ok_or_else(|| AppError::new("skill_update_conflict_not_found", "Skill 更新冲突不存在。"))
+}
+
+fn validate_skill_update_confirmation(
+    conflict: &SkillUpdateConflict,
+    current_remote_sha: &str,
+    current_local_hash: &str,
+) -> Result<(), AppError> {
+    if conflict.status != "pending" {
+        return Err(AppError::new(
+            "skill_update_conflict_stale",
+            "Skill 更新冲突已失效，请重新处理。",
+        ));
+    }
+    if !matches!(
+        conflict.verification_state.as_str(),
+        "latest" | "customized"
+    ) || conflict.verified_local_hash.is_none()
+    {
+        return Err(AppError::new(
+            "skill_update_conflict_not_verified",
+            "请先重新检测；只有 latest 或 customized 状态可以确认。",
+        ));
+    }
+    if current_remote_sha != conflict.remote_sha {
+        return Err(AppError::new(
+            "skill_update_conflict_remote_changed",
+            "确认前远端 Skill 版本已变化，请重新检测。",
+        ));
+    }
+    if conflict.verified_local_hash.as_deref() != Some(current_local_hash) {
+        return Err(AppError::new(
+            "skill_update_conflict_local_changed",
+            "确认前本地 Skill 内容已变化，请重新检测。",
+        ));
+    }
+    Ok(())
+}
+
+fn finalize_skill_update_conflict(
+    conn: &Connection,
+    conflict: &SkillUpdateConflict,
+    settings: &AppSettings,
+    destination: &Path,
+    current_local_hash: &str,
+    registry: &TempArtifactRegistry,
+) -> Result<SkillActionOutcome, AppError> {
+    validate_skill_update_confirmation(conflict, &conflict.remote_sha, current_local_hash)?;
+    let skill = load_skill_record(conn, &conflict.skill_id)?
+        .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
+    let repo = load_repository(conn, &skill.repo_id)?
+        .ok_or_else(|| AppError::new("github_not_found", "来源仓库不存在。"))?;
+    if repo.remote_sha != conflict.remote_sha
+        || skill.remote_hash.as_deref() != Some(conflict.remote_hash.as_str())
+    {
+        return Err(AppError::new(
+            "skill_update_conflict_stale",
+            "Skill 远端目标已变化，请重新处理更新冲突。",
+        ));
+    }
+
+    let final_verification_state = if current_local_hash == conflict.remote_hash {
+        "latest"
+    } else {
+        "customized"
+    };
+    let final_skill_status = if final_verification_state == "latest" {
+        "installed-latest"
+    } else {
+        "installed-customized"
+    };
+    let now = utc_now();
+    // Keep the Skill and its waiting-user task in the reachable conflict state
+    // until all filesystem synchronization attempts have returned. A process
+    // interruption during sync can then safely resume from the same conflict.
+    let sync_report = reconcile_skill_sync(conn, settings, &skill, registry);
+    let task_status = if sync_report.failure_count == 0 {
+        "success"
+    } else {
+        "partial-success"
+    };
+    let task_summary = if final_verification_state == "latest" {
+        if sync_report.failure_count == 0 {
+            "已确认为远端最新版本，同步完成".to_string()
+        } else {
+            format!(
+                "已确认为远端最新版本，同步部分成功：{}",
+                sync_task_summary(&sync_report)
+            )
+        }
+    } else if sync_report.failure_count == 0 {
+        "已保留本地定制内容，并完成同步".to_string()
+    } else {
+        format!(
+            "已保留本地定制内容，同步部分成功：{}",
+            sync_task_summary(&sync_report)
+        )
+    };
+    let transaction = conn.unchecked_transaction()?;
+    transaction.execute(
+        "UPDATE skills
+         SET installed = 1,
+             status = ?2,
+             local_version = remote_version,
+             installed_hash = ?3,
+             handled_remote_sha = ?4,
+             handled_remote_hash = ?5,
+             install_path = ?6,
+             updated_at = ?7,
+             deleted_at = NULL,
+             deleted_path = NULL
+         WHERE id = ?1",
+        params![
+            skill.id,
+            final_skill_status,
+            current_local_hash,
+            conflict.remote_sha,
+            conflict.remote_hash,
+            path_string(destination),
+            now
+        ],
+    )?;
+    let resolved_rows = transaction.execute(
+        "UPDATE skill_update_conflicts
+         SET status = 'resolved',
+             verification_state = ?2,
+             verified_local_hash = ?3,
+             verified_at = ?4,
+             updated_at = ?4,
+             resolved_at = ?4
+         WHERE id = ?1 AND status = 'pending'",
+        params![
+            conflict.id,
+            final_verification_state,
+            current_local_hash,
+            now
+        ],
+    )?;
+    if resolved_rows != 1 {
+        return Err(AppError::new(
+            "skill_update_conflict_stale",
+            "Skill 更新冲突已失效，请重新处理。",
+        ));
+    }
+    set_waiting_conflict_task_sync_result(
+        &transaction,
+        &conflict.task_id,
+        &skill.id,
+        &format!(
+            "{} / {}",
+            sync_report.success_count + 1,
+            sync_report.success_count + sync_report.failure_count + 1
+        ),
+        task_status,
+        &task_summary,
+        &now,
+        sync_report.failure_count > 0,
+    )?;
+    let mut line_no: i64 = transaction.query_row(
+        "SELECT COALESCE(MAX(line_no), 0) FROM task_logs WHERE task_id = ?1",
+        params![conflict.task_id],
+        |row| row.get(0),
+    )?;
+    let mut final_logs = vec![
+        format!("确认时再次校验本地哈希：{current_local_hash}"),
+        if final_verification_state == "latest" {
+            "本地内容与当前远端一致，标记为最新版本".into()
+        } else {
+            "保留本地定制内容，记录已处理的远端目标".into()
+        },
+    ];
+    final_logs.extend(sync_report.log);
+    for line in final_logs {
+        line_no += 1;
+        transaction.execute(
+            "INSERT INTO task_logs (task_id, line_no, line) VALUES (?1, ?2, ?3)",
+            params![conflict.task_id, line_no, line],
+        )?;
+    }
+    transaction.commit()?;
+    Ok(SkillActionOutcome::Updated {
+        skills: load_ui_skills(conn)?,
+    })
+}
+
+fn get_or_create_skill_update_conflict(
+    conn: &Connection,
+    skill_id_value: &str,
+) -> Result<SkillUpdateConflict, AppError> {
+    if let Some(conflict) = load_active_skill_update_conflict(conn, skill_id_value)? {
+        return Ok(conflict);
+    }
+    let skill = load_skill_record(conn, skill_id_value)?
+        .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
+    if skill.status != "update-conflict" {
+        return Err(AppError::new(
+            "skill_update_conflict_not_found",
+            "未找到待处理的 Skill 更新冲突。",
+        ));
+    }
+    let repo = load_repository(conn, &skill.repo_id)?
+        .ok_or_else(|| AppError::new("github_not_found", "来源仓库不存在。"))?;
+    if let Some(latest) = load_latest_skill_update_conflict(conn, skill_id_value)? {
+        let source_target_not_refreshed = latest.status == "stale"
+            && latest.remote_sha == repo.remote_sha
+            && skill.remote_hash.as_deref() == Some(latest.remote_hash.as_str());
+        if source_target_not_refreshed {
+            return Err(AppError::new(
+                "skill_conflict_source_refresh_required",
+                "远端目标尚未刷新，请先重新检测来源仓库，再处理 Skill 更新冲突。",
+            ));
+        }
+    }
+    let destination = resolve_skill_folder_path(conn, skill_id_value)?;
+    let local_hash = hash_directory(&destination)?;
+    persist_skill_update_conflict(conn, &skill, &repo, &local_hash)
+}
+
+#[tauri::command]
+fn get_skill_update_conflict(
+    request: SkillActionRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<SkillUpdateConflict> {
+    let _filesystem_guard = match state.filesystem_lock.acquire() {
+        Ok(guard) => guard,
+        Err(error) => return api_err(AppError::from(error)),
+    };
+    let db = state.db.lock().expect("db mutex poisoned");
+    match get_or_create_skill_update_conflict(&db, &request.skill_id) {
+        Ok(conflict) => ApiResponse::ok(conflict),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+async fn verify_skill_update_conflict(
+    request: SkillConflictIdRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<SkillUpdateConflict> {
+    let repo = {
+        let db = state.db.lock().expect("db mutex poisoned");
+        let conflict = match load_skill_update_conflict_by_id(&db, &request.conflict_id) {
+            Ok(Some(conflict)) if conflict.status == "pending" => conflict,
+            Ok(Some(_)) => {
+                return Ok(api_err(AppError::new(
+                    "skill_update_conflict_stale",
+                    "Skill 更新冲突已失效，请重新处理。",
+                )))
+            }
+            Ok(None) => {
+                return Ok(api_err(AppError::new(
+                    "skill_update_conflict_not_found",
+                    "Skill 更新冲突不存在。",
+                )))
+            }
+            Err(error) => return Ok(api_err(error)),
+        };
+        let skill = match load_skill_record(&db, &conflict.skill_id) {
+            Ok(Some(skill)) => skill,
+            Ok(None) => return Ok(api_err(AppError::new("skill_not_found", "Skill 不存在。"))),
+            Err(error) => return Ok(api_err(error)),
+        };
+        let repo = match load_repository(&db, &skill.repo_id) {
+            Ok(Some(repo)) => repo,
+            Ok(None) => {
+                return Ok(api_err(AppError::new(
+                    "github_not_found",
+                    "来源仓库不存在。",
+                )))
+            }
+            Err(error) => return Ok(api_err(error)),
+        };
+        repo
+    };
+    let auth = state.github_auth_for_repo(&repo);
+    if let Err(error) = auth.usable() {
+        return Ok(api_err(error));
+    }
+    let remote = match fetch_remote_info(
+        &state.http,
+        &repo.owner,
+        &repo.repo,
+        &repo.ref_name,
+        auth.token(),
+        auth.label(),
+    )
+    .await
+    {
+        Ok(remote) => remote,
+        Err(error) => return Ok(api_err(error)),
+    };
+
+    let _filesystem_guard = match state.filesystem_lock.acquire() {
+        Ok(guard) => guard,
+        Err(error) => return Ok(api_err(AppError::from(error))),
+    };
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = (|| -> Result<SkillUpdateConflict, AppError> {
+        let conflict =
+            load_skill_update_conflict_by_id(&db, &request.conflict_id)?.ok_or_else(|| {
+                AppError::new("skill_update_conflict_not_found", "Skill 更新冲突不存在。")
+            })?;
+        if conflict.status != "pending" {
+            return Err(AppError::new(
+                "skill_update_conflict_stale",
+                "Skill 更新冲突已失效，请重新处理。",
+            ));
+        }
+        if remote.sha != conflict.remote_sha {
+            return record_skill_update_conflict_verification(&db, &conflict, "stale", None);
+        }
+        let skill = load_skill_record(&db, &conflict.skill_id)?
+            .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
+        let current_repo = load_repository(&db, &skill.repo_id)?
+            .ok_or_else(|| AppError::new("github_not_found", "来源仓库不存在。"))?;
+        if current_repo.remote_sha != conflict.remote_sha
+            || skill.remote_hash.as_deref() != Some(conflict.remote_hash.as_str())
+        {
+            return record_skill_update_conflict_verification(&db, &conflict, "stale", None);
+        }
+        let dest = resolve_skill_folder_path(&db, &conflict.skill_id)?;
+        let current_hash = hash_directory(&dest)?;
+        let verification_state =
+            classify_skill_update_conflict(&conflict, &remote.sha, &current_hash);
+        record_skill_update_conflict_verification(
+            &db,
+            &conflict,
+            verification_state,
+            Some(&current_hash),
+        )
+    })();
+    Ok(match result {
+        Ok(conflict) => ApiResponse::ok(conflict),
+        Err(error) => api_err(error),
+    })
+}
+
+#[tauri::command]
+async fn confirm_skill_update_conflict(
+    request: SkillConflictIdRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<SkillActionOutcome> {
+    let repo = {
+        let db = state.db.lock().expect("db mutex poisoned");
+        let conflict = match load_skill_update_conflict_by_id(&db, &request.conflict_id) {
+            Ok(Some(conflict)) if conflict.status == "pending" => conflict,
+            Ok(Some(_)) => {
+                return Ok(api_err(AppError::new(
+                    "skill_update_conflict_stale",
+                    "Skill 更新冲突已失效，请重新处理。",
+                )))
+            }
+            Ok(None) => {
+                return Ok(api_err(AppError::new(
+                    "skill_update_conflict_not_found",
+                    "Skill 更新冲突不存在。",
+                )))
+            }
+            Err(error) => return Ok(api_err(error)),
+        };
+        if !matches!(
+            conflict.verification_state.as_str(),
+            "latest" | "customized"
+        ) || conflict.verified_local_hash.is_none()
+        {
+            return Ok(api_err(AppError::new(
+                "skill_update_conflict_not_verified",
+                "请先重新检测本地与远端状态，再确认更新。",
+            )));
+        }
+        let skill = match load_skill_record(&db, &conflict.skill_id) {
+            Ok(Some(skill)) => skill,
+            Ok(None) => return Ok(api_err(AppError::new("skill_not_found", "Skill 不存在。"))),
+            Err(error) => return Ok(api_err(error)),
+        };
+        let repo = match load_repository(&db, &skill.repo_id) {
+            Ok(Some(repo)) => repo,
+            Ok(None) => {
+                return Ok(api_err(AppError::new(
+                    "github_not_found",
+                    "来源仓库不存在。",
+                )))
+            }
+            Err(error) => return Ok(api_err(error)),
+        };
+        repo
+    };
+    let auth = state.github_auth_for_repo(&repo);
+    if let Err(error) = auth.usable() {
+        return Ok(api_err(error));
+    }
+    let remote = match fetch_remote_info(
+        &state.http,
+        &repo.owner,
+        &repo.repo,
+        &repo.ref_name,
+        auth.token(),
+        auth.label(),
+    )
+    .await
+    {
+        Ok(remote) => remote,
+        Err(error) => return Ok(api_err(error)),
+    };
+
+    let _filesystem_guard = match state.filesystem_lock.acquire() {
+        Ok(guard) => guard,
+        Err(error) => return Ok(api_err(AppError::from(error))),
+    };
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = (|| -> Result<SkillActionOutcome, AppError> {
+        let conflict =
+            load_skill_update_conflict_by_id(&db, &request.conflict_id)?.ok_or_else(|| {
+                AppError::new("skill_update_conflict_not_found", "Skill 更新冲突不存在。")
+            })?;
+        if conflict.status != "pending" {
+            return Err(AppError::new(
+                "skill_update_conflict_stale",
+                "Skill 更新冲突已失效，请重新处理。",
+            ));
+        }
+        let skill = load_skill_record(&db, &conflict.skill_id)?
+            .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
+        let current_repo = load_repository(&db, &skill.repo_id)?
+            .ok_or_else(|| AppError::new("github_not_found", "来源仓库不存在。"))?;
+        if remote.sha != conflict.remote_sha
+            || current_repo.remote_sha != conflict.remote_sha
+            || skill.remote_hash.as_deref() != Some(conflict.remote_hash.as_str())
+        {
+            let stale = record_skill_update_conflict_verification(&db, &conflict, "stale", None)?;
+            return Ok(SkillActionOutcome::Conflict {
+                skills: load_ui_skills(&db)?,
+                conflict: stale,
+            });
+        }
+        let settings = settings_from_db(&db, github_auth_configured(&db))?;
+        let dest = resolve_skill_folder_path(&db, &conflict.skill_id)?;
+        let current_hash = hash_directory(&dest)?;
+        validate_skill_update_confirmation(&conflict, &remote.sha, &current_hash)?;
+        finalize_skill_update_conflict(
+            &db,
+            &conflict,
+            &settings,
+            &dest,
+            &current_hash,
+            &state.temp_registry,
+        )
+    })();
+    Ok(match result {
+        Ok(outcome) => ApiResponse::ok(outcome),
+        Err(error) => api_err(error),
+    })
+}
+
+fn resolve_skill_folder_path(conn: &Connection, skill_id_value: &str) -> Result<PathBuf, AppError> {
+    let skill = load_skill_record(conn, skill_id_value)?
+        .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
+    if !skill.installed {
+        return Err(AppError::new(
+            "skill_not_installed",
+            "Skill 尚未安装，无可打开的本地目录。",
+        ));
+    }
+    validate_skill_directory_name(&skill.name).map_err(|details| {
+        AppError::with_details(
+            "skill_name_unsafe",
+            "Skill 名称不能作为安全目录名。",
+            details,
+        )
+    })?;
+    let settings = settings_from_db(conn, github_auth_configured(conn))?;
+    let library_root = expand_tilde(&settings.skill_library_root);
+    let destination = skill
+        .install_path
+        .as_deref()
+        .map(expand_tilde)
+        .unwrap_or_else(|| skill_destination(&settings, &skill.name));
+    let destination_metadata = fs::symlink_metadata(&destination).map_err(|error| {
+        AppError::with_details(
+            "skill_folder_unavailable",
+            "Skill 本地目录不可用，不能继续处理。",
+            format!("{}: {error}", path_string(&destination)),
+        )
+    })?;
+    if destination_metadata.file_type().is_symlink() || !destination_metadata.is_dir() {
+        return Err(AppError::with_details(
+            "skill_folder_invalid",
+            "Skill 本地路径必须是主库中的真实目录，不能是符号链接。",
+            path_string(&destination),
+        ));
+    }
+    let canonical_root = library_root.canonicalize().map_err(|error| {
+        AppError::with_details(
+            "skill_library_unavailable",
+            "Skill 主库目录不可用。",
+            format!("{}: {error}", path_string(&library_root)),
+        )
+    })?;
+    let canonical_destination = destination.canonicalize().map_err(|error| {
+        AppError::with_details(
+            "skill_folder_unavailable",
+            "Skill 本地目录不可用。",
+            format!("{}: {error}", path_string(&destination)),
+        )
+    })?;
+    let is_matching_direct_child = canonical_destination.parent() == Some(canonical_root.as_path())
+        && canonical_destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            == Some(skill.name.as_str());
+    if !is_matching_direct_child || !canonical_destination.is_dir() {
+        return Err(AppError::with_details(
+            "skill_folder_outside_library",
+            "Skill 目录不在当前主库安全边界内，已拒绝打开。",
+            format!(
+                "library={}; destination={}",
+                path_string(&canonical_root),
+                path_string(&canonical_destination)
+            ),
+        ));
+    }
+    let skill_manifest = canonical_destination.join("SKILL.md");
+    let manifest_metadata = fs::symlink_metadata(&skill_manifest).map_err(|error| {
+        AppError::with_details(
+            "skill_manifest_unavailable",
+            "Skill 目录缺少可验证的 SKILL.md，不能继续处理。",
+            format!("{}: {error}", path_string(&skill_manifest)),
+        )
+    })?;
+    if manifest_metadata.file_type().is_symlink() || !manifest_metadata.is_file() {
+        return Err(AppError::with_details(
+            "skill_manifest_invalid",
+            "SKILL.md 必须是普通文件，不能是符号链接。",
+            path_string(&skill_manifest),
+        ));
+    }
+    Ok(canonical_destination)
+}
+
+fn revalidate_skill_folder_before_open(destination: &Path) -> Result<(), AppError> {
+    let metadata = fs::symlink_metadata(destination).map_err(|error| {
+        AppError::with_details(
+            "skill_folder_unavailable",
+            "Skill 本地目录不可用，不能继续处理。",
+            format!("{}: {error}", path_string(destination)),
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(AppError::with_details(
+            "skill_folder_invalid",
+            "Skill 本地路径必须是主库中的真实目录，不能是符号链接。",
+            path_string(destination),
+        ));
+    }
+    let current = destination.canonicalize().map_err(AppError::from)?;
+    if current != destination {
+        return Err(AppError::with_details(
+            "skill_folder_changed",
+            "Skill 本地目录在打开前发生变化，已停止操作。",
+            format!(
+                "validated={}; current={}",
+                path_string(destination),
+                path_string(&current)
+            ),
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_skill_folder(request: SkillActionRequest, state: State<'_, AppState>) -> ApiResponse<()> {
+    match open_skill_folder_with(
+        &state.filesystem_lock,
+        &state.db,
+        &request.skill_id,
+        |destination| opener::open(destination).map_err(|error| error.to_string()),
+    ) {
+        Ok(()) => ApiResponse::ok(()),
+        Err(error) => api_err(error),
+    }
+}
+
+fn open_skill_folder_with(
+    filesystem_lock: &FilesystemMutationLock,
+    database: &Mutex<Connection>,
+    skill_id_value: &str,
+    open: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), AppError> {
+    let _filesystem_guard = filesystem_lock.acquire().map_err(AppError::from)?;
+    let destination = {
+        let db = database.lock().expect("db mutex poisoned");
+        resolve_skill_folder_path(&db, skill_id_value)?
+    };
+    revalidate_skill_folder_before_open(&destination)?;
+    open(&destination).map_err(|error| {
+        AppError::with_details("open_folder_failed", "无法打开 Skill 目录。", error)
+    })
 }
 
 #[tauri::command]
@@ -6181,7 +8027,7 @@ fn scan_local_skills(
         save_local_repository(&db, &root, &scans, true)?;
         insert_retryable_task(
             &db,
-            &format!("local-scan-{}", Local::now().format("%Y%m%d%H%M%S")),
+            &temp_artifacts::unique_operation_id("local-scan"),
             "Scan local Skills",
             &path_string(&root),
             &format!("{} / {}", scans.len(), scans.len()),
@@ -6236,7 +8082,7 @@ fn add_local_repository(
         save_local_repository_with_plugins(&db, &root, &scans, &plugins, false)?;
         insert_retryable_task(
             &db,
-            &format!("local-repo-{}", Local::now().format("%Y%m%d%H%M%S")),
+            &temp_artifacts::unique_operation_id("local-repo"),
             "Scan local repository",
             &path_string(&root),
             &format!("{} / {}", scans.len(), scans.len()),
@@ -6267,6 +8113,10 @@ fn delete_skill(
     request: DeleteSkillRequest,
     state: State<'_, AppState>,
 ) -> ApiResponse<Vec<UiSkill>> {
+    let _filesystem_guard = match state.filesystem_lock.acquire() {
+        Ok(guard) => guard,
+        Err(error) => return api_err(AppError::from(error)),
+    };
     let db = state.db.lock().expect("db mutex poisoned");
     let requested_skill_id = request.skill_id.clone();
     let result = (|| -> Result<Vec<UiSkill>, AppError> {
@@ -6327,7 +8177,7 @@ fn delete_skill(
         task_log.push("delete mode backup_then_remove".into());
         insert_task(
             &db,
-            &format!("delete-skill-{}", Local::now().format("%Y%m%d%H%M%S")),
+            &temp_artifacts::unique_operation_id("delete-skill"),
             "Delete Skill",
             &skill.name,
             &format!(
@@ -6367,6 +8217,10 @@ fn restore_skill(
     request: SkillActionRequest,
     state: State<'_, AppState>,
 ) -> ApiResponse<Vec<UiSkill>> {
+    let _filesystem_guard = match state.filesystem_lock.acquire() {
+        Ok(guard) => guard,
+        Err(error) => return api_err(AppError::from(error)),
+    };
     let db = state.db.lock().expect("db mutex poisoned");
     let requested_skill_id = request.skill_id.clone();
     let result = (|| -> Result<Vec<UiSkill>, AppError> {
@@ -6436,7 +8290,8 @@ fn restore_skill(
         let settings = settings_from_db(&db, github_auth_configured(&db))?;
         let restored_skill = load_skill_record(&db, &id)?
             .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
-        let sync_report = reconcile_skill_sync(&db, &settings, &restored_skill);
+        let sync_report =
+            reconcile_skill_sync(&db, &settings, &restored_skill, &state.temp_registry);
         let mut task_log = vec![
             format!(
                 "restore {} -> {}",
@@ -6448,7 +8303,7 @@ fn restore_skill(
         task_log.extend(sync_report.log.clone());
         insert_task(
             &db,
-            &format!("restore-skill-{}", Local::now().format("%Y%m%d%H%M%S")),
+            &temp_artifacts::unique_operation_id("restore-skill"),
             "Restore Skill",
             &name,
             &format!(
@@ -6483,8 +8338,57 @@ fn restore_skill(
     }
 }
 
+fn sync_skill(
+    request: SkillActionRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<Vec<UiSkill>> {
+    let _filesystem_guard = match state.filesystem_lock.acquire() {
+        Ok(guard) => guard,
+        Err(error) => return api_err(AppError::from(error)),
+    };
+    let db = state.db.lock().expect("db mutex poisoned");
+    let result = (|| -> Result<Vec<UiSkill>, AppError> {
+        let settings = settings_from_db(&db, github_auth_configured(&db))?;
+        let skill = load_skill_record(&db, &request.skill_id)?
+            .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
+        if !skill.installed {
+            return Err(AppError::new(
+                "skill_not_installed",
+                "Skill 尚未安装，不能重试同步。",
+            ));
+        }
+        let report = reconcile_skill_sync(&db, &settings, &skill, &state.temp_registry);
+        let task_id = temp_artifacts::unique_operation_id("sync-skill");
+        insert_skill_sync_result_task(
+            &db,
+            &task_id,
+            "Sync Skill",
+            &skill.name,
+            &format!(
+                "{} / {}",
+                report.success_count,
+                report.success_count + report.failure_count + report.skipped_count
+            ),
+            sync_task_status(&report),
+            &sync_task_summary(&report),
+            &report.log,
+            &skill.id,
+            report.failure_count > 0,
+        )?;
+        load_ui_skills(&db)
+    })();
+    match result {
+        Ok(items) => ApiResponse::ok(items),
+        Err(error) => api_err(error),
+    }
+}
+
 #[tauri::command]
 fn sync_installed_skills(state: State<'_, AppState>) -> ApiResponse<Vec<UiSkill>> {
+    let _filesystem_guard = match state.filesystem_lock.acquire() {
+        Ok(guard) => guard,
+        Err(error) => return api_err(AppError::from(error)),
+    };
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<UiSkill>, AppError> {
         let settings = settings_from_db(&db, github_auth_configured(&db))?;
@@ -6499,7 +8403,7 @@ fn sync_installed_skills(state: State<'_, AppState>) -> ApiResponse<Vec<UiSkill>
             let Some(skill) = load_skill_record(&db, &id)? else {
                 continue;
             };
-            let report = reconcile_skill_sync(&db, &settings, &skill);
+            let report = reconcile_skill_sync(&db, &settings, &skill, &state.temp_registry);
             aggregate.success_count += report.success_count;
             aggregate.failure_count += report.failure_count;
             aggregate.skipped_count += report.skipped_count;
@@ -6507,7 +8411,7 @@ fn sync_installed_skills(state: State<'_, AppState>) -> ApiResponse<Vec<UiSkill>
         }
         insert_retryable_task(
             &db,
-            &format!("sync-skills-{}", Local::now().format("%Y%m%d%H%M%S")),
+            &temp_artifacts::unique_operation_id("sync-skills"),
             "Apply Skill sync settings",
             "Installed Skills",
             &format!(
@@ -6535,6 +8439,10 @@ fn update_skill_sync_targets(
     request: SkillSyncTargetsRequest,
     state: State<'_, AppState>,
 ) -> ApiResponse<Vec<UiSkill>> {
+    let _filesystem_guard = match state.filesystem_lock.acquire() {
+        Ok(guard) => guard,
+        Err(error) => return api_err(AppError::from(error)),
+    };
     let db = state.db.lock().expect("db mutex poisoned");
     let requested_skill_id = request.skill_id.clone();
     let result = (|| -> Result<Vec<UiSkill>, AppError> {
@@ -6560,10 +8468,10 @@ fn update_skill_sync_targets(
         let settings = settings_from_db(&db, github_auth_configured(&db))?;
         let skill = load_skill_record(&db, &requested_skill_id)?
             .ok_or_else(|| AppError::new("skill_not_found", "Skill 不存在。"))?;
-        let report = reconcile_skill_sync(&db, &settings, &skill);
+        let report = reconcile_skill_sync(&db, &settings, &skill, &state.temp_registry);
         insert_retryable_task(
             &db,
-            &format!("sync-targets-{}", Local::now().format("%Y%m%d%H%M%S")),
+            &temp_artifacts::unique_operation_id("sync-targets"),
             "Update Skill sync targets",
             &skill.name,
             &format!(
@@ -6597,6 +8505,29 @@ fn remove_repository(id: String, state: State<'_, AppState>) -> ApiResponse<Vec<
         Ok(items) => ApiResponse::ok(items),
         Err(error) => api_err(error),
     }
+}
+
+fn retry_temp_artifact_cleanup(state: State<'_, AppState>) -> Option<ApiError> {
+    let _filesystem_guard = match state.filesystem_lock.acquire() {
+        Ok(guard) => guard,
+        Err(error) => return api_err::<()>(AppError::from(error)).error,
+    };
+    let db = state.db.lock().expect("db mutex poisoned");
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let report =
+        cleanup_temp_artifacts_with_lock_held(&db, &state.temp_registry, &state.data_dir, &home);
+    if let Err(error) = record_temp_cleanup_task(&db, &report) {
+        return api_err::<()>(error).error;
+    }
+    if report.failed > 0 {
+        return api_err::<()>(AppError::with_details(
+            "temp_artifact_cleanup_failed",
+            "临时目录清理仍有失败项，可稍后重试。",
+            report.task_summary(),
+        ))
+        .error;
+    }
+    None
 }
 
 #[tauri::command]
@@ -6673,6 +8604,13 @@ async fn retry_task(
             };
             scan_local_skills(retry_request, state.clone()).error
         }
+        RETRY_SYNC_SKILL => {
+            let retry_request: SkillActionRequest = match parse_retry_payload(&metadata.payload) {
+                Ok(request) => request,
+                Err(error) => return Ok(api_err(error)),
+            };
+            sync_skill(retry_request, state.clone()).error
+        }
         RETRY_SYNC_INSTALLED_SKILLS => sync_installed_skills(state.clone()).error,
         RETRY_UPDATE_SKILL => {
             let retry_request: SkillActionRequest = match parse_retry_payload(&metadata.payload) {
@@ -6689,6 +8627,7 @@ async fn retry_task(
                 };
             update_skill_sync_targets(retry_request, state.clone()).error
         }
+        RETRY_TEMP_ARTIFACT_CLEANUP => retry_temp_artifact_cleanup(state.clone()),
         _ => {
             return Ok(api_err(AppError::with_details(
                 "task_not_retryable",
@@ -6868,7 +8807,8 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
     let mut stmt = conn.prepare(
         "SELECT id, repo_id, name, description, repo_name, path, ref_name, local_version,
                 remote_version, status, installed, created_at, updated_at, installed_hash, source_type,
-                local_path, install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets, search_text
+                local_path, install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets, search_text,
+                remote_hash, handled_remote_sha, handled_remote_hash
          FROM skills
          ORDER BY repo_name ASC, name ASC",
     )?;
@@ -6896,10 +8836,13 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
             sync_targets_mode: row.get(19)?,
             sync_targets: row.get(20)?,
             search_text: row.get(21)?,
+            remote_hash: row.get(22)?,
+            handled_remote_sha: row.get(23)?,
+            handled_remote_hash: row.get(24)?,
         })
     })?;
     for row in rows {
-        skills.push(row?);
+        skills.push(normalize_skill_for_migration_transport(row?));
     }
     drop(stmt);
 
@@ -6993,6 +8936,7 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
             format!("schemaVersion={}", package.schema_version),
         ));
     }
+    let conn = conn.unchecked_transaction()?;
     let now = utc_now();
     for account in &package.github_accounts {
         conn.execute(
@@ -7134,13 +9078,15 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
         )?;
     }
 
-    for skill in &package.skills {
+    for transported_skill in &package.skills {
+        let skill = normalize_skill_for_migration_transport(transported_skill.clone());
         conn.execute(
             "INSERT INTO skills
              (id, repo_id, name, description, repo_name, path, ref_name, local_version,
               remote_version, status, installed, created_at, updated_at, installed_hash, source_type,
-              local_path, install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets, search_text)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+              local_path, install_path, deleted_at, deleted_path, sync_targets_mode, sync_targets, search_text,
+              remote_hash, handled_remote_sha, handled_remote_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)
              ON CONFLICT(id) DO UPDATE SET
               repo_id = excluded.repo_id,
               name = excluded.name,
@@ -7148,21 +9094,24 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
               repo_name = excluded.repo_name,
               path = excluded.path,
               ref_name = excluded.ref_name,
-              local_version = excluded.local_version,
+              local_version = CASE WHEN skills.installed = 1 THEN skills.local_version ELSE excluded.local_version END,
               remote_version = excluded.remote_version,
-              status = excluded.status,
-              installed = excluded.installed,
-              created_at = excluded.created_at,
+              status = CASE WHEN skills.installed = 1 OR skills.deleted_at IS NOT NULL THEN skills.status ELSE excluded.status END,
+              installed = skills.installed,
+              created_at = skills.created_at,
               updated_at = excluded.updated_at,
-              installed_hash = excluded.installed_hash,
+              installed_hash = CASE WHEN skills.installed = 1 THEN skills.installed_hash ELSE excluded.installed_hash END,
               source_type = excluded.source_type,
-              local_path = excluded.local_path,
-              install_path = excluded.install_path,
-              deleted_at = excluded.deleted_at,
-              deleted_path = excluded.deleted_path,
+              local_path = CASE WHEN skills.installed = 1 THEN skills.local_path ELSE excluded.local_path END,
+              install_path = CASE WHEN skills.installed = 1 THEN skills.install_path ELSE excluded.install_path END,
+              deleted_at = skills.deleted_at,
+              deleted_path = skills.deleted_path,
               sync_targets_mode = excluded.sync_targets_mode,
               sync_targets = excluded.sync_targets,
-              search_text = excluded.search_text",
+              search_text = excluded.search_text,
+              remote_hash = COALESCE(excluded.remote_hash, skills.remote_hash),
+              handled_remote_sha = CASE WHEN skills.installed = 1 THEN skills.handled_remote_sha ELSE excluded.handled_remote_sha END,
+              handled_remote_hash = CASE WHEN skills.installed = 1 THEN skills.handled_remote_hash ELSE excluded.handled_remote_hash END",
             params![
                 skill.id,
                 skill.repo_id,
@@ -7186,6 +9135,9 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
                 skill.sync_targets_mode,
                 skill.sync_targets,
                 skill.search_text,
+                skill.remote_hash,
+                skill.handled_remote_sha,
+                skill.handled_remote_hash,
             ],
         )?;
     }
@@ -7251,6 +9203,7 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
             params![note.scope, note.entity_key, note.note, note.updated_at],
         )?;
     }
+    conn.commit()?;
     Ok(())
 }
 
@@ -7864,7 +9817,7 @@ async fn add_repository_from_github(
         )?;
         insert_retryable_task(
             &db,
-            &format!("scan-{}", Local::now().format("%Y%m%d%H%M%S")),
+            &temp_artifacts::unique_operation_id("scan"),
             "Scan repository",
             &remote.full_name,
             "1 / 1",
@@ -8077,7 +10030,10 @@ pub fn run() {
             scan_local_skills,
             install_skill,
             update_skill,
-            resolve_skill_local_conflict,
+            get_skill_update_conflict,
+            verify_skill_update_conflict,
+            confirm_skill_update_conflict,
+            open_skill_folder,
             add_local_repository,
             delete_skill,
             restore_skill,
@@ -8145,6 +10101,25 @@ mod tests {
         buffer.into_inner()
     }
 
+    fn verified_conflict_for_confirmation() -> SkillUpdateConflict {
+        SkillUpdateConflict {
+            id: "conflict-confirm".into(),
+            skill_id: "skill-confirm".into(),
+            task_id: "task-confirm".into(),
+            status: "pending".into(),
+            local_hash: "local-at-detection".into(),
+            installed_hash: Some("installed-before-conflict".into()),
+            remote_sha: "remote-sha".into(),
+            remote_hash: "remote-hash".into(),
+            verification_state: "customized".into(),
+            verified_local_hash: Some("verified-local-hash".into()),
+            created_at: "2026-08-28T00:00:00Z".into(),
+            updated_at: "2026-08-28T00:00:00Z".into(),
+            verified_at: Some("2026-08-28T00:00:00Z".into()),
+            resolved_at: None,
+        }
+    }
+
     #[test]
     fn parses_github_urls() {
         let parsed = parse_repo_input("https://github.com/openai/openai-cookbook.git").unwrap();
@@ -8169,6 +10144,48 @@ mod tests {
         assert_eq!(hash_directory(&missing).unwrap(), "missing");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn skill_hash_rejects_root_and_nested_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let sandbox = tempfile::tempdir().unwrap();
+        let real = sandbox.path().join("real-skill");
+        fs::create_dir_all(&real).unwrap();
+        fs::write(real.join("SKILL.md"), "name: real-skill").unwrap();
+
+        let root_link = sandbox.path().join("root-link");
+        symlink(&real, &root_link).unwrap();
+        let root_error = hash_directory(&root_link).unwrap_err();
+        assert_eq!(root_error.code, "skill_hash_symlink_unsupported");
+
+        let nested_target = sandbox.path().join("outside.txt");
+        fs::write(&nested_target, "outside").unwrap();
+        symlink(&nested_target, real.join("linked.txt")).unwrap();
+        let nested_error = hash_directory(&real).unwrap_err();
+        assert_eq!(nested_error.code, "skill_hash_symlink_unsupported");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skill_hash_propagates_walkdir_errors_instead_of_hashing_partial_tree() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let sandbox = tempfile::tempdir().unwrap();
+        let skill = sandbox.path().join("skill");
+        let unreadable = skill.join("unreadable");
+        fs::create_dir_all(&unreadable).unwrap();
+        fs::write(skill.join("SKILL.md"), "name: skill").unwrap();
+        fs::write(unreadable.join("secret.txt"), "must not be skipped").unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = hash_directory(&skill);
+
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o700)).unwrap();
+        let error = result.expect_err("an unreadable subtree must fail the whole hash");
+        assert_eq!(error.code, "skill_hash_walk_failed");
+    }
+
     #[test]
     fn skill_zip_content_hash_matches_extracted_directory_hash() {
         let zip = zip_with_files(&[
@@ -8182,10 +10199,218 @@ mod tests {
         let scans = scan_skills_from_zip(&zip, "example/demo").unwrap();
         let root = tempfile::tempdir().unwrap();
         let dest = root.path().join("demo");
-        extract_skill_from_zip(&zip, "skills/demo", &dest).unwrap();
+        let registry = TempArtifactRegistry::open(&root.path().join("registry.sqlite")).unwrap();
+        let prepared =
+            extract_skill_to_registered_temp(&zip, "skills/demo", &dest, "demo", &registry)
+                .unwrap();
+        begin_registered_temp_replacement(prepared, &dest, &scans[0].content_hash)
+            .unwrap()
+            .commit()
+            .unwrap();
 
         assert_eq!(scans.len(), 1);
         assert_eq!(scans[0].content_hash, hash_directory(&dest).unwrap());
+    }
+
+    #[test]
+    fn registered_zip_extract_replaces_atomically_and_rejects_archive_escape() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let library = sandbox.path().join("library");
+        let destination = library.join("demo-skill");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("old.txt"), "old").unwrap();
+        let registry = TempArtifactRegistry::open(&sandbox.path().join("registry.sqlite")).unwrap();
+        let zip = zip_with_files(&[
+            (
+                "example-demo/skills/demo/SKILL.md",
+                b"name: demo-skill\ndescription: Demo\nversion: v1.0.0",
+            ),
+            ("example-demo/skills/demo/assets/prompt.md", b"prompt"),
+        ]);
+
+        let expected_hash = hash_skill_from_zip(&zip, "skills/demo").unwrap();
+        let prepared = extract_skill_to_registered_temp(
+            &zip,
+            "skills/demo",
+            &destination,
+            "demo-skill",
+            &registry,
+        )
+        .unwrap();
+        let registered_container = prepared.path().to_path_buf();
+        let installed_hash =
+            begin_registered_temp_replacement(prepared, &destination, &expected_hash)
+                .unwrap()
+                .commit()
+                .unwrap();
+
+        assert!(destination.join("SKILL.md").is_file());
+        assert!(destination.join("assets/prompt.md").is_file());
+        assert!(!destination.join("old.txt").exists());
+        assert!(!registered_container.exists());
+        assert_eq!(installed_hash, expected_hash);
+
+        let escape_zip =
+            zip_with_file("example-demo/skills/demo/../../../../escape.txt", b"escape");
+        let error = match extract_skill_to_registered_temp(
+            &escape_zip,
+            "skills/demo",
+            &destination,
+            "demo-skill",
+            &registry,
+        ) {
+            Ok(_) => panic!("archive traversal must be rejected"),
+            Err(error) => error,
+        };
+        assert_eq!(error.code, "zip_path_unsafe");
+        assert!(!sandbox.path().join("escape.txt").exists());
+        assert!(fs::read_dir(&library)
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains("install-tmp")));
+    }
+
+    #[test]
+    fn pending_replacement_rolls_back_files_when_main_database_commit_fails() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let database_path = sandbox.path().join("tracker.sqlite");
+        let registry = TempArtifactRegistry::open(&database_path).unwrap();
+        let conn = Connection::open(&database_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE commit_gate (value TEXT);
+             CREATE TRIGGER reject_commit_gate
+             BEFORE INSERT ON commit_gate
+             BEGIN SELECT RAISE(FAIL, 'forced main database failure'); END;",
+        )
+        .unwrap();
+        let library = sandbox.path().join("library");
+        let destination = library.join("demo-skill");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("SKILL.md"), "old").unwrap();
+        let zip = zip_with_file("repo/skills/demo/SKILL.md", b"new");
+        let expected_hash = hash_skill_from_zip(&zip, "skills/demo").unwrap();
+        let prepared = extract_skill_to_registered_temp(
+            &zip,
+            "skills/demo",
+            &destination,
+            "demo-skill",
+            &registry,
+        )
+        .unwrap();
+        let temp_path = prepared.path().to_path_buf();
+        let pending =
+            begin_registered_temp_replacement(prepared, &destination, &expected_hash).unwrap();
+
+        let error = commit_replacement_after_database(pending, || {
+            let transaction = conn.unchecked_transaction()?;
+            transaction.execute("INSERT INTO commit_gate (value) VALUES ('reject')", [])?;
+            transaction.commit()?;
+            Ok(())
+        })
+        .unwrap_err();
+
+        assert_eq!(error.code, "sqlite_error");
+        assert_eq!(
+            fs::read_to_string(destination.join("SKILL.md")).unwrap(),
+            "old"
+        );
+        assert!(!temp_path.exists());
+        let registry_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM temp_artifacts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(registry_rows, 0);
+    }
+
+    #[test]
+    fn dropped_pending_replacement_preserves_registry_and_recovery_materials() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let database_path = sandbox.path().join("tracker.sqlite");
+        let registry = TempArtifactRegistry::open(&database_path).unwrap();
+        let conn = Connection::open(&database_path).unwrap();
+        let library = sandbox.path().join("library");
+        let destination = library.join("demo-skill");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("SKILL.md"), "old").unwrap();
+        let zip = zip_with_file("repo/skills/demo/SKILL.md", b"new");
+        let expected_hash = hash_skill_from_zip(&zip, "skills/demo").unwrap();
+        let prepared = extract_skill_to_registered_temp(
+            &zip,
+            "skills/demo",
+            &destination,
+            "demo-skill",
+            &registry,
+        )
+        .unwrap();
+        let temp_path = prepared.path().to_path_buf();
+        let pending =
+            begin_registered_temp_replacement(prepared, &destination, &expected_hash).unwrap();
+
+        drop(pending);
+
+        assert_eq!(
+            fs::read_to_string(destination.join("SKILL.md")).unwrap(),
+            "new"
+        );
+        assert_eq!(
+            fs::read_to_string(temp_path.join("original/SKILL.md")).unwrap(),
+            "old"
+        );
+        let state: String = conn
+            .query_row(
+                "SELECT state FROM temp_artifacts WHERE temp_path = ?1",
+                params![path_string(&temp_path)],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(state, "recovery_required");
+    }
+
+    #[test]
+    fn sync_replacement_rolls_back_when_sync_record_transaction_fails() {
+        let sandbox = tempfile::tempdir().unwrap();
+        let database_path = sandbox.path().join("tracker.sqlite");
+        let conn = Connection::open(&database_path).unwrap();
+        migrate(&conn).unwrap();
+        let registry = TempArtifactRegistry::open(&database_path).unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_sync_record
+             BEFORE INSERT ON skill_sync_records
+             BEGIN SELECT RAISE(FAIL, 'forced sync record failure'); END;",
+        )
+        .unwrap();
+        let source = sandbox.path().join("source");
+        let target_root = sandbox.path().join("target");
+        let destination = target_root.join("demo-skill");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "new sync content").unwrap();
+        let source_hash = hash_directory(&source).unwrap();
+        let prepared = prepare_dir_replacement_from_source(
+            &source,
+            &destination,
+            "codex",
+            "demo-skill",
+            5,
+            &registry,
+        )
+        .unwrap();
+
+        let error = commit_prepared_sync_replacement(
+            &conn,
+            prepared,
+            "skill-sync-failure",
+            "codex",
+            &target_root,
+            &destination,
+            &source_hash,
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "sqlite_error");
+        assert!(!destination.exists());
+        let registry_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM temp_artifacts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(registry_rows, 0);
     }
 
     #[test]
@@ -8796,6 +11021,941 @@ clawhub install baoyu-image-gen
     }
 
     #[test]
+    fn sync_skills_records_remote_hash_and_preserves_update_conflict() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let initial_scans = sync_status_scan("v1.0.0", "hash-old");
+        let repo_id_value =
+            save_repository_with_account(&conn, &remote, &initial_scans, None, "").unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        conn.execute(
+            "UPDATE skills
+             SET installed = 1,
+                 status = 'update-conflict',
+                 installed_hash = 'installed-hash',
+                 handled_remote_sha = 'handled-sha',
+                 handled_remote_hash = 'handled-hash'
+             WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+
+        let changed_scans = sync_status_scan("v2.0.0", "hash-new");
+        save_repository_with_account(&conn, &remote, &changed_scans, None, "").unwrap();
+
+        let skill = load_ui_skills(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|skill| skill.id == id)
+            .unwrap();
+        assert_eq!(skill.status, "update-conflict");
+        assert_eq!(skill.remote_hash.as_deref(), Some("hash-new"));
+        assert_eq!(skill.handled_remote_sha.as_deref(), Some("handled-sha"));
+        assert_eq!(skill.handled_remote_hash.as_deref(), Some("handled-hash"));
+    }
+
+    #[test]
+    fn sync_skills_preserves_handled_customization_and_conflicts_on_new_remote() {
+        struct Case {
+            name: &'static str,
+            initial_status: &'static str,
+            installed_hash: &'static str,
+            handled_sha: &'static str,
+            handled_hash: &'static str,
+            incoming_sha: &'static str,
+            incoming_hash: &'static str,
+            expected_status: &'static str,
+        }
+        let cases = [
+            Case {
+                name: "same handled latest",
+                initial_status: "installed-latest",
+                installed_hash: "remote-v1",
+                handled_sha: "sha-v1",
+                handled_hash: "remote-v1",
+                incoming_sha: "sha-v1",
+                incoming_hash: "remote-v1",
+                expected_status: "installed-latest",
+            },
+            Case {
+                name: "same handled customized",
+                initial_status: "installed-customized",
+                installed_hash: "custom-baseline",
+                handled_sha: "sha-v1",
+                handled_hash: "remote-v1",
+                incoming_sha: "sha-v1",
+                incoming_hash: "remote-v1",
+                expected_status: "installed-customized",
+            },
+            Case {
+                name: "new remote customized",
+                initial_status: "installed-customized",
+                installed_hash: "custom-baseline",
+                handled_sha: "sha-v1",
+                handled_hash: "remote-v1",
+                incoming_sha: "sha-v2",
+                incoming_hash: "remote-v2",
+                expected_status: "update-conflict",
+            },
+            Case {
+                name: "new remote adopts customized baseline",
+                initial_status: "installed-customized",
+                installed_hash: "custom-baseline",
+                handled_sha: "sha-v1",
+                handled_hash: "remote-v1",
+                incoming_sha: "sha-v2",
+                incoming_hash: "custom-baseline",
+                expected_status: "installed-latest",
+            },
+            Case {
+                name: "new remote clean latest",
+                initial_status: "installed-latest",
+                installed_hash: "remote-v1",
+                handled_sha: "sha-v1",
+                handled_hash: "remote-v1",
+                incoming_sha: "sha-v2",
+                incoming_hash: "remote-v2",
+                expected_status: "update-available",
+            },
+        ];
+
+        for case in cases {
+            let conn = Connection::open_in_memory().unwrap();
+            migrate(&conn).unwrap();
+            let mut initial_remote = remote_for_skill_sync_status();
+            initial_remote.sha = "sha-v1".into();
+            let repo_id_value = save_repository_with_account(
+                &conn,
+                &initial_remote,
+                &sync_status_scan("v1.0.0", "remote-v1"),
+                None,
+                "",
+            )
+            .unwrap();
+            let id = skill_id(&repo_id_value, "skills/demo-skill");
+            conn.execute(
+                "UPDATE skills
+                 SET installed = 1,
+                     status = ?2,
+                     installed_hash = ?3,
+                     handled_remote_sha = ?4,
+                     handled_remote_hash = ?5
+                 WHERE id = ?1",
+                params![
+                    id,
+                    case.initial_status,
+                    case.installed_hash,
+                    case.handled_sha,
+                    case.handled_hash
+                ],
+            )
+            .unwrap();
+            let mut incoming = initial_remote.clone();
+            incoming.sha = case.incoming_sha.into();
+
+            sync_skills(
+                &conn,
+                &incoming,
+                &repo_id_value,
+                &sync_status_scan("v2.0.0", case.incoming_hash),
+            )
+            .unwrap();
+
+            let status: String = conn
+                .query_row(
+                    "SELECT status FROM skills WHERE id = ?1",
+                    params![id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(status, case.expected_status, "{}", case.name);
+        }
+    }
+
+    #[test]
+    fn conflict_detection_persists_waiting_user_state_before_update_side_effects() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let scans = sync_status_scan("v2.0.0", "remote-hash");
+        let repo_id_value = save_repository_with_account(&conn, &remote, &scans, None, "").unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        conn.execute(
+            "UPDATE skills
+             SET installed = 1,
+                 status = 'update-available',
+                 installed_hash = 'installed-hash'
+             WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        let skill = load_skill_record(&conn, &id).unwrap().unwrap();
+        let repo = load_repository(&conn, &repo_id_value).unwrap().unwrap();
+
+        let conflict =
+            persist_skill_update_conflict(&conn, &skill, &repo, "customized-local-hash").unwrap();
+
+        assert_eq!(conflict.skill_id, id);
+        assert_eq!(conflict.status, "pending");
+        assert_eq!(conflict.local_hash, "customized-local-hash");
+        assert_eq!(conflict.installed_hash.as_deref(), Some("installed-hash"));
+        assert_eq!(conflict.remote_sha, remote.sha);
+        assert_eq!(conflict.remote_hash, "remote-hash");
+        assert_eq!(conflict.verification_state, "pending");
+        assert_eq!(load_ui_skills(&conn).unwrap()[0].status, "update-conflict");
+
+        let task = load_ui_tasks(&conn).unwrap().pop().unwrap();
+        assert_eq!(task.id, conflict.task_id);
+        assert_eq!(task.status, "waiting-user");
+        assert!(task.summary.contains("使用 Agent 工具处理"));
+        assert!(task
+            .log
+            .iter()
+            .any(|line| { line.contains("未下载、未备份、未覆盖、未同步") }));
+        assert!(!task.retryable);
+        let completed_at: Option<String> = conn
+            .query_row(
+                "SELECT completed_at FROM backup_jobs WHERE id = ?1",
+                params![conflict.task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(completed_at.is_none());
+
+        record_skill_update_conflict_verification(
+            &conn,
+            &conflict,
+            "unchanged",
+            Some("customized-local-hash"),
+        )
+        .unwrap();
+        let unchanged_task = load_ui_tasks(&conn).unwrap().pop().unwrap();
+        assert!(unchanged_task.summary.contains("继续使用 Agent 工具处理"));
+        assert!(!unchanged_task.summary.contains("显式确认"));
+
+        record_skill_update_conflict_verification(
+            &conn,
+            &conflict,
+            "customized",
+            Some("customized-again"),
+        )
+        .unwrap();
+        let customized_task = load_ui_tasks(&conn).unwrap().pop().unwrap();
+        assert!(customized_task.summary.contains("等待用户显式确认"));
+    }
+
+    #[test]
+    fn repeated_conflict_detection_reuses_active_conflict_and_waiting_task() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let scans = sync_status_scan("v2.0.0", "remote-hash");
+        let repo_id_value = save_repository_with_account(&conn, &remote, &scans, None, "").unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        conn.execute(
+            "UPDATE skills
+             SET installed = 1,
+                 status = 'update-available',
+                 installed_hash = 'installed-hash'
+             WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+
+        let skill = load_skill_record(&conn, &id).unwrap().unwrap();
+        let repo = load_repository(&conn, &repo_id_value).unwrap().unwrap();
+        let first =
+            persist_skill_update_conflict(&conn, &skill, &repo, "first-customized-hash").unwrap();
+        let skill = load_skill_record(&conn, &id).unwrap().unwrap();
+        let second =
+            persist_skill_update_conflict(&conn, &skill, &repo, "later-customized-hash").unwrap();
+
+        assert_eq!(second.id, first.id);
+        assert_eq!(second.task_id, first.task_id);
+        assert_eq!(second.local_hash, "first-customized-hash");
+        assert_eq!(second.status, "pending");
+        let pending_conflicts: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM skill_update_conflicts
+                 WHERE skill_id = ?1 AND status = 'pending'",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending_conflicts, 1);
+        let task_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM backup_jobs WHERE kind = 'Update Skill' AND target = ?1",
+                params![skill.name],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(task_count, 1);
+
+        conn.execute(
+            "UPDATE repositories SET remote_sha = 'new-remote-sha' WHERE id = ?1",
+            params![repo_id_value],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE skills SET remote_hash = 'new-remote-hash' WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        let changed_skill = load_skill_record(&conn, &id).unwrap().unwrap();
+        let changed_repo = load_repository(&conn, &repo_id_value).unwrap().unwrap();
+        let replacement = persist_skill_update_conflict(
+            &conn,
+            &changed_skill,
+            &changed_repo,
+            "later-customized-hash",
+        )
+        .unwrap();
+        assert_ne!(replacement.id, first.id);
+        assert_ne!(replacement.task_id, first.task_id);
+        assert_eq!(replacement.remote_sha, "new-remote-sha");
+        assert_eq!(replacement.remote_hash, "new-remote-hash");
+        let stale = load_skill_update_conflict_by_id(&conn, &first.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stale.status, "stale");
+        assert_eq!(stale.verification_state, "stale");
+        let old_task_status: String = conn
+            .query_row(
+                "SELECT status FROM backup_jobs WHERE id = ?1",
+                params![first.task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(old_task_status, "interrupted");
+    }
+
+    #[test]
+    fn stale_conflict_can_refresh_to_new_remote_target_without_file_mutation() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let library = tempfile::tempdir().unwrap();
+        set_setting(&conn, "skill_library_root", path_string(library.path())).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let repo_id_value = save_repository_with_account(
+            &conn,
+            &remote,
+            &sync_status_scan("v1.0.0", "remote-hash-v1"),
+            None,
+            "",
+        )
+        .unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        let destination = library.path().join("demo-skill");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("SKILL.md"), "local customization").unwrap();
+        let local_hash = hash_directory(&destination).unwrap();
+        conn.execute(
+            "UPDATE skills
+             SET installed = 1,
+                 status = 'update-available',
+                 installed_hash = 'installed-v1',
+                 install_path = ?2
+             WHERE id = ?1",
+            params![id, path_string(&destination)],
+        )
+        .unwrap();
+        let skill = load_skill_record(&conn, &id).unwrap().unwrap();
+        let repo = load_repository(&conn, &repo_id_value).unwrap().unwrap();
+        let stale_conflict =
+            persist_skill_update_conflict(&conn, &skill, &repo, &local_hash).unwrap();
+        record_skill_update_conflict_verification(&conn, &stale_conflict, "stale", None).unwrap();
+
+        let refresh_required = get_or_create_skill_update_conflict(&conn, &id).unwrap_err();
+        assert_eq!(
+            refresh_required.code,
+            "skill_conflict_source_refresh_required"
+        );
+        let task_count_before_refresh: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM backup_jobs WHERE target = 'demo-skill'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(task_count_before_refresh, 1);
+
+        let mut next_remote = remote;
+        next_remote.sha = "new-remote-sha".into();
+        save_repository_with_account(
+            &conn,
+            &next_remote,
+            &sync_status_scan("v2.0.0", "remote-hash-v2"),
+            None,
+            "",
+        )
+        .unwrap();
+
+        let refreshed = get_or_create_skill_update_conflict(&conn, &id).unwrap();
+
+        assert_ne!(refreshed.id, stale_conflict.id);
+        assert_ne!(refreshed.task_id, stale_conflict.task_id);
+        assert_eq!(refreshed.remote_sha, "new-remote-sha");
+        assert_eq!(refreshed.remote_hash, "remote-hash-v2");
+        assert_eq!(refreshed.local_hash, local_hash);
+        assert_eq!(refreshed.status, "pending");
+        assert_eq!(
+            fs::read_to_string(destination.join("SKILL.md")).unwrap(),
+            "local customization"
+        );
+        let pending_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM skill_update_conflicts
+                 WHERE skill_id = ?1 AND status = 'pending'",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(pending_count, 1);
+        let refreshed_task = load_ui_tasks(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|task| task.id == refreshed.task_id)
+            .unwrap();
+        assert_eq!(refreshed_task.status, "waiting-user");
+    }
+
+    #[test]
+    fn conflict_verification_distinguishes_stale_latest_unchanged_and_customized() {
+        let conflict = SkillUpdateConflict {
+            id: "conflict-1".into(),
+            skill_id: "skill-1".into(),
+            task_id: "task-1".into(),
+            status: "pending".into(),
+            local_hash: "local-at-detection".into(),
+            installed_hash: Some("installed-hash".into()),
+            remote_sha: "remote-sha".into(),
+            remote_hash: "remote-hash".into(),
+            verification_state: "pending".into(),
+            verified_local_hash: None,
+            created_at: "2026-08-28T00:00:00Z".into(),
+            updated_at: "2026-08-28T00:00:00Z".into(),
+            verified_at: None,
+            resolved_at: None,
+        };
+
+        assert_eq!(
+            classify_skill_update_conflict(&conflict, "new-remote-sha", "remote-hash"),
+            "stale"
+        );
+        assert_eq!(
+            classify_skill_update_conflict(&conflict, "remote-sha", "remote-hash"),
+            "latest"
+        );
+        assert_eq!(
+            classify_skill_update_conflict(&conflict, "remote-sha", "local-at-detection"),
+            "unchanged"
+        );
+        assert_eq!(
+            classify_skill_update_conflict(&conflict, "remote-sha", "edited-again"),
+            "customized"
+        );
+        let mut unchanged_remote_equal = conflict.clone();
+        unchanged_remote_equal.local_hash = "remote-hash".into();
+        assert_eq!(
+            classify_skill_update_conflict(&unchanged_remote_equal, "remote-sha", "remote-hash"),
+            "latest"
+        );
+    }
+
+    #[test]
+    fn conflict_confirmation_rejects_pending_and_unchanged_verification() {
+        let mut conflict = verified_conflict_for_confirmation();
+        conflict.verification_state = "pending".into();
+        conflict.verified_local_hash = None;
+        let pending =
+            validate_skill_update_confirmation(&conflict, "remote-sha", "verified-local-hash")
+                .unwrap_err();
+        assert_eq!(pending.code, "skill_update_conflict_not_verified");
+
+        conflict.verification_state = "unchanged".into();
+        conflict.verified_local_hash = Some("verified-local-hash".into());
+        let unchanged =
+            validate_skill_update_confirmation(&conflict, "remote-sha", "verified-local-hash")
+                .unwrap_err();
+        assert_eq!(unchanged.code, "skill_update_conflict_not_verified");
+    }
+
+    #[test]
+    fn conflict_confirmation_rejects_local_hash_toctou() {
+        let conflict = verified_conflict_for_confirmation();
+        let error =
+            validate_skill_update_confirmation(&conflict, "remote-sha", "changed-after-verify")
+                .unwrap_err();
+        assert_eq!(error.code, "skill_update_conflict_local_changed");
+    }
+
+    #[test]
+    fn conflict_confirmation_rejects_remote_sha_toctou() {
+        let conflict = verified_conflict_for_confirmation();
+        let error = validate_skill_update_confirmation(
+            &conflict,
+            "changed-after-verify",
+            "verified-local-hash",
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "skill_update_conflict_remote_changed");
+    }
+
+    #[test]
+    fn customized_skill_preflight_is_noop_for_handled_remote_and_conflicts_on_new_remote() {
+        let mut skill = SkillRecord {
+            id: "skill-1".into(),
+            repo_id: "repo-1".into(),
+            name: "demo".into(),
+            path: "skills/demo".into(),
+            installed: true,
+            installed_hash: Some("customized-baseline".into()),
+            status: "installed-customized".into(),
+            remote_hash: Some("remote-hash-v1".into()),
+            handled_remote_sha: Some("remote-sha-v1".into()),
+            handled_remote_hash: Some("remote-hash-v1".into()),
+            source_type: "github".into(),
+            install_path: None,
+            sync_targets_mode: "inherit".into(),
+            sync_targets: Vec::new(),
+        };
+
+        assert_eq!(
+            classify_skill_update_preflight(&skill, "remote-sha-v1", "customized-baseline"),
+            SkillUpdatePreflight::AlreadyHandled
+        );
+        assert_eq!(
+            classify_skill_update_preflight(&skill, "remote-sha-v2", "customized-baseline"),
+            SkillUpdatePreflight::Conflict
+        );
+        skill.remote_hash = Some("customized-baseline".into());
+        assert_eq!(
+            classify_skill_update_preflight(&skill, "remote-sha-v2", "customized-baseline"),
+            SkillUpdatePreflight::AlreadyHandled
+        );
+        skill.remote_hash = Some("remote-hash-v1".into());
+        skill.status = "installed-latest".into();
+        assert_eq!(
+            classify_skill_update_preflight(&skill, "remote-sha-v1", "customized-baseline"),
+            SkillUpdatePreflight::AlreadyHandled
+        );
+        assert_eq!(
+            classify_skill_update_preflight(&skill, "remote-sha-v2", "customized-baseline"),
+            SkillUpdatePreflight::Proceed
+        );
+    }
+
+    #[test]
+    fn install_command_rejects_an_already_installed_skill() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let repo_id_value = save_repository_with_account(
+            &conn,
+            &remote,
+            &sync_status_scan("v1.0.0", "remote-hash"),
+            None,
+            "",
+        )
+        .unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        conn.execute(
+            "UPDATE skills SET installed = 1, status = 'installed-latest' WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        let skill = load_skill_record(&conn, &id).unwrap().unwrap();
+
+        let error = validate_skill_action_mode(&skill, SkillActionMode::Install).unwrap_err();
+        assert_eq!(error.code, "skill_already_installed");
+    }
+
+    #[test]
+    fn skill_action_mode_is_revalidated_against_current_installed_state() {
+        let mut skill = SkillRecord {
+            id: "skill-mode".into(),
+            repo_id: "repo-mode".into(),
+            name: "demo".into(),
+            path: "skills/demo".into(),
+            installed: false,
+            installed_hash: None,
+            status: "not-installed".into(),
+            remote_hash: Some("remote-hash".into()),
+            handled_remote_sha: None,
+            handled_remote_hash: None,
+            source_type: "github_repo".into(),
+            install_path: None,
+            sync_targets_mode: "inherit".into(),
+            sync_targets: Vec::new(),
+        };
+
+        assert!(validate_skill_action_mode(&skill, SkillActionMode::Install).is_ok());
+        let update_error = validate_skill_action_mode(&skill, SkillActionMode::Update).unwrap_err();
+        assert_eq!(update_error.code, "skill_not_installed");
+
+        skill.installed = true;
+        let install_error =
+            validate_skill_action_mode(&skill, SkillActionMode::Install).unwrap_err();
+        assert_eq!(install_error.code, "skill_already_installed");
+        assert!(validate_skill_action_mode(&skill, SkillActionMode::Update).is_ok());
+    }
+
+    #[test]
+    fn confirming_customized_conflict_preserves_local_files_and_resolves_original_task() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let library = tempfile::tempdir().unwrap();
+        set_setting(&conn, "skill_library_root", path_string(library.path())).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let scans = sync_status_scan("v2.0.0", "remote-content-hash");
+        let repo_id_value = save_repository_with_account(&conn, &remote, &scans, None, "").unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        let dest = library.path().join("demo-skill");
+        fs::create_dir_all(&dest).unwrap();
+        fs::write(dest.join("SKILL.md"), "customized content must survive").unwrap();
+        let local_hash = hash_directory(&dest).unwrap();
+        conn.execute(
+            "UPDATE skills
+             SET installed = 1,
+                 status = 'update-available',
+                 installed_hash = 'previous-installed-hash',
+                 install_path = ?2,
+                 sync_targets_mode = 'custom',
+                 sync_targets = '[]'
+             WHERE id = ?1",
+            params![id, path_string(&dest)],
+        )
+        .unwrap();
+        let skill = load_skill_record(&conn, &id).unwrap().unwrap();
+        let repo = load_repository(&conn, &repo_id_value).unwrap().unwrap();
+        let conflict = persist_skill_update_conflict(&conn, &skill, &repo, &local_hash).unwrap();
+        let conflict = record_skill_update_conflict_verification(
+            &conn,
+            &conflict,
+            "customized",
+            Some(&local_hash),
+        )
+        .unwrap();
+        let settings = settings_from_db(&conn, false).unwrap();
+        let registry =
+            TempArtifactRegistry::open(&library.path().join("temp-registry.sqlite")).unwrap();
+
+        let outcome = finalize_skill_update_conflict(
+            &conn,
+            &conflict,
+            &settings,
+            &dest,
+            &local_hash,
+            &registry,
+        )
+        .unwrap();
+
+        assert!(matches!(outcome, SkillActionOutcome::Updated { .. }));
+        assert_eq!(
+            fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+            "customized content must survive"
+        );
+        let updated = load_skill_record(&conn, &id).unwrap().unwrap();
+        assert_eq!(updated.status, "installed-customized");
+        assert_eq!(updated.installed_hash.as_deref(), Some(local_hash.as_str()));
+        assert_eq!(
+            updated.handled_remote_sha.as_deref(),
+            Some(remote.sha.as_str())
+        );
+        assert_eq!(
+            updated.handled_remote_hash.as_deref(),
+            Some("remote-content-hash")
+        );
+        let resolved = load_skill_update_conflict_by_id(&conn, &conflict.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.status, "resolved");
+        assert_eq!(resolved.verification_state, "customized");
+        let task = load_ui_tasks(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|task| task.id == conflict.task_id)
+            .unwrap();
+        assert_eq!(task.status, "success");
+    }
+
+    #[test]
+    fn conflict_confirmation_rolls_back_skill_state_if_resolution_commit_fails() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let library = tempfile::tempdir().unwrap();
+        set_setting(&conn, "skill_library_root", path_string(library.path())).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let repo_id_value = save_repository_with_account(
+            &conn,
+            &remote,
+            &sync_status_scan("v2.0.0", "remote-content-hash"),
+            None,
+            "",
+        )
+        .unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        let destination = library.path().join("demo-skill");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("SKILL.md"), "customized content").unwrap();
+        let local_hash = hash_directory(&destination).unwrap();
+        conn.execute(
+            "UPDATE skills
+             SET installed = 1,
+                 status = 'update-available',
+                 installed_hash = 'previous-installed-hash',
+                 install_path = ?2,
+                 sync_targets_mode = 'custom',
+                 sync_targets = '[]'
+             WHERE id = ?1",
+            params![id, path_string(&destination)],
+        )
+        .unwrap();
+        let skill = load_skill_record(&conn, &id).unwrap().unwrap();
+        let repo = load_repository(&conn, &repo_id_value).unwrap().unwrap();
+        let conflict = persist_skill_update_conflict(&conn, &skill, &repo, &local_hash).unwrap();
+        let conflict = record_skill_update_conflict_verification(
+            &conn,
+            &conflict,
+            "customized",
+            Some(&local_hash),
+        )
+        .unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER fail_conflict_resolution
+             BEFORE UPDATE ON skill_update_conflicts
+             WHEN NEW.status = 'resolved'
+             BEGIN
+               SELECT RAISE(ABORT, 'fault injection: conflict resolution failed');
+             END;",
+        )
+        .unwrap();
+        let settings = settings_from_db(&conn, false).unwrap();
+        let registry =
+            TempArtifactRegistry::open(&library.path().join("temp-registry.sqlite")).unwrap();
+
+        let error = finalize_skill_update_conflict(
+            &conn,
+            &conflict,
+            &settings,
+            &destination,
+            &local_hash,
+            &registry,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .details
+            .as_deref()
+            .unwrap_or_default()
+            .contains("conflict resolution failed"));
+        let unchanged_skill = load_skill_record(&conn, &id).unwrap().unwrap();
+        assert_eq!(unchanged_skill.status, "update-conflict");
+        assert_eq!(
+            unchanged_skill.installed_hash.as_deref(),
+            Some("previous-installed-hash")
+        );
+        assert_eq!(unchanged_skill.handled_remote_sha, None);
+        let unchanged_conflict = load_skill_update_conflict_by_id(&conn, &conflict.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(unchanged_conflict.status, "pending");
+        let task = load_ui_tasks(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|task| task.id == conflict.task_id)
+            .unwrap();
+        assert_eq!(task.status, "waiting-user");
+    }
+
+    #[test]
+    fn skill_folder_resolution_accepts_only_matching_direct_child() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let library = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let inside = library.path().join("demo-skill");
+        fs::create_dir_all(&inside).unwrap();
+        fs::write(inside.join("SKILL.md"), "name: demo-skill").unwrap();
+        set_setting(&conn, "skill_library_root", path_string(library.path())).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let repo_id_value = save_repository_with_account(
+            &conn,
+            &remote,
+            &sync_status_scan("v1.0.0", "remote-hash"),
+            None,
+            "",
+        )
+        .unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        conn.execute(
+            "UPDATE skills SET installed = 1, install_path = ?2 WHERE id = ?1",
+            params![id, path_string(&inside)],
+        )
+        .unwrap();
+
+        let validated_inside = resolve_skill_folder_path(&conn, &id).unwrap();
+        assert_eq!(validated_inside, inside.canonicalize().unwrap());
+        revalidate_skill_folder_before_open(&validated_inside).unwrap();
+        conn.execute(
+            "UPDATE skills SET install_path = ?2 WHERE id = ?1",
+            params![id, path_string(outside.path())],
+        )
+        .unwrap();
+        let outside_error = resolve_skill_folder_path(&conn, &id).unwrap_err();
+        assert_eq!(outside_error.code, "skill_folder_outside_library");
+
+        let nested = library.path().join("nested").join("demo-skill");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("SKILL.md"), "name: demo-skill").unwrap();
+        conn.execute(
+            "UPDATE skills SET install_path = ?2 WHERE id = ?1",
+            params![id, path_string(&nested)],
+        )
+        .unwrap();
+        let nested_error = resolve_skill_folder_path(&conn, &id).unwrap_err();
+        assert_eq!(nested_error.code, "skill_folder_outside_library");
+
+        let mismatched = library.path().join("other-skill");
+        fs::create_dir_all(&mismatched).unwrap();
+        fs::write(mismatched.join("SKILL.md"), "name: other-skill").unwrap();
+        conn.execute(
+            "UPDATE skills SET install_path = ?2 WHERE id = ?1",
+            params![id, path_string(&mismatched)],
+        )
+        .unwrap();
+        let mismatched_error = resolve_skill_folder_path(&conn, &id).unwrap_err();
+        assert_eq!(mismatched_error.code, "skill_folder_outside_library");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let escape = library.path().join("escape-link");
+            symlink(outside.path(), &escape).unwrap();
+            conn.execute(
+                "UPDATE skills SET install_path = ?2 WHERE id = ?1",
+                params![id, path_string(&escape)],
+            )
+            .unwrap();
+            let symlink_error = resolve_skill_folder_path(&conn, &id).unwrap_err();
+            assert_eq!(symlink_error.code, "skill_folder_invalid");
+        }
+
+        fs::remove_file(inside.join("SKILL.md")).unwrap();
+        conn.execute(
+            "UPDATE skills SET install_path = ?2 WHERE id = ?1",
+            params![id, path_string(&inside)],
+        )
+        .unwrap();
+        let missing_manifest = resolve_skill_folder_path(&conn, &id).unwrap_err();
+        assert_eq!(missing_manifest.code, "skill_manifest_unavailable");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            fs::remove_dir(&inside).unwrap();
+            symlink(outside.path(), &inside).unwrap();
+            let revalidation_error =
+                revalidate_skill_folder_before_open(&validated_inside).unwrap_err();
+            assert_eq!(revalidation_error.code, "skill_folder_invalid");
+            let top_level_symlink = resolve_skill_folder_path(&conn, &id).unwrap_err();
+            assert_eq!(top_level_symlink.code, "skill_folder_invalid");
+            fs::remove_file(&inside).unwrap();
+        }
+
+        let missing_directory = resolve_skill_folder_path(&conn, &id).unwrap_err();
+        assert_eq!(missing_directory.code, "skill_folder_unavailable");
+
+        conn.execute(
+            "UPDATE skills SET name = '../unsafe', install_path = ?2 WHERE id = ?1",
+            params![id, path_string(&inside)],
+        )
+        .unwrap();
+        let unsafe_name_error = resolve_skill_folder_path(&conn, &id).unwrap_err();
+        assert_eq!(unsafe_name_error.code, "skill_name_unsafe");
+    }
+
+    #[test]
+    fn opening_skill_folder_holds_filesystem_lock_through_open_callback() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let library = tempfile::tempdir().unwrap();
+        let lock_root = tempfile::tempdir().unwrap();
+        let inside = library.path().join("demo-skill");
+        fs::create_dir_all(&inside).unwrap();
+        fs::write(inside.join("SKILL.md"), "name: demo-skill").unwrap();
+        set_setting(&conn, "skill_library_root", path_string(library.path())).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let repo_id_value = save_repository_with_account(
+            &conn,
+            &remote,
+            &sync_status_scan("v1.0.0", "remote-hash"),
+            None,
+            "",
+        )
+        .unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        conn.execute(
+            "UPDATE skills SET installed = 1, install_path = ?2 WHERE id = ?1",
+            params![id, path_string(&inside)],
+        )
+        .unwrap();
+        let filesystem_lock = FilesystemMutationLock::new(lock_root.path()).unwrap();
+        let contender = FilesystemMutationLock::new(lock_root.path()).unwrap();
+        let database = Mutex::new(conn);
+
+        open_skill_folder_with(&filesystem_lock, &database, &id, |destination| {
+            assert_eq!(destination, inside.canonicalize().unwrap());
+            assert!(contender.try_acquire().unwrap().is_none());
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(contender.try_acquire().unwrap().is_some());
+    }
+
+    #[test]
+    fn repository_list_returns_all_53_rows_in_stable_order() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        for index in (0..53).rev() {
+            let id = format!("repo-{index:03}");
+            conn.execute(
+                "INSERT INTO repositories
+                 (id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
+                  backup_status, check_status, url, branch, source_type, created_at, updated_at)
+                 VALUES (?1, ?2, 'owner', ?2, 'main', 'skill repo', 0, 'sha',
+                  'backed-up', 'success', ?3, 'main', 'github', ?4, ?4)",
+                params![
+                    id,
+                    format!("repo-{index:03}"),
+                    format!("https://github.com/owner/repo-{index:03}"),
+                    "2026-08-28T00:00:00Z"
+                ],
+            )
+            .unwrap();
+        }
+
+        let first: Vec<String> = load_ui_repositories(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|repo| repo.id)
+            .collect();
+        let second: Vec<String> = load_ui_repositories(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|repo| repo.id)
+            .collect();
+
+        assert_eq!(first.len(), 53);
+        assert_eq!(first, second);
+        assert_eq!(first.first().map(String::as_str), Some("repo-000"));
+        assert_eq!(first.last().map(String::as_str), Some("repo-052"));
+    }
+
+    #[test]
     fn moves_deleted_skill_to_app_data_backup() {
         let source_root = tempfile::tempdir().unwrap();
         let data_root = tempfile::tempdir().unwrap();
@@ -8826,19 +11986,203 @@ clawhub install baoyu-image-gen
     }
 
     #[test]
+    fn settings_preserve_previous_and_current_library_roots_for_temp_cleanup() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let previous = home.path().join("previous Skill library");
+        let current = home.path().join("current Skill library");
+        fs::create_dir_all(&previous).unwrap();
+        fs::create_dir_all(&current).unwrap();
+
+        set_setting(&conn, "skill_library_root", path_string(&previous)).unwrap();
+        remember_skill_library_roots(&conn, [&previous, &current]).unwrap();
+        set_setting(&conn, "skill_library_root", path_string(&current)).unwrap();
+
+        let persisted = skill_library_root_history(&conn).unwrap();
+        assert_eq!(persisted, vec![previous.clone(), current.clone()]);
+
+        let cleanup_roots = temp_artifact_cleanup_roots(&conn, home.path()).unwrap();
+        assert!(cleanup_roots.contains(&default_skill_library_root(home.path())));
+        assert!(cleanup_roots.contains(&previous));
+        assert!(cleanup_roots.contains(&current));
+        for target in sync_target_specs(home.path()) {
+            assert!(cleanup_roots.contains(&target.path));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_allowlist_preserves_a_symlinked_sync_root_for_safe_rejection() {
+        use std::{ffi::CString, os::unix::ffi::OsStrExt, os::unix::fs::symlink, time::Duration};
+
+        fn set_mtime(path: &Path, modified: SystemTime) {
+            let seconds = modified
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let path = CString::new(path.as_os_str().as_bytes()).unwrap();
+            let times = [
+                libc::timespec {
+                    tv_sec: seconds,
+                    tv_nsec: 0,
+                },
+                libc::timespec {
+                    tv_sec: seconds,
+                    tv_nsec: 0,
+                },
+            ];
+            assert_eq!(
+                unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) },
+                0
+            );
+        }
+
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let data_dir = tempfile::tempdir().unwrap();
+        let external = home.path().join(".cc-switch").join("skills");
+        let configured = home.path().join(".codex").join("skills");
+        fs::create_dir_all(&external).unwrap();
+        fs::create_dir_all(configured.parent().unwrap()).unwrap();
+        symlink(&external, &configured).unwrap();
+        let stale = external.join(".external-1787707160032652000-sync-tmp");
+        fs::create_dir(&stale).unwrap();
+        set_mtime(
+            &stale,
+            SystemTime::now() - Duration::from_secs(25 * 60 * 60),
+        );
+        let registry =
+            TempArtifactRegistry::open(&data_dir.path().join("registry.sqlite")).unwrap();
+
+        let roots = temp_artifact_cleanup_roots(&conn, home.path()).unwrap();
+        assert!(roots.contains(&configured));
+        assert!(!roots.contains(&external.canonicalize().unwrap()));
+
+        let report =
+            cleanup_temp_artifacts_with_lock_held(&conn, &registry, data_dir.path(), home.path());
+
+        assert_eq!(report.found, 0);
+        assert_eq!(report.quarantined, 0);
+        assert_eq!(report.failed, 0);
+        assert!(stale.exists());
+        assert!(configured
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+    }
+
+    #[test]
+    fn temp_cleanup_tasks_are_quiet_when_empty_and_retry_without_persisted_paths() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let empty = temp_artifacts::CleanupReport::default();
+        assert!(!record_temp_cleanup_task(&conn, &empty).unwrap());
+        let empty_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM backup_jobs", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(empty_count, 0);
+
+        let failed = temp_artifacts::CleanupReport {
+            found: 2,
+            removed: 1,
+            quarantined: 0,
+            deferred: 1,
+            failed: 1,
+            log: vec!["fixture failure".to_string()],
+            ..Default::default()
+        };
+        assert!(record_temp_cleanup_task(&conn, &failed).unwrap());
+        let (summary, retryable, action, payload): (String, i64, String, String) = conn
+            .query_row(
+                "SELECT summary, retryable, retry_action, retry_payload
+                 FROM backup_jobs ORDER BY created_at DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            summary,
+            "found=2 removed=1 quarantined=0 deferred=1 failed=1"
+        );
+        assert_eq!(retryable, 1);
+        assert_eq!(action, RETRY_TEMP_ARTIFACT_CLEANUP);
+        assert_eq!(payload, "{}");
+    }
+
+    #[test]
     fn replace_dir_from_source_copies_complete_target() {
         let root = tempfile::tempdir().unwrap();
         let source = root.path().join("source");
         let dest = root.path().join("target").join("demo-skill");
+        let registry = TempArtifactRegistry::open(&root.path().join("registry.sqlite")).unwrap();
         fs::create_dir_all(source.join("nested")).unwrap();
         fs::write(source.join("SKILL.md"), "name: demo-skill").unwrap();
         fs::write(source.join("nested").join("notes.md"), "ok").unwrap();
 
-        let backup = replace_dir_from_source(&source, &dest, "codex", "demo-skill", 5).unwrap();
+        let mut prepared = prepare_dir_replacement_from_source(
+            &source,
+            &dest,
+            "codex",
+            "demo-skill",
+            5,
+            &registry,
+        )
+        .unwrap();
+        prepared.replacement.take().unwrap().commit().unwrap();
 
-        assert!(backup.is_none());
+        assert!(prepared.backup.is_none());
         assert!(dest.join("SKILL.md").exists());
         assert!(dest.join("nested").join("notes.md").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sync_replace_preserves_same_source_symlink_and_rejects_other_or_broken_links_pre_temp() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source");
+        let other = root.path().join("other");
+        let target_root = root.path().join("target");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        fs::create_dir_all(&target_root).unwrap();
+        fs::write(source.join("SKILL.md"), "name: source").unwrap();
+        let registry = TempArtifactRegistry::open(&root.path().join("registry.sqlite")).unwrap();
+
+        let same = target_root.join("same");
+        symlink(&source, &same).unwrap();
+        assert!(
+            prepare_dir_replacement_from_source(&source, &same, "codex", "same", 5, &registry)
+                .unwrap()
+                .replacement
+                .is_none()
+        );
+        assert_eq!(same.canonicalize().unwrap(), source.canonicalize().unwrap());
+
+        let external = target_root.join("external");
+        symlink(&other, &external).unwrap();
+        let external_error = prepare_dir_replacement_from_source(
+            &source, &external, "codex", "external", 5, &registry,
+        )
+        .unwrap_err();
+        assert_eq!(external_error.code, "sync_target_symlink_conflict");
+
+        let broken = target_root.join("broken");
+        symlink("missing", &broken).unwrap();
+        let broken_error =
+            prepare_dir_replacement_from_source(&source, &broken, "codex", "broken", 5, &registry)
+                .unwrap_err();
+        assert_eq!(broken_error.code, "sync_target_symlink_conflict");
+
+        assert!(fs::read_dir(&target_root)
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|entry| !entry.file_name().to_string_lossy().contains("sync-tmp")));
     }
 
     #[test]
@@ -9013,6 +12357,76 @@ clawhub install baoyu-image-gen
         assert_eq!(metadata.action, RETRY_CHECK_REPOSITORIES);
         let payload: CheckRepositoriesRequest = parse_retry_payload(&metadata.payload).unwrap();
         assert_eq!(payload.repo_ids, Some(vec!["repo-1".into()]));
+    }
+
+    #[test]
+    fn partial_skill_sync_retries_only_the_sync_step() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let report = SyncReport {
+            success_count: 0,
+            failure_count: 1,
+            skipped_count: 0,
+            log: vec!["codex: sync target conflict".into()],
+        };
+        assert_eq!(
+            completed_local_skill_task_status(&report),
+            "partial-success"
+        );
+
+        insert_skill_sync_result_task(
+            &conn,
+            "sync-partial",
+            "Update Skill",
+            "demo-skill",
+            "1 / 2",
+            "partial-success",
+            "local Skill updated; sync 1 synced, 1 failed, 0 skipped",
+            &["codex: sync target conflict".into()],
+            "skill-1",
+            true,
+        )
+        .unwrap();
+
+        let metadata = load_task_retry_metadata(&conn, "sync-partial").unwrap();
+        assert_eq!(metadata.action, RETRY_SYNC_SKILL);
+        let payload: SkillActionRequest = parse_retry_payload(&metadata.payload).unwrap();
+        assert_eq!(payload.skill_id, "skill-1");
+    }
+
+    #[test]
+    fn confirmed_conflict_with_partial_sync_stays_retryable_as_sync_only() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        insert_task(
+            &conn,
+            "conflict-task",
+            "Update Skill",
+            "demo-skill",
+            "0 / 1",
+            "waiting-user",
+            "等待用户处理",
+            None,
+            &[],
+        )
+        .unwrap();
+
+        set_waiting_conflict_task_sync_result(
+            &conn,
+            "conflict-task",
+            "skill-1",
+            "1 / 2",
+            "partial-success",
+            "已保留本地定制内容，同步部分成功",
+            "2026-08-28T00:00:00Z",
+            true,
+        )
+        .unwrap();
+
+        let metadata = load_task_retry_metadata(&conn, "conflict-task").unwrap();
+        assert_eq!(metadata.action, RETRY_SYNC_SKILL);
+        let payload: SkillActionRequest = parse_retry_payload(&metadata.payload).unwrap();
+        assert_eq!(payload.skill_id, "skill-1");
     }
 
     #[test]
@@ -9405,6 +12819,335 @@ clawhub install baoyu-image-gen
     }
 
     #[test]
+    fn migration_import_rolls_back_all_changes_when_a_late_skill_fk_fails() {
+        let target = Connection::open_in_memory().unwrap();
+        migrate(&target).unwrap();
+        let mut original_remote = remote_for_skill_sync_status();
+        original_remote.sha = "original-target-sha".into();
+        let original_repo_id = save_repository_with_account(
+            &target,
+            &original_remote,
+            &sync_status_scan("v1.0.0", "original-target-hash"),
+            None,
+            "original target readme",
+        )
+        .unwrap();
+
+        let source = Connection::open_in_memory().unwrap();
+        migrate(&source).unwrap();
+        let mut imported_remote = remote_for_skill_sync_status();
+        imported_remote.sha = "imported-source-sha".into();
+        save_repository_with_account(
+            &source,
+            &imported_remote,
+            &sync_status_scan("v2.0.0", "imported-source-hash"),
+            None,
+            "imported source readme",
+        )
+        .unwrap();
+        save_user_note(
+            &source,
+            "repository",
+            &original_repo_id,
+            "must not be imported",
+        )
+        .unwrap();
+        let mut package = build_migration_package(&source).unwrap();
+        let mut invalid_skill = package.skills.first().unwrap().clone();
+        invalid_skill.id = "migration-invalid-skill".into();
+        invalid_skill.repo_id = "migration-missing-repository".into();
+        invalid_skill.name = "invalid-skill".into();
+        invalid_skill.path = "skills/invalid-skill".into();
+        package.skills.push(invalid_skill);
+
+        let error = merge_migration_package(&target, &package).unwrap_err();
+        assert_eq!(error.code, "sqlite_error");
+
+        let repository_state: (String, String) = target
+            .query_row(
+                "SELECT remote_sha, readme_search_text FROM repositories WHERE id = ?1",
+                params![original_repo_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            repository_state,
+            (
+                "original-target-sha".into(),
+                "original target readme".into()
+            )
+        );
+        let skill_state: (String, String) = target
+            .query_row(
+                "SELECT remote_version, remote_hash FROM skills WHERE repo_id = ?1",
+                params![original_repo_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            skill_state,
+            ("v1.0.0".into(), "original-target-hash".into())
+        );
+        assert_eq!(
+            target
+                .query_row(
+                    "SELECT COUNT(*) FROM skills WHERE id = 'migration-invalid-skill'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            load_user_note(&target, "repository", &original_repo_id).unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn migration_round_trips_skill_update_metadata_but_excludes_active_conflicts() {
+        let source = Connection::open_in_memory().unwrap();
+        migrate(&source).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let scans = sync_status_scan("v2.0.0", "remote-hash");
+        let repo_id_value =
+            save_repository_with_account(&source, &remote, &scans, None, "").unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        source
+            .execute(
+                "UPDATE skills
+                 SET installed = 1,
+                     status = 'update-conflict',
+                     local_version = 'v1-local',
+                     installed_hash = 'local-machine-hash',
+                     install_path = '/Users/source-machine/SkillRepoTracker/skills/demo-skill',
+                     remote_hash = 'remote-hash',
+                     handled_remote_sha = 'handled-sha',
+                     handled_remote_hash = 'handled-hash'
+                 WHERE id = ?1",
+                params![id],
+            )
+            .unwrap();
+        source
+            .execute(
+                "INSERT INTO skill_update_conflicts
+                 (id, skill_id, task_id, status, local_hash, remote_sha, remote_hash,
+                  verification_state, created_at, updated_at)
+                 VALUES ('conflict-secret-id', ?1, 'task-secret-id', 'pending', 'local-hash',
+                         'remote-sha', 'remote-hash', 'pending', '2026-08-28T00:00:00Z',
+                         '2026-08-28T00:00:00Z')",
+                params![id],
+            )
+            .unwrap();
+
+        let package = build_migration_package(&source).unwrap();
+        let exported = package.skills.iter().find(|skill| skill.id == id).unwrap();
+        assert_eq!(exported.remote_hash.as_deref(), Some("remote-hash"));
+        assert_eq!(exported.handled_remote_sha.as_deref(), Some("handled-sha"));
+        assert_eq!(
+            exported.handled_remote_hash.as_deref(),
+            Some("handled-hash")
+        );
+        assert!(!exported.installed);
+        assert_eq!(exported.status, "not-installed");
+        assert!(exported.local_version.is_none());
+        assert!(exported.installed_hash.is_none());
+        assert!(exported.install_path.is_none());
+        let json = serde_json::to_string(&package).unwrap();
+        assert!(!json.contains("skillUpdateConflicts"));
+        assert!(!json.contains("conflict-secret-id"));
+        assert!(!json.contains("task-secret-id"));
+        assert!(!json.contains("/Users/source-machine"));
+        assert!(!json.contains("update-conflict"));
+
+        let target = Connection::open_in_memory().unwrap();
+        migrate(&target).unwrap();
+        merge_migration_package(&target, &parse_migration_package(&json).unwrap()).unwrap();
+        let imported: (
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = target
+            .query_row(
+                "SELECT installed, status, install_path, remote_hash,
+                        handled_remote_sha, handled_remote_hash
+                 FROM skills WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            imported,
+            (
+                0,
+                "not-installed".into(),
+                None,
+                Some("remote-hash".into()),
+                Some("handled-sha".into()),
+                Some("handled-hash".into())
+            )
+        );
+
+        let mut legacy_value = serde_json::to_value(&package).unwrap();
+        let legacy_skill = legacy_value
+            .get_mut("skills")
+            .and_then(|skills| skills.as_array_mut())
+            .and_then(|skills| skills.first_mut())
+            .and_then(|skill| skill.as_object_mut())
+            .unwrap();
+        legacy_skill.remove("remoteHash");
+        legacy_skill.remove("handledRemoteSha");
+        legacy_skill.remove("handledRemoteHash");
+        let legacy = parse_migration_package(&legacy_value.to_string()).unwrap();
+        assert!(legacy.skills[0].remote_hash.is_none());
+        assert!(legacy.skills[0].handled_remote_sha.is_none());
+        assert!(legacy.skills[0].handled_remote_hash.is_none());
+    }
+
+    #[test]
+    fn migration_import_preserves_existing_machine_local_skill_state() {
+        let source = Connection::open_in_memory().unwrap();
+        migrate(&source).unwrap();
+        let remote = remote_for_skill_sync_status();
+        let repo_id_value = save_repository_with_account(
+            &source,
+            &remote,
+            &sync_status_scan("v2.0.0", "remote-v2"),
+            None,
+            "",
+        )
+        .unwrap();
+        let id = skill_id(&repo_id_value, "skills/demo-skill");
+        let package = build_migration_package(&source).unwrap();
+
+        let target = Connection::open_in_memory().unwrap();
+        migrate(&target).unwrap();
+        save_repository_with_account(
+            &target,
+            &remote,
+            &sync_status_scan("v1.0.0", "remote-v1"),
+            None,
+            "",
+        )
+        .unwrap();
+        target
+            .execute(
+                "UPDATE skills
+                 SET installed = 1,
+                     status = 'installed-customized',
+                     local_version = 'v1-custom',
+                     installed_hash = 'target-local-hash',
+                     install_path = '/Users/target-machine/skills/demo-skill',
+                     handled_remote_sha = 'target-handled-sha',
+                     handled_remote_hash = 'target-handled-hash'
+                 WHERE id = ?1",
+                params![id],
+            )
+            .unwrap();
+
+        merge_migration_package(&target, &package).unwrap();
+
+        let state: (
+            i64,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = target
+            .query_row(
+                "SELECT installed, status, installed_hash, install_path, remote_hash,
+                        handled_remote_sha, handled_remote_hash
+                 FROM skills WHERE id = ?1",
+                params![id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                        row.get(6)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(state.0, 1);
+        assert_eq!(state.1, "installed-customized");
+        assert_eq!(state.2.as_deref(), Some("target-local-hash"));
+        assert_eq!(
+            state.3.as_deref(),
+            Some("/Users/target-machine/skills/demo-skill")
+        );
+        assert_eq!(state.4.as_deref(), Some("remote-v2"));
+        assert_eq!(state.5.as_deref(), Some("target-handled-sha"));
+        assert_eq!(state.6.as_deref(), Some("target-handled-hash"));
+    }
+
+    #[test]
+    fn migration_import_normalizes_legacy_active_conflict_without_local_files() {
+        let source = Connection::open_in_memory().unwrap();
+        migrate(&source).unwrap();
+        let remote = remote_for_skill_sync_status();
+        save_repository_with_account(
+            &source,
+            &remote,
+            &sync_status_scan("v2.0.0", "remote-v2"),
+            None,
+            "",
+        )
+        .unwrap();
+        let mut package = build_migration_package(&source).unwrap();
+        let transported = package.skills.first_mut().unwrap();
+        transported.installed = true;
+        transported.status = "update-conflict".into();
+        transported.local_version = Some("source-local".into());
+        transported.installed_hash = Some("source-local-hash".into());
+        transported.install_path = Some("/Users/source-machine/skills/demo-skill".into());
+
+        let target = Connection::open_in_memory().unwrap();
+        migrate(&target).unwrap();
+        merge_migration_package(&target, &package).unwrap();
+
+        let state: (i64, String, Option<String>, Option<String>) = target
+            .query_row(
+                "SELECT installed, status, installed_hash, install_path FROM skills LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(state, (0, "not-installed".into(), None, None));
+        let conflict_count: i64 = target
+            .query_row("SELECT COUNT(*) FROM skill_update_conflicts", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        let waiting_count: i64 = target
+            .query_row(
+                "SELECT COUNT(*) FROM backup_jobs WHERE status = 'waiting-user'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(conflict_count, 0);
+        assert_eq!(waiting_count, 0);
+    }
+
+    #[test]
     fn migration_adds_local_source_columns() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
@@ -9495,6 +13238,63 @@ clawhub install baoyu-image-gen
         let user_notes_table: Option<String> =
             stmt.query_row([], |row| row.get(0)).optional().unwrap();
         assert_eq!(user_notes_table.as_deref(), Some("user_notes"));
+    }
+
+    #[test]
+    fn migration_adds_persistent_skill_update_conflict_state() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        let mut stmt = conn.prepare("PRAGMA table_info(skills)").unwrap();
+        let skill_columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(skill_columns.contains(&"remote_hash".to_string()));
+        assert!(skill_columns.contains(&"handled_remote_sha".to_string()));
+        assert!(skill_columns.contains(&"handled_remote_hash".to_string()));
+
+        let mut stmt = conn
+            .prepare("PRAGMA table_info(skill_update_conflicts)")
+            .unwrap();
+        let conflict_columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for column in [
+            "id",
+            "skill_id",
+            "task_id",
+            "status",
+            "local_hash",
+            "installed_hash",
+            "remote_sha",
+            "remote_hash",
+            "verification_state",
+            "verified_local_hash",
+            "created_at",
+            "updated_at",
+            "verified_at",
+            "resolved_at",
+        ] {
+            assert!(
+                conflict_columns.contains(&column.to_string()),
+                "missing conflict column {column}"
+            );
+        }
+    }
+
+    #[test]
+    fn skill_action_outcome_is_a_strict_tagged_wire_contract() {
+        let value =
+            serde_json::to_value(SkillActionOutcome::Updated { skills: Vec::new() }).unwrap();
+
+        assert_eq!(
+            value,
+            serde_json::json!({ "kind": "updated", "skills": [] })
+        );
     }
 
     #[test]

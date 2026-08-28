@@ -48,6 +48,45 @@ export type GitHubRepository = {
   note: string;
 };
 
+export type RecognizedSkill = {
+  id?: string;
+  name: string;
+  path?: string;
+  version: string;
+};
+
+export type RecognizedPlugin = {
+  id: string;
+  name: string;
+  kind: string;
+  installCommand: string;
+  skillCount: number;
+};
+
+export type UiRepository = {
+  id: string;
+  name: string;
+  type: string;
+  ref: string;
+  skills: number;
+  remoteSha: string;
+  lastBackupSha: string;
+  lastChecked?: string;
+  backupStatus: string;
+  checkStatus: string;
+  url?: string;
+  branch?: string;
+  backupPath?: string;
+  snapshotTime?: string;
+  recognizedSkills?: RecognizedSkill[];
+  recognizedPlugins?: RecognizedPlugin[];
+  sourceType?: string;
+  localPath?: string | null;
+  addedAt?: string;
+  readmeSearchText?: string;
+  note?: string;
+};
+
 export type PluginSkillSummary = {
   id: string;
   name: string;
@@ -109,7 +148,91 @@ export type UiTask = {
   retryable: boolean;
   retryReason?: string | null;
   log: string[];
+  optimistic?: boolean;
 };
+
+export type UiSkill = {
+  id: string;
+  repoId: string;
+  name: string;
+  description: string;
+  repo: string;
+  path: string;
+  ref: string;
+  localVersion: string;
+  remoteVersion: string;
+  remoteHash?: string | null;
+  handledRemoteSha?: string | null;
+  handledRemoteHash?: string | null;
+  status: string;
+  installed: boolean;
+  createdAt?: string;
+  updatedAt: string;
+  sourceType?: string;
+  localPath?: string | null;
+  installPath?: string | null;
+  deletedPath?: string | null;
+  syncTargetsMode?: string;
+  syncTargets?: string[];
+  resolvedSyncTargets?: string[];
+  publishedTargets?: string[];
+  canRestore?: boolean;
+  canDelete?: boolean;
+  searchText?: string;
+  note?: string;
+  plugins?: SkillPluginReference[];
+};
+
+export type SkillDetail = {
+  id: string;
+  name: string;
+  description: string;
+  repo: string;
+  path: string;
+  ref: string;
+  localVersion: string;
+  remoteVersion: string;
+  status: string;
+  sourceType?: string;
+  localPath?: string | null;
+  installPath?: string | null;
+  syncTargetsMode?: string;
+  syncTargets?: string[];
+  resolvedSyncTargets?: string[];
+  publishedTargets?: string[];
+  plugins: SkillPluginReference[];
+  skillMd: string;
+  filePath?: string | null;
+  note?: string;
+};
+
+export type SkillUpdateVerificationState =
+  | "pending"
+  | "stale"
+  | "unchanged"
+  | "customized"
+  | "latest";
+
+export type SkillUpdateConflict = {
+  id: string;
+  skillId: string;
+  taskId: string;
+  status: string;
+  localHash: string;
+  installedHash?: string | null;
+  remoteSha: string;
+  remoteHash: string;
+  verificationState: SkillUpdateVerificationState;
+  verifiedLocalHash?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  verifiedAt?: string | null;
+  resolvedAt?: string | null;
+};
+
+export type SkillActionOutcome =
+  | { kind: "updated"; skills: UiSkill[] }
+  | { kind: "conflict"; skills: UiSkill[]; conflict: SkillUpdateConflict };
 
 export type AppMetadata = {
   name: string;
@@ -136,8 +259,8 @@ async function command<T>(name: string, args: Record<string, unknown> = {}): Pro
 export const isDesktopRuntime = runningInTauri;
 
 export const api = {
-  listRepositories: () => command<any[]>("list_repositories"),
-  listSkills: () => command<any[]>("list_skills"),
+  listRepositories: () => command<UiRepository[]>("list_repositories"),
+  listSkills: () => command<UiSkill[]>("list_skills"),
   listPlugins: () => command<UiPlugin[]>("list_plugins"),
   updateItemNote: (request: {
     target: string;
@@ -146,7 +269,8 @@ export const api = {
     fullName?: string;
     note: string;
   }) => command<any>("update_item_note", { request }),
-  getSkillDetail: (skillId: string) => command<any>("get_skill_detail", { request: { skillId } }),
+  getSkillDetail: (skillId: string) =>
+    command<SkillDetail>("get_skill_detail", { request: { skillId } }),
   getPluginDetail: (pluginId: string) => command<PluginDetail>("get_plugin_detail", { request: { pluginId } }),
   getRepositoryReadme: (repoId: string) =>
     command<any>("get_repository_readme", { request: { repoId } }),
@@ -159,27 +283,38 @@ export const api = {
     command<any>("validate_directory", { request: { kind, path } }),
   updateSettings: (request: Record<string, unknown>) => command<any>("update_settings", { request }),
   addRepository: (request: { url: string; refName: string; note?: string }) =>
-    command<any[]>("add_repository", { request }),
-  addLocalRepository: (path: string) => command<any[]>("add_local_repository", { request: { path } }),
+    command<UiRepository[]>("add_repository", { request }),
+  addLocalRepository: (path: string) =>
+    command<UiRepository[]>("add_local_repository", { request: { path } }),
   checkRepositories: (repoIds?: string[]) =>
-    command<any[]>("check_repositories", { request: { repoIds } }),
+    command<UiRepository[]>("check_repositories", { request: { repoIds } }),
   backupRepositories: (mode: string, repoIds?: string[]) =>
-    command<any[]>("backup_repositories", { request: { mode, repoIds } }),
-  scanLocalSkills: (root?: string) => command<any[]>("scan_local_skills", { request: { root } }),
-  installSkill: (skillId: string) => command<any[]>("install_skill", { request: { skillId } }),
-  updateSkill: (skillId: string) => command<any[]>("update_skill", { request: { skillId } }),
+    command<UiRepository[]>("backup_repositories", { request: { mode, repoIds } }),
+  scanLocalSkills: (root?: string) =>
+    command<UiSkill[]>("scan_local_skills", { request: { root } }),
+  installSkill: (skillId: string) =>
+    command<SkillActionOutcome>("install_skill", { request: { skillId } }),
+  updateSkill: (skillId: string) =>
+    command<SkillActionOutcome>("update_skill", { request: { skillId } }),
+  getSkillUpdateConflict: (skillId: string) =>
+    command<SkillUpdateConflict>("get_skill_update_conflict", { request: { skillId } }),
+  verifySkillUpdateConflict: (conflictId: string) =>
+    command<SkillUpdateConflict>("verify_skill_update_conflict", { request: { conflictId } }),
+  confirmSkillUpdateConflict: (conflictId: string) =>
+    command<SkillActionOutcome>("confirm_skill_update_conflict", { request: { conflictId } }),
+  openSkillFolder: (skillId: string) =>
+    command<void>("open_skill_folder", { request: { skillId } }),
   deleteSkill: (skillId: string) =>
-    command<any[]>("delete_skill", { request: { skillId, mode: "backup_then_remove" } }),
-  restoreSkill: (skillId: string) => command<any[]>("restore_skill", { request: { skillId } }),
-  syncInstalledSkills: () => command<any[]>("sync_installed_skills"),
+    command<UiSkill[]>("delete_skill", { request: { skillId, mode: "backup_then_remove" } }),
+  restoreSkill: (skillId: string) =>
+    command<UiSkill[]>("restore_skill", { request: { skillId } }),
+  syncInstalledSkills: () => command<UiSkill[]>("sync_installed_skills"),
   updateSkillSyncTargets: (skillId: string, mode: string, targets: string[]) =>
-    command<any[]>("update_skill_sync_targets", { request: { skillId, mode, targets } }),
-  resolveSkillLocalConflict: (skillId: string, choice: string) =>
-    command<any[]>("resolve_skill_local_conflict", { request: { skillId, choice } }),
+    command<UiSkill[]>("update_skill_sync_targets", { request: { skillId, mode, targets } }),
   retryTask: (taskId: string) => command<UiTask[]>("retry_task", { request: { taskId } }),
   cancelTask: (taskId: string) => command<any[]>("cancel_task", { request: { taskId } }),
   copyTaskSummary: (taskId: string) => command<string>("copy_task_summary", { request: { taskId } }),
-  removeRepository: (id: string) => command<any[]>("remove_repository", { id }),
+  removeRepository: (id: string) => command<UiRepository[]>("remove_repository", { id }),
   listGithubAccounts: () => command<GitHubAccount[]>("list_github_accounts"),
   saveGithubAccountToken: (token: string) =>
     command<GitHubAccount[]>("save_github_account_token", { request: { token } }),
@@ -194,7 +329,7 @@ export const api = {
   setGithubStar: (accountId: string, owner: string, repo: string, starred: boolean) =>
     command<GitHubRepository[]>("set_github_star", { request: { accountId, owner, repo, starred } }),
   addRepositoryFromGithub: (accountId: string, owner: string, repo: string, refName?: string) =>
-    command<any[]>("add_repository_from_github", { request: { accountId, owner, repo, refName } }),
+    command<UiRepository[]>("add_repository_from_github", { request: { accountId, owner, repo, refName } }),
   setGithubToken: (token: string) => command<any>("set_github_token", { request: { token } }),
   clearGithubToken: () => command<any>("clear_github_token"),
   validateGithubToken: () => command<any>("validate_github_token"),

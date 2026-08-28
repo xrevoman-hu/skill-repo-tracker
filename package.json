@@ -1,6 +1,6 @@
 {
   "name": "skill-repo-tracker",
-  "version": "1.1.11",
+  "version": "1.1.12",
   "description": "Local-first macOS app for managing, backing up, and publishing AI Skills across local tool directories.",
   "type": "module",
   "license": "MIT",
@@ -24,6 +24,8 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "build": "npm run typecheck && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "tauri": "tauri",
@@ -39,7 +41,12 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.9.2",
-    "typescript": "^5.9.3"
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@testing-library/user-event": "^14.6.1",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=20",

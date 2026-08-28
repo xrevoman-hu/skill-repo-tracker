@@ -1,6 +1,6 @@
 [package]
 name = "skill-repo-tracker"
-version = "1.1.11"
+version = "1.1.12"
 description = "Local-first GitHub repository and Skill update manager"
 authors = ["Skill Repo Tracker"]
 license = "MIT"
@@ -24,6 +24,7 @@ chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 hex = "0.4"
 keyring = { version = "3", features = ["apple-native"] }
+libc = "0.2"
 opener = "0.7"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
