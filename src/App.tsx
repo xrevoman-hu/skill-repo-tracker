@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { api, isDesktopRuntime } from "./api";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { BookOpenText } from "lucide-react";
+import { api, isDesktopRuntime, localizedApiErrorMessage } from "./api";
 import type {
   GitHubAccount,
   GitHubRepository,
@@ -8,6 +10,7 @@ import type {
   SkillDetail,
   SkillPluginReference,
   SkillUpdateConflict,
+  UiPlugin,
   UiRepository,
   UiSkill,
   UiTask,
@@ -15,6 +18,9 @@ import type {
 import { GitHubWorkbench } from "./GitHubWorkbench";
 import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
 import { PluginInspector, PluginsView } from "./PluginsView";
+import { PromptsView } from "./PromptsView";
+import type { PromptExportKind, PromptLeaveContext } from "./PromptsView";
+import { promptLibraryApi } from "./promptLibraryAdapter";
 import {
   REPOSITORY_PAGE_SIZES,
   buildRepositoryPage,
@@ -581,7 +587,7 @@ const initialSkills: UiSkill[] = [
   },
 ];
 
-const initialPlugins = [
+const initialPlugins: UiPlugin[] = [
   {
     id: "plugin-content-marketplace",
     repoId: "content",
@@ -598,6 +604,7 @@ const initialPlugins = [
     detectedSha: "a1b2c3d",
     createdAt: "2026-06-14 10:18",
     updatedAt: "2026-06-14 10:18",
+    note: "",
     linkedSkills: [
       {
         id: "content-core",
@@ -624,6 +631,7 @@ const initialPlugins = [
     detectedSha: "a1b2c3d",
     createdAt: "2026-06-14 10:18",
     updatedAt: "2026-06-14 10:18",
+    note: "",
     linkedSkills: [
       {
         id: "content-core",
@@ -759,6 +767,7 @@ const navItems = [
   { id: "github", labelKey: "nav.github" },
   { id: "repositories", labelKey: "nav.repositories" },
   { id: "skills", labelKey: "nav.skills" },
+  { id: "prompts", labelKey: "nav.prompts" },
   { id: "plugins", labelKey: "nav.plugins" },
   { id: "tasks", labelKey: "nav.tasks" },
   { id: "settings", labelKey: "nav.settings" },
@@ -776,8 +785,16 @@ const COPY = {
     "nav.repositories": "仓库",
     "nav.github": "GitHub",
     "nav.skills": "技能",
+    "nav.prompts": "提示词库",
     "nav.plugins": "插件",
     "nav.tasks": "任务",
+    promptOverview: "提示词概览",
+    totalPrompts: "提示词总数",
+    promptTags: "标签数量",
+    filteredPrompts: "当前筛选",
+    discardPromptChanges: "有未保存的提示词修改，确定放弃吗？",
+    promptExportPlaintextConfirmSingle: "提示词正文将逐字、明文导出为 MD；正文中由你粘贴的密码或凭证也会随之导出。请先确认这篇提示词不含不应分享的秘密。继续吗？",
+    promptExportPlaintextConfirmBatch: "所选提示词正文将逐字、明文导出到 ZIP；正文中由你粘贴的密码或凭证也会随之导出。请先确认这些提示词不含不应分享的秘密。继续吗？",
     "nav.settings": "设置",
     localCare: "本地仓库管理",
     summary: "概览",
@@ -1086,13 +1103,24 @@ const COPY = {
     notesCount: "条备注",
     dataMigration: "数据迁移",
     dataMigrationHelp: "导出 GitHub 元数据、仓库、技能、插件和备注，用于不同机器之间迁移或分享。",
+    migrationIncludePrompts: "同时导出提示词库（v2 .srtmigration）",
+    migrationV1Hint: "未勾选时继续导出兼容旧版的 v1 JSON。提示词正文以明文保存。",
+    migrationPromptSecretWarning: "提示词正文会逐字、明文写入迁移包。应用托管在 Keychain 中的 token 不会导出；但你粘贴在正文里的密码或凭证会随正文一起导出。",
+    migrationPromptSecretConfirm: "提示词正文将逐字、明文写入迁移包；正文中由你粘贴的密码或凭证也会随之导出。请先确认提示词不含不应分享的秘密。继续吗？",
+    migrationConflictStrategy: "提示词 ID 冲突处理",
+    migrationKeepLocal: "保留本机",
+    migrationOverwrite: "用迁移包覆盖",
+    migrationDuplicate: "导入为副本",
+    migrationOverwriteConfirm: "覆盖会替换同 ID 提示词的标题、正文、标签和置顶状态。确认继续吗？",
+    promptItems: "篇提示词",
     exportData: "导出数据",
     importData: "导入数据",
     exporting: "导出中…",
     importing: "导入中…",
-    migrationTokenNote: "迁移包不包含 GitHub token、Keychain 密钥、本地 Skill 文件、源码 ZIP 或任务日志；新机器需要重新添加 token。",
+    migrationTokenNote: "应用托管的 GitHub token、Keychain 密钥、本地 Skill 文件、源码 ZIP 和任务日志不会被迁移；新机器需要重新添加 token。",
     migrationExported: "迁移包已导出。",
     migrationImported: "迁移包已导入。",
+    migrationCancelled: "迁移操作已取消。",
     migrationFailed: "迁移操作失败。",
     detectionPreview: "检测预览",
     detectionPreviewText: "公开仓库，main ref；只有检测到 SKILL.md 时才会识别为技能仓库。",
@@ -1206,8 +1234,16 @@ const COPY = {
     "nav.repositories": "Repositories",
     "nav.github": "GitHub",
     "nav.skills": "Skills",
+    "nav.prompts": "Prompt Library",
     "nav.plugins": "Plugins",
     "nav.tasks": "Tasks",
+    promptOverview: "Prompt Overview",
+    totalPrompts: "Total prompts",
+    promptTags: "Tags",
+    filteredPrompts: "Current filter",
+    discardPromptChanges: "Discard unsaved prompt changes?",
+    promptExportPlaintextConfirmSingle: "The prompt body will be exported to MD verbatim and in plaintext, including any passwords or credentials you pasted into it. Confirm it contains no secrets that should not be shared. Continue?",
+    promptExportPlaintextConfirmBatch: "The selected prompt bodies will be exported to ZIP verbatim and in plaintext, including any passwords or credentials you pasted into them. Confirm they contain no secrets that should not be shared. Continue?",
     "nav.settings": "Settings",
     localCare: "Local repository care",
     summary: "Summary",
@@ -1516,13 +1552,24 @@ const COPY = {
     notesCount: "notes",
     dataMigration: "Data Migration",
     dataMigrationHelp: "Export GitHub metadata, repositories, Skills, plugins, and notes for machine migration or sharing.",
+    migrationIncludePrompts: "Include Prompt Library (v2 .srtmigration)",
+    migrationV1Hint: "Leave this off to export the legacy-compatible v1 JSON. Prompt content remains plaintext.",
+    migrationPromptSecretWarning: "Prompt bodies are written verbatim and in plaintext. App-managed Keychain tokens are excluded, but passwords or credentials pasted into a prompt body will be exported with it.",
+    migrationPromptSecretConfirm: "Prompt bodies will be written verbatim and in plaintext, including any passwords or credentials you pasted into them. Confirm the prompts contain no secrets that should not be shared. Continue?",
+    migrationConflictStrategy: "Prompt ID conflicts",
+    migrationKeepLocal: "Keep local",
+    migrationOverwrite: "Overwrite from package",
+    migrationDuplicate: "Import as copies",
+    migrationOverwriteConfirm: "Overwrite replaces the title, content, tags, and pinned state for prompts with the same ID. Continue?",
+    promptItems: "prompts",
     exportData: "Export Data",
     importData: "Import Data",
     exporting: "Exporting...",
     importing: "Importing...",
-    migrationTokenNote: "Migration packages do not include GitHub tokens, Keychain secrets, local Skill files, source ZIPs, or task logs. Add tokens again on the new machine.",
+    migrationTokenNote: "App-managed GitHub tokens, Keychain secrets, local Skill files, source ZIPs, and task logs are not migrated. Add tokens again on the new machine.",
     migrationExported: "Migration package exported.",
     migrationImported: "Migration package imported.",
+    migrationCancelled: "Migration cancelled.",
     migrationFailed: "Migration operation failed.",
     detectionPreview: "Detection preview",
     detectionPreviewText: "Public repository, ref main, no Skill found unless SKILL.md is detected.",
@@ -2153,9 +2200,12 @@ export function App() {
   const demoFocus = initialParam("focus", "none", ["none", "plugin-row"]);
   const initialTab = initialParam("tab", "repositories", navItems.map((item) => item.id));
   const [activeTab, setActiveTab] = useState(initialTab);
+  const [promptDirty, setPromptDirty] = useState(false);
+  const [promptCounts, setPromptCounts] = useState({ prompts: 0, tags: 0, filtered: 0 });
+  const promptLeaveGuard = useRef<((context?: PromptLeaveContext) => Promise<boolean>) | null>(null);
   const [language, setLanguage] = useState(() => initialParam("lang", "zh", ["zh", "en"]));
   const [theme, setTheme] = useState(() => initialParam("theme", "light", ["light", "dark"]));
-  const [density, setDensity] = useState("comfortable");
+  const [density, setDensity] = useState(() => initialParam("density", "comfortable", ["comfortable", "compact"]));
   const [repositories, setRepositories] = useState(initialRepos);
   const [skills, setSkills] = useState(initialSkills);
   const [plugins, setPlugins] = useState(() => (demoMode === "empty-plugins" ? [] : initialPlugins));
@@ -2183,7 +2233,10 @@ export function App() {
   const [skillSort, setSkillSort] = useState<SkillSort>({ key: "name", direction: "asc" });
   const [skillRepoQuery, setSkillRepoQuery] = useState("");
   const [taskFilter, setTaskFilter] = useState("all");
-  const [pluginSort, setPluginSort] = useState({ key: "name", direction: "asc" });
+  const [pluginSort, setPluginSort] = useState<{ key: string; direction: "asc" | "desc" }>({
+    key: "name",
+    direction: "asc",
+  });
   const [search, setSearch] = useState("");
   const [repoContentSearch, setRepoContentSearch] = useState("");
   const [skillSearch, setSkillSearch] = useState("");
@@ -2220,6 +2273,10 @@ export function App() {
   const [isAddingRepo, setIsAddingRepo] = useState(false);
   const addRepoRequestRef = useRef(0);
   const [migrationStatus, setMigrationStatus] = useState("");
+  const [migrationIncludePrompts, setMigrationIncludePrompts] = useState(false);
+  const [migrationConflictStrategy, setMigrationConflictStrategy] = useState<
+    "keep-local" | "overwrite" | "duplicate"
+  >("keep-local");
   const [nextAutoCheckAt, setNextAutoCheckAt] = useState(null);
   const [nextAutoBackupAt, setNextAutoBackupAt] = useState(null);
   const [newRepo, setNewRepo] = useState({
@@ -2234,6 +2291,86 @@ export function App() {
     () => githubRateLimitHelpText(t, latestGithubRateLimitReset),
     [language, latestGithubRateLimitReset],
   );
+
+  function registerPromptLeaveGuard(
+    guard: (context?: PromptLeaveContext) => Promise<boolean>,
+  ) {
+    promptLeaveGuard.current = guard;
+    return () => {
+      if (promptLeaveGuard.current === guard) promptLeaveGuard.current = null;
+    };
+  }
+
+  async function switchActiveTab(nextTab: string) {
+    if (nextTab === activeTab) return;
+    if (activeTab === "prompts" && promptLeaveGuard.current) {
+      const canLeave = await promptLeaveGuard.current("switch");
+      if (!canLeave) return;
+    }
+    if (activeTab === "prompts") setPromptDirty(false);
+    setActiveTab(nextTab);
+  }
+
+  async function copyPromptText(content: string) {
+    if (!navigator.clipboard?.writeText) {
+      throw new Error(language === "zh" ? "当前环境不支持剪贴板写入。" : "Clipboard writing is unavailable.");
+    }
+    await navigator.clipboard.writeText(content);
+  }
+
+  async function openPromptExternal(url: string) {
+    await api.openExternalUrl(url);
+  }
+
+  function confirmPromptDiscard() {
+    return window.confirm(t("discardPromptChanges"));
+  }
+
+  function confirmPromptExport(kind: PromptExportKind) {
+    return window.confirm(t(kind === "single"
+      ? "promptExportPlaintextConfirmSingle"
+      : "promptExportPlaintextConfirmBatch"));
+  }
+
+  function confirmPromptAction(action: string, details: { title: string; target?: string }) {
+    const target = details.target ? ` → ${details.target}` : "";
+    const verb = action === "delete-prompt"
+      ? language === "zh" ? "永久删除提示词" : "Permanently delete prompt"
+      : action === "delete-tag"
+        ? language === "zh" ? "删除标签并解除关联" : "Delete tag and unlink it"
+        : language === "zh" ? "合并标签" : "Merge tags";
+    return window.confirm(`${verb}: ${details.title}${target}?`);
+  }
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!promptDirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    if (desktopRuntime) {
+      void getCurrentWindow().onCloseRequested(async (event) => {
+        if (!promptDirty) return;
+        const canClose = promptLeaveGuard.current
+          ? await promptLeaveGuard.current("close")
+          : confirmPromptDiscard();
+        if (!canClose) event.preventDefault();
+      }).then((stopListening) => {
+        if (disposed) stopListening();
+        else unlisten = stopListening;
+      });
+    }
+
+    return () => {
+      disposed = true;
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+      unlisten?.();
+    };
+  }, [desktopRuntime, promptDirty, language]);
 
   function isPending(key) {
     return Boolean(pendingActions[key]);
@@ -2387,6 +2524,10 @@ export function App() {
     nextAutoBackupAt,
     directoryStatus,
     migrationStatus,
+    migrationIncludePrompts,
+    setMigrationIncludePrompts,
+    migrationConflictStrategy,
+    setMigrationConflictStrategy,
     appMetadata,
     isPending,
     desktopRuntime,
@@ -2399,7 +2540,7 @@ export function App() {
     showToast,
     exportMigrationPackage,
     importMigrationPackage,
-    openGitHubWorkbench: () => setActiveTab("github"),
+    openGitHubWorkbench: () => void switchActiveTab("github"),
     t,
   };
 
@@ -2851,20 +2992,29 @@ export function App() {
 
   function migrationSummaryText(summary, actionLabel) {
     if (!summary || summary.cancelled) return summary?.message || "";
-    return `${actionLabel}: ${summary.repositories} ${t("repositoriesTitle")}, ${summary.skills} ${t("skillsTitle")}, ${summary.plugins} ${t("pluginsTitle")}, ${summary.userNotes} ${t("notesCount")}`;
+    const base = `${actionLabel}: ${summary.repositories} ${t("repositoriesTitle")}, ${summary.skills} ${t("skillsTitle")}, ${summary.plugins} ${t("pluginsTitle")}, ${summary.userNotes} ${t("notesCount")}`;
+    return typeof summary.prompts === "number"
+      ? `${base}, ${summary.prompts} ${t("promptItems")}, ${summary.tags || 0} ${t("promptTags")}`
+      : base;
   }
 
   async function exportMigrationPackage() {
     const actionKey = "exportMigrationPackage";
     if (isPending(actionKey)) return;
+    if (migrationIncludePrompts && !window.confirm(t("migrationPromptSecretConfirm"))) return;
     setActionPending(actionKey, true);
     try {
-      const summary = await api.exportMigrationPackage();
+      const summary = await api.exportMigrationPackage(migrationIncludePrompts);
+      if (summary.cancelled) {
+        setMigrationStatus(t("migrationCancelled"));
+        showToast(t("migrationCancelled"));
+        return;
+      }
       const message = migrationSummaryText(summary, t("exportData")) || summary.message;
       setMigrationStatus(message);
-      showToast(summary.cancelled ? summary.message : t("migrationExported"));
+      showToast(t("migrationExported"));
     } catch (error) {
-      showToast(error.message || t("migrationFailed"));
+      showToast(localizedApiErrorMessage(error, language, t("migrationFailed")));
     } finally {
       setActionPending(actionKey, false);
     }
@@ -2875,15 +3025,49 @@ export function App() {
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
     try {
-      const summary = await api.importMigrationPackage();
-      if (!summary.cancelled) {
-        await refreshDesktopState();
+      const preview = await api.previewPromptMigrationPackage();
+      if (preview.cancelled || !preview.path) {
+        setMigrationStatus(t("migrationCancelled"));
+        showToast(t("migrationCancelled"));
+        return;
       }
+      if (!preview.valid) {
+        throw Object.assign(new Error(preview.message || t("migrationFailed")), {
+          code: "migration_package_invalid",
+          details: preview.message || undefined,
+        });
+      }
+      if (!preview.packageSha256 || preview.packageSizeBytes <= 0) {
+        throw Object.assign(new Error(preview.message || t("migrationFailed")), {
+          code: "migration_import_fingerprint_invalid",
+          details: preview.message || undefined,
+        });
+      }
+      if (
+        preview.format === "v2" &&
+        preview.hasDifferentConflicts &&
+        migrationConflictStrategy === "overwrite" &&
+        !window.confirm(t("migrationOverwriteConfirm"))
+      ) {
+        return;
+      }
+      const summary = await api.importMigrationPackage(
+        preview.path,
+        migrationConflictStrategy,
+        preview.packageSha256,
+        preview.packageSizeBytes,
+      );
+      if (summary.cancelled) {
+        setMigrationStatus(t("migrationCancelled"));
+        showToast(t("migrationCancelled"));
+        return;
+      }
+      await refreshDesktopState();
       const message = migrationSummaryText(summary, t("importData")) || summary.message;
       setMigrationStatus(message);
-      showToast(summary.cancelled ? summary.message : t("migrationImported"));
+      showToast(t("migrationImported"));
     } catch (error) {
-      showToast(error.message || t("migrationFailed"));
+      showToast(localizedApiErrorMessage(error, language, t("migrationFailed")));
     } finally {
       setActionPending(actionKey, false);
     }
@@ -3883,7 +4067,7 @@ export function App() {
 
   function openPluginEntry(plugin: SkillPluginReference) {
     const fullPlugin = plugins.find((item) => item.id === plugin.id) || plugin;
-    setActiveTab("plugins");
+    void switchActiveTab("plugins");
     openPluginDetail(fullPlugin);
   }
 
@@ -4030,42 +4214,71 @@ export function App() {
             <button
               className={`nav-item ${activeTab === item.id ? "active" : ""}`}
               key={item.id}
-              onClick={() => setActiveTab(item.id)}
+              onClick={() => void switchActiveTab(item.id)}
               type="button"
             >
-              <span className={`nav-mark nav-mark-${item.id}`} />
+              {item.id === "prompts" ? (
+                <BookOpenText aria-hidden="true" className="nav-lucide" size={15} strokeWidth={1.8} />
+              ) : (
+                <span className={`nav-mark nav-mark-${item.id}`} />
+              )}
               {t(item.labelKey)}
             </button>
           ))}
         </nav>
 
-        <section className="sidebar-section">
-          <h3>{t("summary")}</h3>
-          <Metric label={t("totalRepositories")} value={counts.total} />
-          <Metric label={t("skillRepositories")} value={counts.skill} />
-          <Metric label={t("genericRepositories")} value={counts.generic} />
-          <Metric label={t("unknownType")} value={counts.unknown} />
-        </section>
+        {activeTab === "prompts" ? (
+          <>
+            <section className="sidebar-section prompt-sidebar-overview">
+              <h3>{t("promptOverview")}</h3>
+              <Metric label={t("totalPrompts")} value={promptCounts.prompts} />
+              <Metric label={t("promptTags")} value={promptCounts.tags} />
+              <Metric label={t("filteredPrompts")} value={promptCounts.filtered} />
+            </section>
+            <section className="sidebar-note prompt-sidebar-note">
+              <h3>{language === "zh" ? "本地存储" : "Local storage"}</h3>
+              <p>
+                {language === "zh"
+                  ? "正文保存在本机 SQLite；每篇最多 5 MiB。"
+                  : "Bodies stay in local SQLite, up to 5 MiB each."}
+              </p>
+            </section>
+          </>
+        ) : (
+          <>
+            <section className="sidebar-section">
+              <h3>{t("summary")}</h3>
+              <Metric label={t("totalRepositories")} value={counts.total} />
+              <Metric label={t("skillRepositories")} value={counts.skill} />
+              <Metric label={t("genericRepositories")} value={counts.generic} />
+              <Metric label={t("unknownType")} value={counts.unknown} />
+            </section>
 
-        <section className="sidebar-section">
-          <h3>{t("backupStatus")}</h3>
-          <Legend tone="green" label={t("backedLatest")} value={counts.backed} />
-          <Legend tone="orange" label={t("updatedNotBacked")} value={counts.updated} />
-          <Legend tone="red" label={t("checkFailed")} value={counts.failed} />
-          <Legend tone="gray" label={t("unknown")} value={counts.unknown} />
-        </section>
+            <section className="sidebar-section">
+              <h3>{t("backupStatus")}</h3>
+              <Legend tone="green" label={t("backedLatest")} value={counts.backed} />
+              <Legend tone="orange" label={t("updatedNotBacked")} value={counts.updated} />
+              <Legend tone="red" label={t("checkFailed")} value={counts.failed} />
+              <Legend tone="gray" label={t("unknown")} value={counts.unknown} />
+            </section>
+          </>
+        )}
 
       </aside>
 
       <section
-        className={`workspace ${activeTab === "settings" || activeTab === "github" ? "settings-workspace" : ""}`}
+        className={`workspace ${
+          activeTab === "settings" || activeTab === "github" || activeTab === "prompts"
+            ? "settings-workspace"
+            : ""
+        } ${activeTab === "prompts" ? "prompts-workspace" : ""}`}
         onMouseDown={
           activeTab === "repositories" || activeTab === "skills" || activeTab === "plugins"
             ? handleWorkspaceMouseDown
             : undefined
         }
       >
-        {activeTab !== "settings" && activeTab !== "github" && (
+        {activeTab !== "settings" && activeTab !== "github" && activeTab !== "prompts" && (
           <Toolbar
             activeTab={activeTab}
             search={search}
@@ -4100,7 +4313,7 @@ export function App() {
         )}
 
         <div
-          className={`content-grid ${
+          className={`content-grid ${activeTab === "prompts" ? "prompt-content-grid" : ""} ${
             (activeTab === "repositories" && inspectorRepo) ||
             (activeTab === "skills" && selectedSkill) ||
             (activeTab === "plugins" && selectedPlugin)
@@ -4170,7 +4383,7 @@ export function App() {
               handleSkillAction={handleSkillAction}
               openSkillConflict={openSkillConflict}
               openSkillDetail={openSkillDetail}
-              setActiveTab={setActiveTab}
+              setActiveTab={switchActiveTab}
               setSelectedRepoId={setSelectedRepoId}
               setInspectorRepoId={setInspectorRepoId}
               setModal={setModal}
@@ -4188,11 +4401,28 @@ export function App() {
             />
           )}
 
+          {activeTab === "prompts" && (
+            <PromptsView
+              api={promptLibraryApi}
+              compact={density === "compact"}
+              confirmAction={confirmPromptAction}
+              confirmDiscard={confirmPromptDiscard}
+              confirmExport={confirmPromptExport}
+              copyText={copyPromptText}
+              language={language}
+              onCountsChange={setPromptCounts}
+              onDirtyChange={setPromptDirty}
+              openExternal={openPromptExternal}
+              registerLeaveGuard={registerPromptLeaveGuard}
+              theme={theme}
+            />
+          )}
+
           {activeTab === "plugins" && (
             <PluginsView
               plugins={filteredPlugins}
               openPluginDetail={openPluginDetail}
-              setActiveTab={setActiveTab}
+              setActiveTab={switchActiveTab}
               setSelectedRepoId={setSelectedRepoId}
               setInspectorRepoId={setInspectorRepoId}
               hasPlugins={plugins.length > 0}
@@ -4235,7 +4465,7 @@ export function App() {
             <Inspector
               key={inspectorRepo.id}
               repo={inspectorRepo}
-              setActiveTab={setActiveTab}
+              setActiveTab={switchActiveTab}
               setModal={setModal}
               onClose={closeActiveInspector}
               desktopRuntime={desktopRuntime}
@@ -4257,7 +4487,7 @@ export function App() {
               loading={skillDetailLoading}
               error={skillDetailError}
               onClose={closeActiveInspector}
-              setActiveTab={setActiveTab}
+              setActiveTab={switchActiveTab}
               setSelectedRepoId={setSelectedRepoId}
               setInspectorRepoId={setInspectorRepoId}
               repositories={repositories}
@@ -4281,14 +4511,17 @@ export function App() {
               loading={pluginDetailLoading}
               error={pluginDetailError}
               onClose={closeActiveInspector}
-              setActiveTab={setActiveTab}
+              setActiveTab={switchActiveTab}
               setSelectedRepoId={setSelectedRepoId}
               setInspectorRepoId={setInspectorRepoId}
               openSkillDetail={openSkillDetail}
               copyInstallCommand={copyInstallCommand}
               onSaveNote={(plugin, note) => saveItemNote("plugin", plugin, note)}
               isPending={isPending}
-              skills={skills}
+              skills={skills.map((skill) => ({
+                ...skill,
+                version: skill.localVersion || skill.remoteVersion || "unknown",
+              }))}
               repositories={repositories}
               language={language}
               t={t}
@@ -4303,8 +4536,8 @@ export function App() {
           )}
         </div>
 
-        {activeTab !== "settings" && activeTab !== "github" && (
-          <RunningTask tasks={tasks} setActiveTab={setActiveTab} language={language} t={t} />
+        {activeTab !== "settings" && activeTab !== "github" && activeTab !== "prompts" && (
+          <RunningTask tasks={tasks} setActiveTab={switchActiveTab} language={language} t={t} />
         )}
       </section>
 
@@ -4314,7 +4547,7 @@ export function App() {
         <span className="status-divider" />
         <span>{t("localBackupRoot")}</span>
         <strong>{backupRoot}</strong>
-        <Button variant="flat" onClick={() => setActiveTab("settings")}>
+        <Button variant="flat" onClick={() => void switchActiveTab("settings")}>
           {t("change")}
         </Button>
         <span className="status-spacer" />
@@ -5930,6 +6163,10 @@ function PreferencesPanel({
   nextAutoBackupAt,
   directoryStatus,
   migrationStatus,
+  migrationIncludePrompts,
+  setMigrationIncludePrompts,
+  migrationConflictStrategy,
+  setMigrationConflictStrategy,
   appMetadata,
   chooseDirectory,
   validateDirectory,
@@ -6235,6 +6472,32 @@ function PreferencesPanel({
         </SettingsSection>
 
         <SettingsSection title={t("dataMigration")} note={t("dataMigrationHelp")}>
+          <label className="switch-row compact-switch migration-prompt-toggle">
+            <input
+              checked={migrationIncludePrompts}
+              onChange={(event) => setMigrationIncludePrompts(event.target.checked)}
+              type="checkbox"
+            />
+            <span>{t("migrationIncludePrompts")}</span>
+          </label>
+          <p className="settings-note">{t("migrationV1Hint")}</p>
+          {migrationIncludePrompts && (
+            <p className="settings-note warning migration-secret-warning" role="alert">
+              {t("migrationPromptSecretWarning")}
+            </p>
+          )}
+          <label className="migration-strategy-field">
+            <span>{t("migrationConflictStrategy")}</span>
+            <select
+              aria-label={t("migrationConflictStrategy")}
+              onChange={(event) => setMigrationConflictStrategy(event.target.value)}
+              value={migrationConflictStrategy}
+            >
+              <option value="keep-local">{t("migrationKeepLocal")}</option>
+              <option value="overwrite">{t("migrationOverwrite")}</option>
+              <option value="duplicate">{t("migrationDuplicate")}</option>
+            </select>
+          </label>
           <div className="action-grid">
             <Button
               onClick={exportMigrationPackage}

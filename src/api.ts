@@ -12,6 +12,131 @@ type ApiResponse<T> = {
   error?: ApiError;
 };
 
+const ENGLISH_API_ERRORS: Record<string, string> = {
+  filesystem_error: "A filesystem operation failed.",
+  sqlite_error: "A SQLite database operation failed.",
+  temp_artifact_error: "A temporary file operation failed.",
+  zip_error: "The ZIP archive could not be read.",
+  prompt_content_required: "Prompt content is required.",
+  prompt_content_too_large: "Prompt content must not exceed 5 MiB (5,242,880 UTF-8 bytes).",
+  prompt_export_destination_invalid: "The export destination is invalid.",
+  prompt_export_dialog_failed: "The export save dialog could not be opened.",
+  prompt_export_empty_selection: "Select at least one prompt before exporting.",
+  prompt_export_flush_failed: "The exported ZIP could not be fully written.",
+  prompt_export_path_failed: "The selected export path could not be resolved.",
+  prompt_export_yaml_failed: "The prompt metadata could not be encoded for Markdown export.",
+  prompt_fts_integrity_failed: "The prompt search index failed its integrity check.",
+  prompt_id_conflict: "A prompt with this ID already exists.",
+  prompt_id_invalid: "The prompt ID contains unsupported characters.",
+  prompt_not_found: "This prompt no longer exists.",
+  prompt_page_invalid: "The page number must start at 1.",
+  prompt_page_size_invalid: "Page size must be 30, 50, or 100.",
+  prompt_revision_conflict: "This prompt changed in another operation. Reload it and try again.",
+  prompt_schema_incompatible: "The existing prompt database schema is incompatible. The migration was rolled back.",
+  prompt_schema_integrity_failed: "The prompt database failed its integrity check.",
+  prompt_search_cancelled: "This search was replaced by a newer query.",
+  prompt_search_failed: "Prompt search failed.",
+  prompt_search_timeout: "Search exceeded one second and was cancelled. Narrow the query and try again.",
+  prompt_selection_drift: "The prompt library changed during export. Review the selection and try again.",
+  prompt_tag_already_exists: "A tag with this name already exists.",
+  prompt_tag_merge_required: "A tag with this name already exists. Confirm that you want to merge them.",
+  prompt_tag_merge_same: "A tag cannot be merged into itself.",
+  prompt_tag_name_required: "Tag name is required.",
+  prompt_tag_name_too_long: "Tag name must not exceed 50 characters.",
+  prompt_tag_not_found: "The selected tag no longer exists.",
+  prompt_title_required: "Prompt title is required.",
+  prompt_title_too_long: "Prompt title must not exceed 200 characters.",
+  prompt_too_many_tags: "A prompt can have at most 20 tags.",
+  prompt_zip_path_unsafe: "An unsafe ZIP entry path was blocked.",
+  migration_export_failed: "The migration package could not be exported.",
+  migration_import_fingerprint_invalid: "The migration package fingerprint is missing or invalid. Preview the package again.",
+  migration_import_path_invalid: "The migration package path is invalid.",
+  migration_package_changed_since_preview: "The migration package changed after preview. Preview it again before importing.",
+  migration_package_file_too_large: "The migration package file exceeds the supported size limit.",
+  migration_package_invalid: "The migration package is invalid.",
+  migration_preflight_failed: "The migration package could not be validated before import.",
+  migration_schema_unsupported: "This migration package version is not supported.",
+  migration_v1_json_invalid: "The legacy v1 migration package contains invalid JSON.",
+  migration_v1_schema_unsupported: "This legacy v1 migration package version is not supported.",
+  migration_v1_too_large: "The legacy v1 migration package exceeds the supported size limit.",
+  prompt_migration_archive_size_overflow: "The migration archive size is invalid.",
+  prompt_migration_archive_too_large: "The migration archive exceeds the supported size limit.",
+  prompt_migration_atomic_replace_failed: "The migration package could not be finalized atomically.",
+  prompt_migration_body_summary_mismatch: "Prompt body totals do not match the migration manifest.",
+  prompt_migration_conflict_drift: "Prompt conflicts changed after preview. Preview the package again.",
+  prompt_migration_dangling_link: "The migration package contains a tag link to a missing prompt or tag.",
+  prompt_migration_duplicate_id_exhausted: "A unique ID could not be generated for an imported copy.",
+  prompt_migration_duplicate_link: "The migration package contains a duplicate prompt-tag link.",
+  prompt_migration_duplicate_prompt: "The migration package contains a duplicate prompt ID.",
+  prompt_migration_duplicate_tag: "The migration package contains a duplicate tag ID.",
+  prompt_migration_entry_digest_mismatch: "A migration entry failed its SHA-256 integrity check.",
+  prompt_migration_entry_too_large: "A migration entry exceeds the supported size limit.",
+  prompt_migration_format_unknown: "The selected file is not a supported migration package.",
+  prompt_migration_fts_integrity_failed: "The imported prompt search index failed its integrity check.",
+  prompt_migration_id_invalid: "The migration package contains an invalid public ID.",
+  prompt_migration_io_failed: "The migration package could not be read or written.",
+  prompt_migration_json_invalid: "The migration package contains invalid JSON.",
+  prompt_migration_jsonl_invalid: "The migration package contains an invalid JSONL record.",
+  prompt_migration_jsonl_record_too_large: "A migration JSONL record exceeds the supported size limit.",
+  prompt_migration_manifest_invalid: "The migration manifest is invalid.",
+  prompt_migration_meta_missing: "The prompt library metadata row is missing.",
+  prompt_migration_parent_missing: "The migration package destination folder is missing.",
+  prompt_migration_path_invalid: "The migration package contains an unsafe or invalid path.",
+  prompt_migration_preflight_drift: "Migration validation changed before import. Preview the package again.",
+  prompt_migration_prompt_content_invalid: "The migration package contains invalid prompt content.",
+  prompt_migration_prompt_content_too_large: "A prompt in the migration package exceeds 5 MiB.",
+  prompt_migration_prompt_excerpt_mismatch: "A prompt excerpt does not match its content.",
+  prompt_migration_prompt_hash_mismatch: "A prompt failed its SHA-256 integrity check.",
+  prompt_migration_prompt_title_invalid: "The migration package contains an invalid prompt title.",
+  prompt_migration_prompt_title_not_normalized: "A prompt title is not Unicode NFC normalized.",
+  prompt_migration_record_limit_overflow: "The migration package contains too many records.",
+  prompt_migration_reference_drift: "Migration references changed after preview. Preview the package again.",
+  prompt_migration_revision_invalid: "The migration package contains an invalid prompt revision.",
+  prompt_migration_schema_unsupported: "This prompt migration schema version is not supported.",
+  prompt_migration_sensitive_field: "A prohibited sensitive field was found in the migration package.",
+  prompt_migration_sensitive_policy_missing: "The migration package is missing its sensitive-data policy.",
+  prompt_migration_tag_id_conflict: "An imported tag ID conflicts with a different local tag.",
+  prompt_migration_tag_invalid: "The migration package contains an invalid tag.",
+  prompt_migration_tag_not_normalized: "A tag name is not Unicode NFC normalized.",
+  prompt_migration_timestamp_invalid: "The migration package contains an invalid timestamp.",
+  prompt_migration_too_many_links: "The migration package contains too many prompt-tag links.",
+  prompt_migration_too_many_prompts: "The migration package contains too many prompts.",
+  prompt_migration_too_many_prompt_tags: "A prompt in the migration package has more than 20 tags.",
+  prompt_migration_too_many_records: "The migration package contains too many records.",
+  prompt_migration_too_many_tags: "The migration package contains too many tags.",
+  prompt_migration_total_body_too_large: "The total prompt content in the migration package exceeds the supported limit.",
+  prompt_migration_total_size_overflow: "The total prompt content size is invalid.",
+  prompt_migration_zip_duplicate_entry: "The migration ZIP contains a duplicate entry.",
+  prompt_migration_zip_entry_missing: "A required migration ZIP entry is missing.",
+  prompt_migration_zip_invalid: "The migration ZIP is invalid or damaged.",
+  prompt_migration_zip_path_invalid: "The migration ZIP contains an unsafe path.",
+  prompt_migration_database_failed: "The migration database operation failed.",
+};
+
+function errorStringField(error: unknown, field: "code" | "details" | "message") {
+  if (!error || typeof error !== "object" || !(field in error)) return "";
+  const value = (error as Record<string, unknown>)[field];
+  return typeof value === "string" ? value : "";
+}
+
+export function localizedApiErrorMessage(
+  error: unknown,
+  language: "zh" | "en",
+  fallback: string,
+) {
+  const code = errorStringField(error, "code");
+  const original = error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : errorStringField(error, "message");
+  const message = language === "en" && code && ENGLISH_API_ERRORS[code]
+    ? ENGLISH_API_ERRORS[code]
+    : original || fallback;
+  const details = errorStringField(error, "details");
+  return details && !message.includes(details) ? `${message} (${details})` : message;
+}
+
 export type GitHubAccount = {
   id: string;
   login: string;
@@ -135,8 +260,115 @@ export type MigrationPackageSummary = {
   skills: number;
   plugins: number;
   userNotes: number;
+  prompts?: number;
+  tags?: number;
+  totalBytes?: number;
   message: string;
 };
+
+export type PromptTagMode = "all" | "any";
+export type PromptSort = "updatedDesc";
+export type PromptPageSize = 30 | 50 | 100;
+
+export type PromptTag = {
+  id: string;
+  name: string;
+  promptCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PromptSummary = {
+  id: string;
+  title: string;
+  excerpt: string;
+  tags: PromptTag[];
+  pinned: boolean;
+  contentBytes: number;
+  createdAt: string;
+  updatedAt: string;
+  revision: number;
+};
+
+export type PromptDetail = PromptSummary & {
+  content: string;
+};
+
+export type PromptListFilter = {
+  query: string;
+  tagIds: string[];
+  tagMode: PromptTagMode;
+  sort: PromptSort;
+};
+
+export type PromptListRequest = PromptListFilter & {
+  page: number;
+  pageSize: PromptPageSize;
+};
+
+export type PromptPage = {
+  items: PromptSummary[];
+  total: number;
+  page: number;
+  pageSize: PromptPageSize;
+  totalPages: number;
+  libraryRevision: number;
+};
+
+export type PromptSelection =
+  | { mode: "explicit"; ids: string[] }
+  | {
+      mode: "filter";
+      filter: PromptListFilter;
+      excludedIds: string[];
+      expectedLibraryRevision: number;
+    };
+
+export type CreatePromptRequest = {
+  title: string;
+  content: string;
+  tagIds: string[];
+  pinned?: boolean;
+};
+
+export type UpdatePromptRequest = {
+  id: string;
+  title: string;
+  content: string;
+  tagIds: string[];
+  pinned?: boolean;
+  expectedRevision: number;
+};
+
+export type PromptExportSummary = {
+  path?: string | null;
+  cancelled: boolean;
+  count: number;
+  bytes: number;
+  message: string;
+};
+
+export type PromptMigrationPreview = {
+  path?: string | null;
+  cancelled: boolean;
+  format: "v1" | "v2";
+  packageSha256?: string | null;
+  packageSizeBytes: number;
+  prompts: number;
+  tags: number;
+  totalBytes: number;
+  conflicts: Array<{
+    id: string;
+    title: string;
+    kind: "same" | "different";
+  }>;
+  differentConflictCount: number;
+  hasDifferentConflicts: boolean;
+  valid: boolean;
+  message: string;
+};
+
+export type PromptMigrationConflictStrategy = "keep-local" | "overwrite" | "duplicate";
 
 export type UiTask = {
   id: string;
@@ -289,7 +521,7 @@ export const api = {
   checkRepositories: (repoIds?: string[]) =>
     command<UiRepository[]>("check_repositories", { request: { repoIds } }),
   backupRepositories: (mode: string, repoIds?: string[]) =>
-    command<UiRepository[]>("backup_repositories", { request: { mode, repoIds } }),
+    command<UiTask[]>("backup_repositories", { request: { mode, repoIds } }),
   scanLocalSkills: (root?: string) =>
     command<UiSkill[]>("scan_local_skills", { request: { root } }),
   installSkill: (skillId: string) =>
@@ -334,11 +566,61 @@ export const api = {
   clearGithubToken: () => command<any>("clear_github_token"),
   validateGithubToken: () => command<any>("validate_github_token"),
   listBackupHistory: () => command<any[]>("list_backup_history"),
-  exportMigrationPackage: () => command<MigrationPackageSummary>("export_migration_package"),
-  importMigrationPackage: () => command<MigrationPackageSummary>("import_migration_package"),
+  listPrompts: (request: PromptListRequest) =>
+    command<PromptPage>("list_prompts", { request }),
+  getPromptDetail: (id: string) =>
+    command<PromptDetail>("get_prompt_detail", { request: { id } }),
+  createPrompt: (request: CreatePromptRequest) =>
+    command<PromptDetail>("create_prompt", { request }),
+  updatePrompt: (request: UpdatePromptRequest) =>
+    command<PromptDetail>("update_prompt", { request }),
+  deletePrompt: (id: string, expectedRevision: number) =>
+    command<void>("delete_prompt", {
+      request: { id, expectedRevision },
+    }),
+  setPromptPinned: (id: string, pinned: boolean, expectedRevision: number) =>
+    command<PromptSummary>("set_prompt_pinned", {
+      request: { id, pinned, expectedRevision },
+    }),
+  listPromptTags: () => command<PromptTag[]>("list_prompt_tags"),
+  createPromptTag: (name: string) =>
+    command<PromptTag>("create_prompt_tag", { request: { name } }),
+  renamePromptTag: (tagId: string, name: string) =>
+    command<PromptTag>("rename_prompt_tag", { request: { tagId, name } }),
+  mergePromptTags: (sourceTagId: string, targetTagId: string) =>
+    command<PromptTag>("merge_prompt_tags", { request: { sourceTagId, targetTagId } }),
+  deletePromptTag: (tagId: string) =>
+    command<void>("delete_prompt_tag", {
+      request: { tagId },
+    }),
+  exportPromptMarkdown: (id: string) =>
+    command<PromptExportSummary>("export_prompt_markdown", { request: { id } }),
+  exportPromptsZip: (selection: PromptSelection) =>
+    command<PromptExportSummary>("export_prompts_zip", { request: { selection } }),
+  previewPromptMigrationPackage: () =>
+    command<PromptMigrationPreview>("preview_prompt_migration_package"),
+  exportMigrationPackage: (includePrompts = false) =>
+    command<MigrationPackageSummary>("export_migration_package", {
+      request: { includePrompts },
+    }),
+  importMigrationPackage: (
+    path: string,
+    conflictStrategy: PromptMigrationConflictStrategy,
+    expectedPackageSha256: string,
+    expectedPackageSizeBytes: number,
+  ) => command<MigrationPackageSummary>("import_migration_package", {
+    request: {
+      path,
+      conflictStrategy,
+      expectedPackageSha256,
+      expectedPackageSizeBytes,
+    },
+  }),
   openBackupFolder: (path?: string) => command<string>("open_backup_folder", { path }),
   openUrl: (url: string, mode = "embedded", browserId?: string) =>
     command<string>("open_url", { request: { url, mode, browserId } }),
+  openExternalUrl: (url: string) =>
+    command<string>("open_external_url", { request: { url } }),
   listSystemBrowsers: () => command<any[]>("list_system_browsers"),
   configureSchedule: (kind: string, enabled: boolean, intervalMinutes: number) =>
     command<any>("configure_schedule", { request: { kind, enabled, intervalMinutes } }),

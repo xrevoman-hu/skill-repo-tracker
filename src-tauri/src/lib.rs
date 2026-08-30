@@ -9,10 +9,13 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    io::{Cursor, Read, Write},
+    io::{Cursor, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     process::Command,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicU8, Ordering},
+        mpsc, Arc, Mutex,
+    },
     time::{Duration, SystemTime},
 };
 use tauri::{AppHandle, Manager, State};
@@ -21,6 +24,8 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 
 mod plugins;
+mod prompt_migration;
+mod prompts;
 mod temp_artifacts;
 
 use plugins::{scan_plugins_from_directory, scan_plugins_from_zip, sync_plugins, PluginScan};
@@ -30,9 +35,10 @@ use temp_artifacts::{
     SyncDestination, TempArtifactError, TempArtifactGuard, TempArtifactKind, TempArtifactRegistry,
 };
 
-const APP_VERSION: &str = "1.1.12";
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.1.12";
+const APP_VERSION: &str = "1.2.0";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.2.0";
 const MIGRATION_SCHEMA_VERSION: i64 = 1;
+const MAX_MIGRATION_PACKAGE_FILE_BYTES: u64 = 1_342_177_280;
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
 const TOKEN_USER: &str = "github-token";
 const LEGACY_GITHUB_ACCOUNT_ID: &str = "github:legacy-default";
@@ -157,17 +163,43 @@ impl From<zip::result::ZipError> for AppError {
     }
 }
 
+impl From<prompt_migration::PromptMigrationError> for AppError {
+    fn from(value: prompt_migration::PromptMigrationError) -> Self {
+        let code = value.code().to_string();
+        let message = match code.as_str() {
+            "prompt_migration_io_failed" | "prompt_migration_atomic_replace_failed" => {
+                "迁移包文件读写失败。".to_string()
+            }
+            "prompt_migration_database_failed" => "迁移包数据库操作失败。".to_string(),
+            _ => value.message().to_string(),
+        };
+        Self::new(code, message)
+    }
+}
+
 fn api_err<T: Serialize>(error: AppError) -> ApiResponse<T> {
     ApiResponse::err(error.code, error.message, error.details)
 }
 
 struct AppState {
     db: Mutex<Connection>,
+    db_path: PathBuf,
     http: reqwest::Client,
     data_dir: PathBuf,
     filesystem_lock: FilesystemMutationLock,
     temp_registry: TempArtifactRegistry,
+    prompt_search: Mutex<Option<PromptSearchControl>>,
 }
+
+#[derive(Clone)]
+struct PromptSearchControl {
+    interrupt: Arc<rusqlite::InterruptHandle>,
+    reason: Arc<AtomicU8>,
+}
+
+const PROMPT_SEARCH_ACTIVE: u8 = 0;
+const PROMPT_SEARCH_SUPERSEDED: u8 = 1;
+const PROMPT_SEARCH_TIMED_OUT: u8 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum GithubAuthSource {
@@ -233,12 +265,69 @@ impl GithubAuth {
     }
 }
 
+fn database_path_for_run(data_dir: &Path) -> Result<(PathBuf, bool), AppError> {
+    #[cfg(debug_assertions)]
+    if let Some(value) = std::env::var_os("SRT_DEBUG_DATABASE_PATH") {
+        let path = PathBuf::from(value);
+        let parent = path.parent().ok_or_else(|| {
+            AppError::new(
+                "debug_database_path_invalid",
+                "调试数据库必须位于系统临时目录中。",
+            )
+        })?;
+        fs::create_dir_all(parent)?;
+        let resolved_parent = parent.canonicalize()?;
+        let resolved_temp = std::env::temp_dir().canonicalize()?;
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if !resolved_parent.starts_with(&resolved_temp)
+            || !file_name.starts_with("skill-repo-tracker-prompt-debug-")
+            || !file_name.ends_with(".sqlite")
+        {
+            return Err(AppError::new(
+                "debug_database_path_invalid",
+                "调试数据库必须位于系统临时目录，且文件名使用 skill-repo-tracker-prompt-debug-*.sqlite。",
+            ));
+        }
+        return Ok((resolved_parent.join(file_name), true));
+    }
+    Ok((data_dir.join("skill-repo-tracker.sqlite"), false))
+}
+
+#[cfg(debug_assertions)]
+fn debug_fixture_number<T>(name: &str, default: T) -> T
+where
+    T: std::str::FromStr,
+{
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse::<T>().ok())
+        .unwrap_or(default)
+}
+
 impl AppState {
     fn new(data_dir: PathBuf) -> Result<Self, AppError> {
         fs::create_dir_all(&data_dir)?;
-        let db_path = data_dir.join("skill-repo-tracker.sqlite");
+        let (db_path, _debug_prompt_database) = database_path_for_run(&data_dir)?;
         let conn = Connection::open(&db_path)?;
+        conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
         migrate(&conn)?;
+        #[cfg(debug_assertions)]
+        if _debug_prompt_database && std::env::var("SRT_DEBUG_PROMPT_FIXTURE").as_deref() == Ok("1")
+        {
+            let existing: i64 =
+                conn.query_row("SELECT COUNT(*) FROM prompts", [], |row| row.get(0))?;
+            if existing == 0 {
+                prompts::seed_debug_prompt_fixture(
+                    &conn,
+                    debug_fixture_number("SRT_DEBUG_PROMPT_COUNT", 48usize),
+                    debug_fixture_number("SRT_DEBUG_PROMPT_BYTES", 1_048_576u64),
+                    debug_fixture_number("SRT_DEBUG_PROMPT_TAGS", 12usize),
+                )?;
+            }
+        }
         let filesystem_lock = FilesystemMutationLock::new(&data_dir)?;
         let temp_registry = TempArtifactRegistry::open(&db_path).map_err(|error| {
             AppError::with_details(
@@ -301,10 +390,12 @@ impl AppState {
 
         Ok(Self {
             db: Mutex::new(conn),
+            db_path,
             http: reqwest::Client::new(),
             data_dir,
             filesystem_lock,
             temp_registry,
+            prompt_search: Mutex::new(None),
         })
     }
 
@@ -933,6 +1024,59 @@ pub struct MigrationPackageSummary {
     skills: usize,
     plugins: usize,
     user_notes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompts: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tags: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    total_bytes: Option<u64>,
+    message: String,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportMigrationRequest {
+    #[serde(default)]
+    include_prompts: bool,
+}
+
+fn default_prompt_conflict_strategy() -> prompt_migration::PromptConflictStrategy {
+    prompt_migration::PromptConflictStrategy::KeepLocal
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportMigrationRequest {
+    path: String,
+    expected_package_sha256: String,
+    expected_package_size_bytes: u64,
+    #[serde(default = "default_prompt_conflict_strategy")]
+    conflict_strategy: prompt_migration::PromptConflictStrategy,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptMigrationConflictPreview {
+    id: String,
+    title: String,
+    kind: String,
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptMigrationPreview {
+    path: Option<String>,
+    cancelled: bool,
+    format: String,
+    package_sha256: Option<String>,
+    package_size_bytes: u64,
+    prompts: u64,
+    tags: u64,
+    total_bytes: u64,
+    conflicts: Vec<PromptMigrationConflictPreview>,
+    different_conflict_count: u64,
+    has_different_conflicts: bool,
+    valid: bool,
     message: String,
 }
 
@@ -1088,6 +1232,75 @@ pub struct ScheduleRequest {
     kind: String,
     enabled: bool,
     interval_minutes: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptIdRequest {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptRevisionRequest {
+    id: String,
+    expected_revision: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptPinnedRequest {
+    id: String,
+    pinned: bool,
+    expected_revision: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptTagNameRequest {
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptTagRenameRequest {
+    tag_id: String,
+    name: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptTagMergeRequest {
+    source_tag_id: String,
+    target_tag_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptTagIdRequest {
+    tag_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptExportSelectionRequest {
+    selection: prompts::PromptSelection,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalUrlRequest {
+    url: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptExportSummary {
+    path: Option<String>,
+    cancelled: bool,
+    count: usize,
+    bytes: u64,
+    message: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -1563,6 +1776,7 @@ fn migrate(conn: &Connection) -> Result<(), AppError> {
         "ALTER TABLE backup_jobs ADD COLUMN retry_reason TEXT",
     )?;
     backfill_search_metadata(conn)?;
+    prompts::migrate_prompt_library(conn)?;
     Ok(())
 }
 
@@ -8924,19 +9138,18 @@ fn migration_summary(
         skills: package.skills.len(),
         plugins: package.plugins.len(),
         user_notes: package.user_notes.len(),
+        prompts: None,
+        tags: None,
+        total_bytes: None,
         message: message.into(),
     }
 }
 
-fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Result<(), AppError> {
-    if package.schema_version != MIGRATION_SCHEMA_VERSION {
-        return Err(AppError::with_details(
-            "migration_schema_unsupported",
-            "迁移包版本不兼容。",
-            format!("schemaVersion={}", package.schema_version),
-        ));
-    }
-    let conn = conn.unchecked_transaction()?;
+fn merge_migration_package_rows(
+    conn: &Connection,
+    package: &MigrationPackage,
+) -> Result<(), AppError> {
+    validate_migration_package_schema(package)?;
     let now = utc_now();
     for account in &package.github_accounts {
         conn.execute(
@@ -9203,10 +9416,17 @@ fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Res
             params![note.scope, note.entity_key, note.note, note.updated_at],
         )?;
     }
-    conn.commit()?;
     Ok(())
 }
 
+fn merge_migration_package(conn: &Connection, package: &MigrationPackage) -> Result<(), AppError> {
+    let transaction = conn.unchecked_transaction()?;
+    merge_migration_package_rows(&transaction, package)?;
+    transaction.commit()?;
+    Ok(())
+}
+
+#[cfg(test)]
 fn parse_migration_package(contents: &str) -> Result<MigrationPackage, AppError> {
     serde_json::from_str(contents).map_err(|error| {
         AppError::with_details(
@@ -9217,39 +9437,383 @@ fn parse_migration_package(contents: &str) -> Result<MigrationPackage, AppError>
     })
 }
 
+fn parse_migration_package_bytes(contents: &[u8]) -> Result<MigrationPackage, AppError> {
+    serde_json::from_slice(contents).map_err(|error| {
+        AppError::with_details(
+            "migration_package_invalid",
+            "迁移包 JSON 无法解析。",
+            error.to_string(),
+        )
+    })
+}
+
+fn validate_migration_package_schema(package: &MigrationPackage) -> Result<(), AppError> {
+    if package.schema_version != MIGRATION_SCHEMA_VERSION {
+        return Err(AppError::with_details(
+            "migration_schema_unsupported",
+            "迁移包版本不兼容。",
+            format!("schemaVersion={}", package.schema_version),
+        ));
+    }
+    Ok(())
+}
+
+fn cancelled_migration_summary(message: impl Into<String>) -> MigrationPackageSummary {
+    MigrationPackageSummary {
+        path: None,
+        cancelled: true,
+        github_accounts: 0,
+        github_repositories: 0,
+        repositories: 0,
+        skills: 0,
+        plugins: 0,
+        user_notes: 0,
+        prompts: None,
+        tags: None,
+        total_bytes: None,
+        message: message.into(),
+    }
+}
+
+fn write_migration_package_to_path(
+    conn: &Connection,
+    path: &Path,
+    include_prompts: bool,
+) -> Result<MigrationPackageSummary, AppError> {
+    let package = build_migration_package(conn)?;
+    let legacy_v1_json = serde_json::to_vec_pretty(&package).map_err(|error| {
+        AppError::with_details(
+            "migration_export_failed",
+            "迁移包序列化失败。",
+            error.to_string(),
+        )
+    })?;
+
+    if !include_prompts {
+        prompts::write_bytes_atomic(path, &legacy_v1_json)?;
+        return Ok(migration_summary(
+            &package,
+            Some(path_string(path)),
+            false,
+            "导出完成。",
+        ));
+    }
+
+    let mut tag_statement = conn.prepare(
+        "SELECT id, name, normalized_name, created_at, updated_at
+         FROM prompt_tags ORDER BY id ASC",
+    )?;
+    let tag_rows = tag_statement.query_map([], |row| {
+        Ok(prompt_migration::PromptMigrationTag {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            normalized_name: row.get(2)?,
+            created_at: row.get(3)?,
+            updated_at: row.get(4)?,
+        })
+    })?;
+
+    let mut prompt_statement = conn.prepare(
+        "SELECT id, title, content, excerpt, pinned, revision, created_at, updated_at
+         FROM prompts ORDER BY id ASC",
+    )?;
+    let prompt_rows = prompt_statement.query_map([], |row| {
+        let content = row.get::<_, String>(2)?;
+        let content_sha256 = hex::encode(Sha256::digest(content.as_bytes()));
+        Ok(prompt_migration::PromptMigrationPrompt {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            content,
+            excerpt: row.get(3)?,
+            pinned: row.get::<_, i64>(4)? == 1,
+            revision: row.get(5)?,
+            created_at: row.get(6)?,
+            updated_at: row.get(7)?,
+            content_sha256,
+        })
+    })?;
+
+    let mut link_statement = conn.prepare(
+        "SELECT prompt.id, tag.id
+         FROM prompt_tag_links AS link
+         JOIN prompts AS prompt ON prompt.row_id = link.prompt_row_id
+         JOIN prompt_tags AS tag ON tag.row_id = link.tag_row_id
+         ORDER BY prompt.id ASC, tag.id ASC",
+    )?;
+    let link_rows = link_statement.query_map([], |row| {
+        Ok(prompt_migration::PromptMigrationLink {
+            prompt_id: row.get(0)?,
+            tag_id: row.get(1)?,
+        })
+    })?;
+
+    let exported = prompt_migration::write_v2_package_atomic(
+        path,
+        &legacy_v1_json,
+        APP_VERSION,
+        &package.exported_at,
+        tag_rows.map(|row| row.map_err(prompt_migration::PromptMigrationError::from)),
+        prompt_rows.map(|row| row.map_err(prompt_migration::PromptMigrationError::from)),
+        link_rows.map(|row| row.map_err(prompt_migration::PromptMigrationError::from)),
+    )?;
+    let mut summary = migration_summary(
+        &package,
+        Some(path_string(path)),
+        false,
+        "含提示词库的迁移包已导出。",
+    );
+    summary.prompts = Some(exported.prompts);
+    summary.tags = Some(exported.tags);
+    summary.total_bytes = Some(exported.total_body_bytes);
+    Ok(summary)
+}
+
+struct MigrationPackageSnapshot {
+    file: fs::File,
+    sha256: String,
+    size_bytes: u64,
+}
+
+fn snapshot_migration_package(
+    path: &Path,
+    expected: Option<(&str, u64)>,
+) -> Result<MigrationPackageSnapshot, AppError> {
+    if let Some((expected_sha256, expected_size_bytes)) = expected {
+        let normalized_sha256 = expected_sha256.trim();
+        if normalized_sha256.len() != 64
+            || !normalized_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || expected_size_bytes == 0
+            || expected_size_bytes > MAX_MIGRATION_PACKAGE_FILE_BYTES
+        {
+            return Err(AppError::new(
+                "migration_import_fingerprint_invalid",
+                "迁移包预检指纹无效，请重新选择文件并预检。",
+            ));
+        }
+        let metadata_size = fs::metadata(path)?.len();
+        if metadata_size != expected_size_bytes {
+            return Err(AppError::new(
+                "migration_package_changed_since_preview",
+                "迁移包在预检后发生变化，请重新选择文件并预检。",
+            ));
+        }
+    }
+
+    let mut source = fs::File::open(path)?;
+    let mut snapshot = tempfile::tempfile()?;
+    let mut hasher = Sha256::new();
+    let mut size_bytes = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = source.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        size_bytes = size_bytes.checked_add(read as u64).ok_or_else(|| {
+            AppError::new("migration_package_file_too_large", "迁移包文件大小溢出。")
+        })?;
+        if size_bytes > MAX_MIGRATION_PACKAGE_FILE_BYTES {
+            return Err(AppError::new(
+                "migration_package_file_too_large",
+                "迁移包文件超过允许上限。",
+            ));
+        }
+        hasher.update(&buffer[..read]);
+        snapshot.write_all(&buffer[..read])?;
+    }
+    snapshot.flush()?;
+    snapshot.sync_all()?;
+    snapshot.seek(SeekFrom::Start(0))?;
+    let sha256 = hex::encode(hasher.finalize());
+
+    if let Some((expected_sha256, expected_size_bytes)) = expected {
+        if size_bytes != expected_size_bytes || !sha256.eq_ignore_ascii_case(expected_sha256.trim())
+        {
+            return Err(AppError::new(
+                "migration_package_changed_since_preview",
+                "迁移包在预检后发生变化，请重新选择文件并预检。",
+            ));
+        }
+    }
+
+    Ok(MigrationPackageSnapshot {
+        file: snapshot,
+        sha256,
+        size_bytes,
+    })
+}
+
+fn migration_preview_for_path(
+    conn: &Connection,
+    path: &Path,
+) -> Result<PromptMigrationPreview, AppError> {
+    let mut snapshot = snapshot_migration_package(path, None)?;
+    let package_sha256 = snapshot.sha256.clone();
+    let package_size_bytes = snapshot.size_bytes;
+    match prompt_migration::detect_migration_package(&mut snapshot.file)? {
+        prompt_migration::MigrationPackageKind::LegacyV1Json => {
+            let contents = prompt_migration::read_legacy_v1_json(&mut snapshot.file)?;
+            let package = parse_migration_package_bytes(&contents)?;
+            validate_migration_package_schema(&package)?;
+            Ok(PromptMigrationPreview {
+                path: Some(path_string(path)),
+                cancelled: false,
+                format: "v1".to_string(),
+                package_sha256: Some(package_sha256),
+                package_size_bytes,
+                prompts: 0,
+                tags: 0,
+                total_bytes: contents.len() as u64,
+                conflicts: Vec::new(),
+                different_conflict_count: 0,
+                has_different_conflicts: false,
+                valid: true,
+                message: "旧版 v1 JSON 迁移包校验通过。".to_string(),
+            })
+        }
+        prompt_migration::MigrationPackageKind::PromptLibraryV2Zip => {
+            let preflight = prompt_migration::preflight_v2_for_connection(
+                conn,
+                &mut snapshot.file,
+                &prompt_migration::PromptMigrationLimits::default(),
+                prompt_migration::PromptConflictStrategy::KeepLocal,
+            )?;
+            let legacy_v1_json =
+                prompt_migration::extract_embedded_legacy_v1_json(&mut snapshot.file)?;
+            let legacy_package = parse_migration_package_bytes(&legacy_v1_json)?;
+            validate_migration_package_schema(&legacy_package)?;
+            let different_conflict_count = preflight
+                .decisions
+                .iter()
+                .filter(|decision| {
+                    decision.action == prompt_migration::PromptImportAction::KeepLocal
+                })
+                .count() as u64;
+            let mut conflicts = Vec::new();
+            for decision in &preflight.decisions {
+                let kind = match &decision.action {
+                    prompt_migration::PromptImportAction::SkipSame => "same",
+                    prompt_migration::PromptImportAction::KeepLocal => "different",
+                    _ => continue,
+                };
+                let title = conn
+                    .query_row(
+                        "SELECT title FROM prompts WHERE id = ?1",
+                        [&decision.incoming_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .unwrap_or_else(|| decision.incoming_id.clone());
+                conflicts.push(PromptMigrationConflictPreview {
+                    id: decision.incoming_id.clone(),
+                    title,
+                    kind: kind.to_string(),
+                });
+                if conflicts.len() >= 200 {
+                    break;
+                }
+            }
+            Ok(PromptMigrationPreview {
+                path: Some(path_string(path)),
+                cancelled: false,
+                format: "v2".to_string(),
+                package_sha256: Some(package_sha256),
+                package_size_bytes,
+                prompts: preflight.prompts,
+                tags: preflight.tags,
+                total_bytes: preflight.total_body_bytes,
+                conflicts,
+                different_conflict_count,
+                has_different_conflicts: different_conflict_count > 0,
+                valid: true,
+                message: "提示词库 v2 迁移包预检通过。".to_string(),
+            })
+        }
+    }
+}
+
+fn import_migration_package_from_path(
+    conn: &mut Connection,
+    path: &Path,
+    strategy: prompt_migration::PromptConflictStrategy,
+    expected_package_sha256: &str,
+    expected_package_size_bytes: u64,
+) -> Result<MigrationPackageSummary, AppError> {
+    let mut snapshot = snapshot_migration_package(
+        path,
+        Some((expected_package_sha256, expected_package_size_bytes)),
+    )?;
+    match prompt_migration::detect_migration_package(&mut snapshot.file)? {
+        prompt_migration::MigrationPackageKind::LegacyV1Json => {
+            let contents = prompt_migration::read_legacy_v1_json(&mut snapshot.file)?;
+            let package = parse_migration_package_bytes(&contents)?;
+            merge_migration_package(conn, &package)?;
+            Ok(migration_summary(
+                &package,
+                Some(path_string(path)),
+                false,
+                "导入完成。",
+            ))
+        }
+        prompt_migration::MigrationPackageKind::PromptLibraryV2Zip => {
+            let legacy_v1_json =
+                prompt_migration::extract_embedded_legacy_v1_json(&mut snapshot.file)?;
+            let legacy_package = parse_migration_package_bytes(&legacy_v1_json)?;
+            validate_migration_package_schema(&legacy_package)?;
+            let imported = prompt_migration::import_v2_transactional_with_legacy(
+                conn,
+                &mut snapshot.file,
+                &prompt_migration::PromptMigrationLimits::default(),
+                strategy,
+                |transaction, embedded_legacy_v1_json| {
+                    let package = parse_migration_package_bytes(embedded_legacy_v1_json)
+                        .map_err(prompt_migration::PromptMigrationError::from)?;
+                    merge_migration_package_rows(transaction, &package)
+                        .map_err(prompt_migration::PromptMigrationError::from)
+                },
+            )?;
+            let mut summary = migration_summary(
+                &legacy_package,
+                Some(path_string(path)),
+                false,
+                "含提示词库的迁移包已导入。",
+            );
+            summary.prompts = Some(imported.preflight.prompts);
+            summary.tags = Some(imported.preflight.tags);
+            summary.total_bytes = Some(imported.preflight.total_body_bytes);
+            Ok(summary)
+        }
+    }
+}
+
 #[tauri::command]
 async fn export_migration_package(
     app: AppHandle,
     state: State<'_, AppState>,
+    request: ExportMigrationRequest,
 ) -> CommandResult<MigrationPackageSummary> {
-    let package = {
-        let db = state.db.lock().expect("db mutex poisoned");
-        match build_migration_package(&db) {
-            Ok(package) => package,
-            Err(error) => return Ok(api_err(error)),
-        }
-    };
-    let contents = match serde_json::to_string_pretty(&package) {
-        Ok(contents) => contents,
-        Err(error) => {
-            return Ok(api_err(AppError::with_details(
-                "migration_export_failed",
-                "迁移包序列化失败。",
-                error.to_string(),
-            )))
-        }
+    let extension = if request.include_prompts {
+        "srtmigration"
+    } else {
+        "json"
     };
     let file_name = format!(
-        "skill-repo-tracker-migration-v{}-{}.json",
+        "skill-repo-tracker-migration-v{}-{}.{}",
         APP_VERSION,
-        Local::now().format("%Y%m%d-%H%M%S")
+        Local::now().format("%Y%m%d-%H%M%S"),
+        extension
     );
+    let include_prompts = request.include_prompts;
     let selected = tauri::async_runtime::spawn_blocking(move || {
-        app.dialog()
-            .file()
-            .add_filter("JSON", &["json"])
-            .set_file_name(&file_name)
-            .blocking_save_file()
+        let dialog = app.dialog().file();
+        let dialog = if include_prompts {
+            dialog.add_filter("Skill Repo Tracker Migration", &["srtmigration"])
+        } else {
+            dialog.add_filter("JSON", &["json"])
+        };
+        dialog.set_file_name(&file_name).blocking_save_file()
     })
     .await
     .map_err(|error| {
@@ -9263,12 +9827,7 @@ async fn export_migration_package(
         Ok(path) => path,
         Err(error) => return Ok(api_err(error)),
     }) else {
-        return Ok(ApiResponse::ok(migration_summary(
-            &package,
-            None,
-            true,
-            "导出已取消。",
-        )));
+        return Ok(ApiResponse::ok(cancelled_migration_summary("导出已取消。")));
     };
     let path = match path.into_path() {
         Ok(path) => path,
@@ -9280,33 +9839,29 @@ async fn export_migration_package(
             )))
         }
     };
-    if let Err(error) = fs::write(&path, contents) {
-        return Ok(api_err(AppError::from(error)));
+    let db = state.db.lock().expect("db mutex poisoned");
+    match write_migration_package_to_path(&db, &path, request.include_prompts) {
+        Ok(summary) => Ok(ApiResponse::ok(summary)),
+        Err(error) => Ok(api_err(error)),
     }
-    Ok(ApiResponse::ok(migration_summary(
-        &package,
-        Some(path_string(&path)),
-        false,
-        "导出完成。",
-    )))
 }
 
 #[tauri::command]
-async fn import_migration_package(
+async fn preview_prompt_migration_package(
     app: AppHandle,
     state: State<'_, AppState>,
-) -> CommandResult<MigrationPackageSummary> {
+) -> CommandResult<PromptMigrationPreview> {
     let selected = tauri::async_runtime::spawn_blocking(move || {
         app.dialog()
             .file()
-            .add_filter("JSON", &["json"])
+            .add_filter("Migration package", &["json", "srtmigration"])
             .blocking_pick_file()
     })
     .await
     .map_err(|error| {
         AppError::with_details(
-            "migration_import_failed",
-            "选择导入文件失败。",
+            "migration_preflight_failed",
+            "选择迁移包失败。",
             error.to_string(),
         )
     });
@@ -9314,48 +9869,62 @@ async fn import_migration_package(
         Ok(path) => path,
         Err(error) => return Ok(api_err(error)),
     }) else {
-        return Ok(ApiResponse::ok(MigrationPackageSummary {
+        return Ok(ApiResponse::ok(PromptMigrationPreview {
             path: None,
             cancelled: true,
-            github_accounts: 0,
-            github_repositories: 0,
-            repositories: 0,
-            skills: 0,
-            plugins: 0,
-            user_notes: 0,
-            message: "导入已取消。".into(),
+            format: "v1".to_string(),
+            package_sha256: None,
+            package_size_bytes: 0,
+            prompts: 0,
+            tags: 0,
+            total_bytes: 0,
+            conflicts: Vec::new(),
+            different_conflict_count: 0,
+            has_different_conflicts: false,
+            valid: true,
+            message: "导入已取消。".to_string(),
         }));
     };
     let path = match path.into_path() {
         Ok(path) => path,
         Err(error) => {
             return Ok(api_err(AppError::with_details(
-                "migration_import_failed",
-                "解析导入路径失败。",
+                "migration_preflight_failed",
+                "解析迁移包路径失败。",
                 error.to_string(),
             )))
         }
     };
-    let contents = match fs::read_to_string(&path) {
-        Ok(contents) => contents,
-        Err(error) => return Ok(api_err(AppError::from(error))),
-    };
-    let package = match parse_migration_package(&contents) {
-        Ok(package) => package,
-        Err(error) => return Ok(api_err(error)),
-    };
-    {
-        let db = state.db.lock().expect("db mutex poisoned");
-        if let Err(error) = merge_migration_package(&db, &package) {
-            return Ok(api_err(error));
-        }
+    let db = state.db.lock().expect("db mutex poisoned");
+    match migration_preview_for_path(&db, &path) {
+        Ok(preview) => Ok(ApiResponse::ok(preview)),
+        Err(error) => Ok(api_err(error)),
     }
-    Ok(ApiResponse::ok(migration_summary(
-        &package,
-        Some(path_string(&path)),
-        false,
-        "导入完成。",
-    )))
+}
+
+#[tauri::command]
+async fn import_migration_package(
+    state: State<'_, AppState>,
+    request: ImportMigrationRequest,
+) -> CommandResult<MigrationPackageSummary> {
+    let path = PathBuf::from(request.path.trim());
+    if request.path.trim().is_empty() || !path.is_file() {
+        return Ok(api_err(AppError::new(
+            "migration_import_path_invalid",
+            "迁移包路径无效或文件不存在。",
+        )));
+    }
+    let mut db = state.db.lock().expect("db mutex poisoned");
+    match import_migration_package_from_path(
+        &mut db,
+        &path,
+        request.conflict_strategy,
+        &request.expected_package_sha256,
+        request.expected_package_size_bytes,
+    ) {
+        Ok(summary) => Ok(ApiResponse::ok(summary)),
+        Err(error) => Ok(api_err(error)),
+    }
 }
 
 #[tauri::command]
@@ -9856,6 +10425,372 @@ async fn add_repository_from_github(
 }
 
 #[tauri::command]
+async fn list_prompts(
+    request: prompts::PromptListRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<prompts::PromptPage> {
+    let conn = match prompts::open_prompt_read_connection(&state.db_path) {
+        Ok(conn) => conn,
+        Err(error) => return Ok(api_err(error)),
+    };
+    let control = PromptSearchControl {
+        interrupt: Arc::new(conn.get_interrupt_handle()),
+        reason: Arc::new(AtomicU8::new(PROMPT_SEARCH_ACTIVE)),
+    };
+    {
+        let mut active = state
+            .prompt_search
+            .lock()
+            .expect("prompt search mutex poisoned");
+        if let Some(previous) = active.replace(control.clone()) {
+            previous
+                .reason
+                .store(PROMPT_SEARCH_SUPERSEDED, Ordering::SeqCst);
+            previous.interrupt.interrupt();
+        }
+    }
+
+    let watchdog_control = control.clone();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let watchdog = std::thread::spawn(move || {
+        if finished_rx.recv_timeout(Duration::from_secs(1)).is_err()
+            && watchdog_control
+                .reason
+                .compare_exchange(
+                    PROMPT_SEARCH_ACTIVE,
+                    PROMPT_SEARCH_TIMED_OUT,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                )
+                .is_ok()
+        {
+            watchdog_control.interrupt.interrupt();
+        }
+    });
+    let outcome =
+        tauri::async_runtime::spawn_blocking(move || prompts::list_prompts(&conn, &request)).await;
+    let _ = finished_tx.send(());
+    let _ = watchdog.join();
+    {
+        let mut active = state
+            .prompt_search
+            .lock()
+            .expect("prompt search mutex poisoned");
+        if active
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(&current.interrupt, &control.interrupt))
+        {
+            *active = None;
+        }
+    }
+    let reason = control.reason.load(Ordering::SeqCst);
+    let result = match outcome {
+        Ok(Ok(page)) => Ok(page),
+        Ok(Err(_error)) if reason == PROMPT_SEARCH_SUPERSEDED => Err(AppError::new(
+            "prompt_search_cancelled",
+            "搜索已被更新的查询取代。",
+        )),
+        Ok(Err(_error)) if reason == PROMPT_SEARCH_TIMED_OUT => Err(AppError::new(
+            "prompt_search_timeout",
+            "搜索超过 1 秒，已取消。请缩小查询范围。",
+        )),
+        Ok(Err(error)) => Err(error),
+        Err(error) => Err(AppError::with_details(
+            "prompt_search_failed",
+            "提示词搜索任务失败。",
+            error.to_string(),
+        )),
+    };
+    Ok(match result {
+        Ok(page) => ApiResponse::ok(page),
+        Err(error) => api_err(error),
+    })
+}
+
+#[tauri::command]
+fn get_prompt_detail(
+    request: PromptIdRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<prompts::PromptDetail> {
+    let result = (|| -> Result<prompts::PromptDetail, AppError> {
+        let conn = prompts::open_prompt_read_connection(&state.db_path)?;
+        prompts::get_prompt_detail(&conn, &request.id)?
+            .ok_or_else(|| AppError::new("prompt_not_found", "提示词不存在或已被删除。"))
+    })();
+    match result {
+        Ok(detail) => ApiResponse::ok(detail),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn create_prompt(
+    request: prompts::PromptCreateInput,
+    state: State<'_, AppState>,
+) -> ApiResponse<prompts::PromptDetail> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match prompts::create_prompt(&db, &request) {
+        Ok(detail) => ApiResponse::ok(detail),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn update_prompt(
+    request: prompts::PromptUpdateInput,
+    state: State<'_, AppState>,
+) -> ApiResponse<prompts::PromptDetail> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match prompts::update_prompt(&db, &request) {
+        Ok(detail) => ApiResponse::ok(detail),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn delete_prompt(request: PromptRevisionRequest, state: State<'_, AppState>) -> ApiResponse<()> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match prompts::delete_prompt(&db, &request.id, request.expected_revision) {
+        Ok(()) => ApiResponse::ok(()),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn set_prompt_pinned(
+    request: PromptPinnedRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<prompts::PromptSummary> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match prompts::set_prompt_pinned(&db, &request.id, request.pinned, request.expected_revision) {
+        Ok(summary) => ApiResponse::ok(summary),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn list_prompt_tags(state: State<'_, AppState>) -> ApiResponse<Vec<prompts::PromptTag>> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match prompts::list_prompt_tags(&db) {
+        Ok(tags) => ApiResponse::ok(tags),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn create_prompt_tag(
+    request: PromptTagNameRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<prompts::PromptTag> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match prompts::create_prompt_tag(&db, &request.name) {
+        Ok(tag) => ApiResponse::ok(tag),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn rename_prompt_tag(
+    request: PromptTagRenameRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<prompts::PromptTag> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match prompts::rename_prompt_tag(&db, &request.tag_id, &request.name) {
+        Ok(tag) => ApiResponse::ok(tag),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn merge_prompt_tags(
+    request: PromptTagMergeRequest,
+    state: State<'_, AppState>,
+) -> ApiResponse<prompts::PromptTag> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match prompts::merge_prompt_tags(&db, &request.source_tag_id, &request.target_tag_id) {
+        Ok(tag) => ApiResponse::ok(tag),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
+fn delete_prompt_tag(request: PromptTagIdRequest, state: State<'_, AppState>) -> ApiResponse<()> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match prompts::delete_prompt_tag(&db, &request.tag_id) {
+        Ok(()) => ApiResponse::ok(()),
+        Err(error) => api_err(error),
+    }
+}
+
+fn prompt_export_summary(
+    artifact: Option<prompts::PromptExportArtifact>,
+    cancelled: bool,
+    message: impl Into<String>,
+) -> PromptExportSummary {
+    PromptExportSummary {
+        path: artifact.as_ref().map(|item| item.path.clone()),
+        cancelled,
+        count: artifact.as_ref().map_or(0, |item| item.item_count),
+        bytes: artifact.as_ref().map_or(0, |item| item.size_bytes),
+        message: message.into(),
+    }
+}
+
+#[tauri::command]
+async fn export_prompt_markdown(
+    request: PromptIdRequest,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<PromptExportSummary> {
+    let exported_at = Local::now();
+    let file_name = prompts::suggested_prompt_export_file_name("md", exported_at);
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Markdown", &["md"])
+            .set_file_name(&file_name)
+            .blocking_save_file()
+    })
+    .await;
+    let Some(path) = (match selected {
+        Ok(path) => path,
+        Err(error) => {
+            return Ok(api_err(AppError::with_details(
+                "prompt_export_dialog_failed",
+                "选择提示词导出路径失败。",
+                error.to_string(),
+            )))
+        }
+    }) else {
+        return Ok(ApiResponse::ok(prompt_export_summary(
+            None,
+            true,
+            "导出已取消。",
+        )));
+    };
+    let path = match path.into_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return Ok(api_err(AppError::with_details(
+                "prompt_export_path_failed",
+                "解析提示词导出路径失败。",
+                error.to_string(),
+            )))
+        }
+    };
+    let conn = match prompts::open_prompt_read_connection(&state.db_path) {
+        Ok(conn) => conn,
+        Err(error) => return Ok(api_err(error)),
+    };
+    Ok(
+        match prompts::export_prompt_markdown_to_path(&conn, &request.id, &path, exported_at) {
+            Ok(artifact) => ApiResponse::ok(prompt_export_summary(
+                Some(artifact),
+                false,
+                "Markdown 导出完成。",
+            )),
+            Err(error) => api_err(error),
+        },
+    )
+}
+
+#[tauri::command]
+async fn export_prompts_zip(
+    request: PromptExportSelectionRequest,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<PromptExportSummary> {
+    let exported_at = Local::now();
+    let file_name = prompts::suggested_prompt_export_file_name("zip", exported_at);
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("ZIP", &["zip"])
+            .set_file_name(&file_name)
+            .blocking_save_file()
+    })
+    .await;
+    let Some(path) = (match selected {
+        Ok(path) => path,
+        Err(error) => {
+            return Ok(api_err(AppError::with_details(
+                "prompt_export_dialog_failed",
+                "选择批量导出路径失败。",
+                error.to_string(),
+            )))
+        }
+    }) else {
+        return Ok(ApiResponse::ok(prompt_export_summary(
+            None,
+            true,
+            "导出已取消。",
+        )));
+    };
+    let path = match path.into_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return Ok(api_err(AppError::with_details(
+                "prompt_export_path_failed",
+                "解析批量导出路径失败。",
+                error.to_string(),
+            )))
+        }
+    };
+    let conn = match prompts::open_prompt_read_connection(&state.db_path) {
+        Ok(conn) => conn,
+        Err(error) => return Ok(api_err(error)),
+    };
+    Ok(
+        match prompts::export_prompts_zip_to_path(&conn, &request.selection, &path, exported_at) {
+            Ok(artifact) => ApiResponse::ok(prompt_export_summary(
+                Some(artifact),
+                false,
+                "ZIP 导出完成。",
+            )),
+            Err(error) => api_err(error),
+        },
+    )
+}
+
+#[tauri::command]
+fn open_external_url(request: ExternalUrlRequest) -> ApiResponse<String> {
+    let parsed = match reqwest::Url::parse(&request.url) {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            return api_err(AppError::with_details(
+                "external_url_invalid",
+                "外部链接格式无效。",
+                error.to_string(),
+            ))
+        }
+    };
+    let allowed = match parsed.scheme() {
+        "http" | "https" => {
+            parsed.host_str().is_some()
+                && parsed.username().is_empty()
+                && parsed.password().is_none()
+        }
+        "mailto" => !parsed.path().trim().is_empty(),
+        _ => false,
+    };
+    if !allowed {
+        return api_err(AppError::new(
+            "external_url_blocked",
+            "仅允许打开 http、https 或 mailto 外部链接。",
+        ));
+    }
+    let url = parsed.to_string();
+    match opener::open(&url) {
+        Ok(()) => ApiResponse::ok(url),
+        Err(error) => api_err(AppError::with_details(
+            "external_url_open_failed",
+            "无法打开外部链接。",
+            error.to_string(),
+        )),
+    }
+}
+
+#[tauri::command]
 fn list_backup_history(state: State<'_, AppState>) -> ApiResponse<Vec<BackupHistory>> {
     let db = state.db.lock().expect("db mutex poisoned");
     let result = (|| -> Result<Vec<BackupHistory>, AppError> {
@@ -10012,6 +10947,22 @@ pub fn run() {
             let state = AppState::new(data_dir)
                 .map_err(|err| tauri::Error::Anyhow(anyhow::anyhow!(err.message)))?;
             app.manage(state);
+            #[cfg(debug_assertions)]
+            if let (Some(width), Some(height)) = (
+                std::env::var("SRT_DEBUG_WINDOW_WIDTH")
+                    .ok()
+                    .and_then(|value| value.parse::<f64>().ok()),
+                std::env::var("SRT_DEBUG_WINDOW_HEIGHT")
+                    .ok()
+                    .and_then(|value| value.parse::<f64>().ok()),
+            ) {
+                if (980.0..=3840.0).contains(&width) && (640.0..=2160.0).contains(&height) {
+                    if let Some(window) = app.get_webview_window("main") {
+                        window.set_size(tauri::LogicalSize::new(width, height))?;
+                        window.set_position(tauri::LogicalPosition::new(0.0, 0.0))?;
+                    }
+                }
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -10064,6 +11015,21 @@ pub fn run() {
             open_url,
             list_system_browsers,
             configure_schedule,
+            list_prompts,
+            get_prompt_detail,
+            create_prompt,
+            update_prompt,
+            delete_prompt,
+            set_prompt_pinned,
+            list_prompt_tags,
+            create_prompt_tag,
+            rename_prompt_tag,
+            merge_prompt_tags,
+            delete_prompt_tag,
+            export_prompt_markdown,
+            export_prompts_zip,
+            open_external_url,
+            preview_prompt_migration_package,
             export_migration_package,
             import_migration_package
         ])
@@ -12756,6 +13722,359 @@ clawhub install baoyu-image-gen
             .contains("Repository README marker"));
         assert!(package.skills[0].search_text.contains("Local demo"));
         assert_eq!(package.plugins[0].search_text, "{}");
+    }
+
+    #[test]
+    fn migration_command_requests_accept_camel_case_wire_values() {
+        let export: ExportMigrationRequest =
+            serde_json::from_value(serde_json::json!({ "includePrompts": true })).unwrap();
+        assert!(export.include_prompts);
+
+        let import: ImportMigrationRequest = serde_json::from_value(serde_json::json!({
+            "path": "/tmp/example.srtmigration",
+            "expectedPackageSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "expectedPackageSizeBytes": 42,
+            "conflictStrategy": "duplicate"
+        }))
+        .unwrap();
+        assert_eq!(import.path, "/tmp/example.srtmigration");
+        assert_eq!(import.expected_package_size_bytes, 42);
+        assert_eq!(
+            import.conflict_strategy,
+            prompt_migration::PromptConflictStrategy::Duplicate
+        );
+
+        let default_strategy: ImportMigrationRequest = serde_json::from_value(serde_json::json!({
+            "path": "/tmp/example.srtmigration",
+            "expectedPackageSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "expectedPackageSizeBytes": 1
+        }))
+        .unwrap();
+        assert_eq!(
+            default_strategy.conflict_strategy,
+            prompt_migration::PromptConflictStrategy::KeepLocal
+        );
+        assert!(
+            serde_json::from_value::<ImportMigrationRequest>(serde_json::json!({
+                "path": "/tmp/example.srtmigration"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn production_migration_export_keeps_v1_json_and_round_trips_v2() {
+        let source = Connection::open_in_memory().unwrap();
+        migrate(&source).unwrap();
+        save_user_note(
+            &source,
+            "repository",
+            "migration-v2-note",
+            "legacy metadata",
+        )
+        .unwrap();
+        let tag = prompts::create_prompt_tag(&source, "研究").unwrap();
+        prompts::create_prompt(
+            &source,
+            &prompts::PromptCreateInput {
+                id: Some("prompt-production-wire".to_string()),
+                title: "迁移提示词".to_string(),
+                content: "# incoming\n\n完整正文".to_string(),
+                tag_ids: vec![tag.id],
+                pinned: true,
+            },
+        )
+        .unwrap();
+
+        let directory = tempfile::tempdir().unwrap();
+        let legacy_path = directory.path().join("legacy.json");
+        let legacy_summary = write_migration_package_to_path(&source, &legacy_path, false).unwrap();
+        assert!(legacy_summary.prompts.is_none());
+        let legacy_value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&legacy_path).unwrap()).unwrap();
+        assert_eq!(legacy_value["schemaVersion"], MIGRATION_SCHEMA_VERSION);
+        assert!(legacy_value.get("prompts").is_none());
+        let mut legacy_file = fs::File::open(&legacy_path).unwrap();
+        assert_eq!(
+            prompt_migration::detect_migration_package(&mut legacy_file).unwrap(),
+            prompt_migration::MigrationPackageKind::LegacyV1Json
+        );
+
+        let v2_path = directory.path().join("with-prompts.srtmigration");
+        let v2_summary = write_migration_package_to_path(&source, &v2_path, true).unwrap();
+        assert_eq!(v2_summary.prompts, Some(1));
+        assert_eq!(v2_summary.tags, Some(1));
+        let preview = migration_preview_for_path(&source, &v2_path).unwrap();
+        assert_eq!(preview.format, "v2");
+        assert_eq!(preview.prompts, 1);
+        assert_eq!(preview.tags, 1);
+        assert!(preview.conflicts.iter().any(|conflict| {
+            conflict.id == "prompt-production-wire" && conflict.kind == "same"
+        }));
+
+        let mut target = Connection::open_in_memory().unwrap();
+        migrate(&target).unwrap();
+        prompts::create_prompt(
+            &target,
+            &prompts::PromptCreateInput {
+                id: Some("prompt-production-wire".to_string()),
+                title: "本机版本".to_string(),
+                content: "local content".to_string(),
+                tag_ids: Vec::new(),
+                pinned: false,
+            },
+        )
+        .unwrap();
+        let imported = import_migration_package_from_path(
+            &mut target,
+            &v2_path,
+            prompt_migration::PromptConflictStrategy::Overwrite,
+            preview.package_sha256.as_deref().unwrap(),
+            preview.package_size_bytes,
+        )
+        .unwrap();
+        assert_eq!(imported.prompts, Some(1));
+        assert_eq!(
+            target
+                .query_row(
+                    "SELECT content FROM prompts WHERE id = 'prompt-production-wire'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "# incoming\n\n完整正文"
+        );
+        assert_eq!(
+            target
+                .query_row("SELECT COUNT(*) FROM prompt_tag_links", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            load_user_note(&target, "repository", "migration-v2-note").unwrap(),
+            "legacy metadata"
+        );
+
+        import_migration_package_from_path(
+            &mut target,
+            &v2_path,
+            prompt_migration::PromptConflictStrategy::KeepLocal,
+            preview.package_sha256.as_deref().unwrap(),
+            preview.package_size_bytes,
+        )
+        .unwrap();
+        assert_eq!(
+            target
+                .query_row("SELECT COUNT(*) FROM prompts", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn migration_preview_reports_all_different_conflicts_beyond_detail_cap() {
+        let source = Connection::open_in_memory().unwrap();
+        migrate(&source).unwrap();
+        let target = Connection::open_in_memory().unwrap();
+        migrate(&target).unwrap();
+        for index in 0..201 {
+            let id = format!("prompt-conflict-{index:03}");
+            prompts::create_prompt(
+                &source,
+                &prompts::PromptCreateInput {
+                    id: Some(id.clone()),
+                    title: format!("迁移版本 {index}"),
+                    content: format!("incoming-{index}"),
+                    tag_ids: Vec::new(),
+                    pinned: false,
+                },
+            )
+            .unwrap();
+            prompts::create_prompt(
+                &target,
+                &prompts::PromptCreateInput {
+                    id: Some(id),
+                    title: format!("本机版本 {index}"),
+                    content: format!("local-{index}"),
+                    tag_ids: Vec::new(),
+                    pinned: false,
+                },
+            )
+            .unwrap();
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let package_path = directory.path().join("many-conflicts.srtmigration");
+        write_migration_package_to_path(&source, &package_path, true).unwrap();
+        let preview = migration_preview_for_path(&target, &package_path).unwrap();
+
+        assert_eq!(preview.conflicts.len(), 200);
+        assert_eq!(preview.different_conflict_count, 201);
+        assert!(preview.has_different_conflicts);
+        assert_eq!(preview.package_sha256.as_deref().unwrap().len(), 64);
+        assert_eq!(
+            preview.package_size_bytes,
+            fs::metadata(&package_path).unwrap().len()
+        );
+    }
+
+    #[test]
+    fn migration_import_rejects_file_replaced_after_preview_before_database_writes() {
+        let source = Connection::open_in_memory().unwrap();
+        migrate(&source).unwrap();
+        prompts::create_prompt(
+            &source,
+            &prompts::PromptCreateInput {
+                id: Some("prompt-original".to_string()),
+                title: "原包".to_string(),
+                content: "original".to_string(),
+                tag_ids: Vec::new(),
+                pinned: false,
+            },
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let package_path = directory.path().join("replace-after-preview.srtmigration");
+        write_migration_package_to_path(&source, &package_path, true).unwrap();
+
+        let mut target = Connection::open_in_memory().unwrap();
+        migrate(&target).unwrap();
+        let preview = migration_preview_for_path(&target, &package_path).unwrap();
+
+        source.execute("DELETE FROM prompts", []).unwrap();
+        prompts::create_prompt(
+            &source,
+            &prompts::PromptCreateInput {
+                id: Some("prompt-replaced".to_string()),
+                title: "替换包".to_string(),
+                content: "replaced".to_string(),
+                tag_ids: Vec::new(),
+                pinned: false,
+            },
+        )
+        .unwrap();
+        write_migration_package_to_path(&source, &package_path, true).unwrap();
+
+        let error = import_migration_package_from_path(
+            &mut target,
+            &package_path,
+            prompt_migration::PromptConflictStrategy::KeepLocal,
+            preview.package_sha256.as_deref().unwrap(),
+            preview.package_size_bytes,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "migration_package_changed_since_preview");
+        assert_eq!(
+            target
+                .query_row("SELECT COUNT(*) FROM prompts", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            target
+                .query_row(
+                    "SELECT library_revision FROM prompt_library_meta WHERE id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn production_v2_export_rejects_incompatible_embedded_legacy_schema() {
+        let source = Connection::open_in_memory().unwrap();
+        migrate(&source).unwrap();
+        let mut legacy = build_migration_package(&source).unwrap();
+        legacy.schema_version = MIGRATION_SCHEMA_VERSION + 1;
+        let legacy_bytes = serde_json::to_vec(&legacy).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let package_path = directory.path().join("unsupported.srtmigration");
+        let error = prompt_migration::write_v2_package_atomic(
+            &package_path,
+            &legacy_bytes,
+            APP_VERSION,
+            &utc_now(),
+            Vec::<
+                Result<
+                    prompt_migration::PromptMigrationTag,
+                    prompt_migration::PromptMigrationError,
+                >,
+            >::new(),
+            Vec::<
+                Result<
+                    prompt_migration::PromptMigrationPrompt,
+                    prompt_migration::PromptMigrationError,
+                >,
+            >::new(),
+            Vec::<
+                Result<
+                    prompt_migration::PromptMigrationLink,
+                    prompt_migration::PromptMigrationError,
+                >,
+            >::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "migration_v1_schema_unsupported");
+    }
+
+    #[test]
+    fn production_v2_import_rolls_back_embedded_v1_when_prompt_write_fails() {
+        let source = Connection::open_in_memory().unwrap();
+        migrate(&source).unwrap();
+        save_user_note(&source, "repository", "must-roll-back", "embedded legacy").unwrap();
+        prompts::create_prompt(
+            &source,
+            &prompts::PromptCreateInput {
+                id: Some("prompt-trigger-failure".to_string()),
+                title: "Will fail".to_string(),
+                content: "incoming".to_string(),
+                tag_ids: Vec::new(),
+                pinned: false,
+            },
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let package_path = directory.path().join("rollback.srtmigration");
+        write_migration_package_to_path(&source, &package_path, true).unwrap();
+
+        let mut target = Connection::open_in_memory().unwrap();
+        migrate(&target).unwrap();
+        target
+            .execute_batch(
+                "CREATE TRIGGER reject_migrated_prompt
+                 BEFORE INSERT ON prompts
+                 BEGIN
+                   SELECT RAISE(ABORT, 'reject imported prompt');
+                 END;",
+            )
+            .unwrap();
+        let preview = migration_preview_for_path(&target, &package_path).unwrap();
+        let error = import_migration_package_from_path(
+            &mut target,
+            &package_path,
+            prompt_migration::PromptConflictStrategy::KeepLocal,
+            preview.package_sha256.as_deref().unwrap(),
+            preview.package_size_bytes,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "prompt_migration_database_failed");
+        assert_eq!(
+            target
+                .query_row("SELECT COUNT(*) FROM prompts", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            load_user_note(&target, "repository", "must-roll-back").unwrap(),
+            ""
+        );
     }
 
     #[test]

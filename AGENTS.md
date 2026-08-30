@@ -41,8 +41,8 @@
 
 ## Data And Safety
 
-- GitHub token 只应通过 macOS Keychain 管理，不能写入 SQLite、迁移包、日志或文档。
-- 迁移包只能包含非敏感元数据、仓库、Skills、插件和备注；不能包含 token、Keychain key、本地源码、源码 ZIP 或任务日志。
+- 应用托管的 GitHub token 只应通过 macOS Keychain 管理，不能写入 SQLite、迁移包、日志或文档。
+- 迁移包只能包含非敏感元数据、仓库、Skills、插件、备注，以及用户明确勾选后逐字导出的提示词正文和标签；不能主动采集 token、Keychain key、本地源码、源码 ZIP 或任务日志。提示词正文可能包含用户自行粘贴的秘密，导出前必须明确警示其明文边界并二次确认。
 - `skill_library_root` 是 Skill 主库的事实来源；工具目录只是发布目标。
 - `skill_sync_records` 是删除/回滚安全边界，只能移除应用自己发布并记录过的副本。
 

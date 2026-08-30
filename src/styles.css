@@ -173,6 +173,11 @@ a {
   opacity: 0.78;
 }
 
+.nav-lucide {
+  flex: 0 0 auto;
+  opacity: 0.82;
+}
+
 .nav-mark::before,
 .nav-mark::after {
   position: absolute;
@@ -548,6 +553,17 @@ a {
 
 .content-grid.no-inspector {
   grid-template-columns: minmax(0, 1fr);
+}
+
+.prompts-workspace .prompt-content-grid {
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.prompt-sidebar-note p {
+  margin-bottom: 0;
 }
 
 .main-pane {
@@ -2107,6 +2123,24 @@ input[type="checkbox"] {
 .settings-note {
   margin: 0;
   line-height: 1.45;
+}
+
+.migration-prompt-toggle {
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+
+.migration-strategy-field {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.migration-strategy-field select {
+  width: 100%;
 }
 
 .section-note {
