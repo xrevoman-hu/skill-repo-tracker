@@ -10,7 +10,6 @@
   --prompt-border: #dce2ea;
   --prompt-border-strong: #c8d0dc;
   --prompt-danger: #c23b35;
-  --prompt-ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --prompt-ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --prompt-ease-screen-move: cubic-bezier(0.77, 0, 0.175, 1);
   --prompt-focus: rgba(47, 110, 229, 0.32);
@@ -105,31 +104,21 @@
   display: flex;
   flex: 0 0 auto;
   gap: 8px;
-  min-height: 54px;
-  padding: 8px 16px;
+  min-height: 56px;
+  padding: 10px 16px;
   position: relative;
   z-index: 4;
 }
 
-.prompts-view.has-drawer .prompt-toolbar {
-  gap: 6px;
-  padding-right: 456px;
-}
-
-.prompts-view.has-drawer .prompt-toolbar .prompt-button {
+.prompt-toolbar .prompt-toolbar-button {
   font-size: 12px;
-  padding-inline: 8px;
+  font-weight: 550;
+  gap: 7px;
+  min-height: 30px;
 }
 
-.prompts-view.has-drawer .prompt-search {
-  flex-basis: 150px;
-  max-width: 220px;
-  min-width: 130px;
-}
-
-.prompts-view.has-drawer .prompt-segmented button {
-  font-size: 12px;
-  padding-inline: 7px;
+.prompt-toolbar .prompt-toolbar-button:disabled {
+  opacity: 0.72;
 }
 
 .prompt-button,
@@ -171,7 +160,7 @@
   display: flex;
   flex: 1 1 260px;
   gap: 7px;
-  font-size: 13px;
+  font-size: 12px;
   height: 32px;
   max-width: 330px;
   min-width: 170px;
@@ -264,7 +253,7 @@
   border: 1px solid var(--prompt-border-strong);
   border-radius: 7px;
   display: inline-flex;
-  height: 32px;
+  height: 30px;
   padding: 2px;
 }
 
@@ -273,7 +262,7 @@
   border: 0;
   border-radius: 5px;
   color: var(--prompt-muted);
-  min-height: 26px;
+  min-height: 24px;
   padding: 0 10px;
 }
 
@@ -292,8 +281,10 @@
   border: 1px solid var(--prompt-border);
   border-radius: 10px;
   box-shadow: 0 16px 44px rgba(20, 27, 38, 0.2);
-  max-height: min(520px, calc(100% - 90px));
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  max-height: 520px;
+  overflow: hidden;
   padding: 12px;
   position: absolute;
   right: 0;
@@ -354,8 +345,21 @@
 
 .prompt-tag-manager-list {
   display: grid;
+  flex: 1 1 auto;
   gap: 3px;
   margin-top: 10px;
+  min-height: 0;
+  overflow: auto;
+}
+
+.prompt-tag-manager-error {
+  align-items: flex-start;
+  display: flex;
+  gap: 8px;
+}
+
+.prompt-tag-manager-error .prompt-inline-error {
+  flex: 1;
 }
 
 .prompt-tag-manager-row {
@@ -1071,24 +1075,31 @@
   width: 100%;
 }
 
-.prompt-drawer-layer[data-motion="pointer"] .prompt-drawer {
-  transition: transform 220ms var(--prompt-ease-drawer), opacity 180ms var(--prompt-ease-out);
-
-  @starting-style {
-    opacity: 0.92;
-    transform: translateX(100%);
+@keyframes prompt-drawer-enter {
+  from {
+    opacity: 0.96;
+    transform: translateX(12px);
   }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.prompt-drawer-layer[data-motion="pointer"] .prompt-drawer {
+  animation: prompt-drawer-enter 140ms var(--prompt-ease-out) both;
 }
 
 .prompt-drawer-layer.is-closing {
   pointer-events: none;
 }
 
-.prompt-drawer-layer.is-closing .prompt-drawer {
-  opacity: 0.94;
-  transform: translateX(100%);
-  transition-duration: 160ms;
-  transition-timing-function: var(--prompt-ease-out);
+.prompt-drawer-layer:where([data-close-motion="pointer"]).is-closing .prompt-drawer {
+  animation: none;
+  opacity: 0.96;
+  transform: translateX(12px);
+  transition: transform 100ms var(--prompt-ease-out), opacity 100ms var(--prompt-ease-out);
 }
 
 .prompt-drawer-header {
@@ -1310,31 +1321,76 @@
   margin-bottom: 7px;
 }
 
-.prompt-tag-field > div {
+.prompt-tag-options {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
 }
 
-.prompt-tag-field label {
+.prompt-tag-options label {
   cursor: pointer;
   display: inline-flex;
 }
 
-.prompt-tag-field input {
+.prompt-tag-options input {
   height: 1px;
   opacity: 0;
   position: absolute;
   width: 1px;
 }
 
-.prompt-tag-field input:not(:checked) + .prompt-tag {
+.prompt-tag-options input:not(:checked) + .prompt-tag {
   background: var(--prompt-bg);
   color: var(--prompt-muted);
 }
 
-.prompt-tag-field input:focus-visible + .prompt-tag {
+.prompt-tag-options input:focus-visible + .prompt-tag {
   box-shadow: 0 0 0 3px var(--prompt-focus);
+}
+
+.prompt-tag-field-status {
+  color: var(--prompt-muted);
+  font-size: 12px;
+  margin: 7px 0 0;
+}
+
+.prompt-tag-field-error {
+  align-items: flex-start;
+  display: flex;
+  gap: 8px;
+}
+
+.prompt-tag-field-error .prompt-inline-error {
+  flex: 1;
+}
+
+.prompt-editor-tag-create {
+  align-items: center;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  margin-top: 9px;
+}
+
+.prompt-editor-tag-create label {
+  cursor: text;
+  display: block;
+}
+
+.prompt-editor-tag-create input {
+  background: var(--prompt-surface);
+  border: 1px solid var(--prompt-border-strong);
+  border-radius: 7px;
+  color: var(--prompt-text);
+  height: 32px;
+  padding: 0 9px;
+  width: 100%;
+}
+
+.prompt-editor-tag-create small {
+  color: var(--prompt-muted);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .prompt-pin-field {
@@ -1414,11 +1470,11 @@
 }
 
 .prompts-view[data-density="compact"] .prompt-toolbar {
-  min-height: 50px;
-  padding-block: 7px;
+  min-height: 56px;
+  padding: 8px 14px;
 }
 
-.prompts-view[data-density="compact"] .prompt-toolbar .prompt-button,
+.prompts-view[data-density="compact"] .prompt-toolbar .prompt-toolbar-button,
 .prompts-view[data-density="compact"] .prompt-search,
 .prompts-view[data-density="compact"] .prompt-segmented {
   min-height: 30px;
@@ -1457,7 +1513,6 @@
   .prompt-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .prompt-toolbar { flex-wrap: wrap; }
   .prompt-search { max-width: none; }
-  .prompts-view.has-drawer .prompt-toolbar { align-content: center; }
 }
 
 @media (max-width: 1119px) {
@@ -1491,11 +1546,17 @@
 .prompts-view[data-reduced-motion="true"] .prompt-drawer,
 .prompts-view[data-reduced-motion="true"] .prompt-tag-manager,
 .prompts-view[data-reduced-motion="true"] .prompt-import-dialog {
+  animation: none;
   transform: none;
   transition: opacity 100ms var(--prompt-ease-out);
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .prompt-drawer-layer[data-motion="pointer"] .prompt-drawer {
+    animation: none;
+    transform: none;
+  }
+
   .prompt-card,
   .prompt-button,
   .prompt-spinner,

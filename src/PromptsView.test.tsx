@@ -475,6 +475,59 @@ describe("PromptsView", () => {
     expect(search).toHaveFocus();
   });
 
+  it("keeps toolbar geometry stable, closes by keyboard immediately, and uses a 100ms pointer exit", async () => {
+    const user = userEvent.setup();
+    render(<PromptsView api={api()} language="en" />);
+
+    const card = await screen.findByRole("article", { name: "深度研究问题拆解" });
+    const root = document.querySelector(".prompts-view")!;
+    const toolbar = screen.getByRole("toolbar");
+    const sharedToolbarButtons = toolbar.querySelectorAll(".prompt-toolbar-button");
+    expect(sharedToolbarButtons).toHaveLength(5);
+    sharedToolbarButtons.forEach((button) => expect(button).toHaveClass("button"));
+    await user.click(card);
+    expect(await screen.findByRole("dialog", { name: "深度研究问题拆解" })).toBeInTheDocument();
+    expect(root).toHaveClass("prompts-view");
+    expect(root).not.toHaveClass("has-drawer");
+    expect(toolbar.querySelectorAll(".prompt-toolbar-button")).toHaveLength(5);
+
+    const timeout = vi.spyOn(window, "setTimeout");
+    try {
+      fireEvent.keyDown(window, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      expect(timeout.mock.calls.some(([, delay]) => delay === 100)).toBe(false);
+
+      fireEvent.click(card, { detail: 0 });
+      const drawer = await screen.findByRole("dialog", { name: "深度研究问题拆解" });
+      const layer = document.querySelector(".prompt-drawer-layer");
+      expect(layer).toHaveAttribute("data-motion", "instant");
+      fireEvent.click(within(drawer).getByRole("button", { name: "Close" }), { detail: 1 });
+      await waitFor(() => expect(layer).toHaveClass("is-closing"));
+      expect(layer).toHaveAttribute("data-close-motion", "pointer");
+      expect(timeout.mock.calls.some(([, delay]) => delay === 100)).toBe(true);
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
+  it("keeps pointer exit motion after switching cards without replaying the entrance", async () => {
+    const user = userEvent.setup();
+    render(<PromptsView api={api()} language="en" />);
+
+    await user.click(await screen.findByRole("article", { name: "深度研究问题拆解" }));
+    await screen.findByRole("dialog", { name: "深度研究问题拆解" });
+    await user.click(screen.getByRole("article", { name: "论文写作大纲" }));
+    const drawer = await screen.findByRole("dialog", { name: "论文写作大纲" });
+    const layer = document.querySelector(".prompt-drawer-layer");
+    expect(layer).toHaveAttribute("data-motion", "instant");
+
+    fireEvent.click(within(drawer).getByRole("button", { name: "Close" }), { detail: 1 });
+    await waitFor(() => expect(layer).toHaveClass("is-closing"));
+    expect(layer).toHaveAttribute("data-close-motion", "pointer");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("guards dirty outside dismissal and blocks outside actions while saving", async () => {
     const save = deferred<PromptDetail>();
     const confirmDiscard = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
@@ -739,6 +792,522 @@ describe("PromptsView", () => {
 
     created.resolve({ id: "role", name: "角色", promptCount: 0, createdAt: "2026-08-31", updatedAt: "2026-08-31" });
     await waitFor(() => expect(create).not.toBeDisabled());
+  });
+
+  it("sizes the anchored tag manager from the prompt view and recalculates on resize", async () => {
+    let rootBottom = 430;
+    const rect = (bottom: number): DOMRect => ({
+      bottom,
+      height: bottom,
+      left: 0,
+      right: 200,
+      top: 0,
+      width: 200,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    const getBoundingClientRect = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("prompts-view")) return rect(rootBottom);
+        if (this.classList.contains("prompt-tag-manager-anchor")) return rect(100);
+        return rect(0);
+      });
+
+    try {
+      const user = userEvent.setup();
+      render(<PromptsView api={api()} language="en" />);
+      await user.click(await screen.findByRole("button", { name: "Manage tags" }));
+      const manager = screen.getByRole("dialog", { name: "Manage tags" });
+      await waitFor(() => expect(manager).toHaveStyle({ maxHeight: "318px" }));
+
+      rootBottom = 340;
+      fireEvent(window, new Event("resize"));
+      await waitFor(() => expect(manager).toHaveStyle({ maxHeight: "228px" }));
+
+      rootBottom = 900;
+      fireEvent(window, new Event("resize"));
+      await waitFor(() => expect(manager).toHaveStyle({ maxHeight: "520px" }));
+      expect(manager.querySelector(".prompt-tag-manager-list")).toBeInTheDocument();
+    } finally {
+      getBoundingClientRect.mockRestore();
+    }
+  });
+
+  it("loads and retries tag choices inside an existing prompt editor", async () => {
+    const listTags = vi.fn()
+      .mockRejectedValueOnce(new Error("tag service unavailable"))
+      .mockResolvedValue(tags);
+    const client = api({ listTags });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="en" />);
+
+    await user.click(await screen.findByRole("article", { name: "深度研究问题拆解" }));
+    const drawer = await screen.findByRole("dialog", { name: "深度研究问题拆解" });
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    expect(await within(drawer).findByRole("alert")).toHaveTextContent("tag service unavailable");
+
+    await user.click(within(drawer).getByRole("button", { name: "Try again" }));
+    expect(await within(drawer).findByRole("checkbox", { name: "研究" })).toBeChecked();
+    expect(within(drawer).getByRole("checkbox", { name: "写作" })).not.toBeChecked();
+    expect(listTags).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows an explicit tag loading state before editor choices arrive", async () => {
+    const tagRequest = deferred<PromptTag[]>();
+    const client = api({ listTags: vi.fn(() => tagRequest.promise) });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="en" />);
+
+    await user.click(await screen.findByRole("article", { name: "深度研究问题拆解" }));
+    const drawer = await screen.findByRole("dialog", { name: "深度研究问题拆解" });
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    expect(within(drawer).getByRole("status")).toHaveTextContent("Loading tags…");
+
+    await act(async () => tagRequest.resolve(tags));
+    expect(await within(drawer).findByRole("checkbox", { name: "研究" })).toBeChecked();
+  });
+
+  it("preserves a newly created tag when a stale tag-list response arrives later", async () => {
+    const staleList = deferred<PromptTag[]>();
+    const roleTag: PromptTag = {
+      id: "local-role",
+      name: "角色",
+      promptCount: 0,
+      createdAt: "2026-08-31",
+      updatedAt: "2026-08-31",
+    };
+    const untagged = { ...summaries[1], id: "stale-tags", title: "旧标签响应", tags: [] };
+    const listTags = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockImplementationOnce(() => staleList.promise);
+    const client = api({
+      listPrompts: vi.fn().mockResolvedValue(page([untagged])),
+      getPrompt: vi.fn().mockResolvedValue({ ...untagged, content: "正文" }),
+      listTags,
+      createTag: vi.fn().mockResolvedValue(roleTag),
+    });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="zh" />);
+
+    await user.click(await screen.findByRole("article", { name: "旧标签响应" }));
+    const drawer = await screen.findByRole("dialog", { name: "旧标签响应" });
+    await user.click(within(drawer).getByRole("button", { name: "编辑" }));
+    await user.type(within(drawer).getByRole("textbox", { name: "新标签名称" }), "角色");
+    await user.click(within(drawer).getByRole("button", { name: "新增标签" }));
+    expect(await within(drawer).findByRole("checkbox", { name: "角色" })).toBeChecked();
+
+    await act(async () => staleList.resolve([]));
+    expect(within(drawer).getByRole("checkbox", { name: "角色" })).toBeChecked();
+    expect(listTags).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps a newly created tag visible when its best-effort refresh fails", async () => {
+    const roleTag: PromptTag = {
+      id: "local-role",
+      name: "角色",
+      promptCount: 0,
+      createdAt: "2026-08-31",
+      updatedAt: "2026-08-31",
+    };
+    const untagged = { ...summaries[1], id: "failed-tag-refresh", title: "标签刷新失败", tags: [] };
+    const listTags = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("refresh unavailable"));
+    const client = api({
+      listPrompts: vi.fn().mockResolvedValue(page([untagged])),
+      getPrompt: vi.fn().mockResolvedValue({ ...untagged, content: "正文" }),
+      listTags,
+      createTag: vi.fn().mockResolvedValue(roleTag),
+    });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="en" />);
+
+    await user.click(await screen.findByRole("article", { name: "标签刷新失败" }));
+    const drawer = await screen.findByRole("dialog", { name: "标签刷新失败" });
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    await user.type(within(drawer).getByRole("textbox", { name: "New tag name" }), "角色");
+    await user.click(within(drawer).getByRole("button", { name: "New tag" }));
+
+    await waitFor(() => expect(listTags).toHaveBeenCalledTimes(2));
+    expect(await within(drawer).findByRole("checkbox", { name: "角色" })).toBeChecked();
+    expect(within(drawer).queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+    expect(within(drawer).queryByText("refresh unavailable")).not.toBeInTheDocument();
+  });
+
+  it("clears a concurrent fatal tag error after a later best-effort refresh succeeds", async () => {
+    const created = deferred<PromptTag>();
+    const roleTag: PromptTag = {
+      id: "local-role",
+      name: "角色",
+      promptCount: 0,
+      createdAt: "2026-08-31",
+      updatedAt: "2026-08-31",
+    };
+    const untagged = { ...summaries[1], id: "recover-tag-refresh", title: "标签刷新恢复", tags: [] };
+    const listTags = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("temporary tag failure"))
+      .mockResolvedValueOnce([roleTag]);
+    const client = api({
+      listPrompts: vi.fn().mockResolvedValue(page([untagged])),
+      getPrompt: vi.fn().mockResolvedValue({ ...untagged, content: "正文" }),
+      listTags,
+      createTag: vi.fn(() => created.promise),
+    });
+    const user = userEvent.setup();
+    const view = render(<PromptsView api={client} language="en" />);
+
+    await user.click(await screen.findByRole("article", { name: "标签刷新恢复" }));
+    const drawer = await screen.findByRole("dialog", { name: "标签刷新恢复" });
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    await user.type(within(drawer).getByRole("textbox", { name: "New tag name" }), "角色");
+    await user.click(within(drawer).getByRole("button", { name: "New tag" }));
+
+    view.rerender(<PromptsView api={client} language="zh" />);
+    expect(await within(drawer).findByRole("alert")).toHaveTextContent("temporary tag failure");
+    await act(async () => created.resolve(roleTag));
+
+    expect(await within(drawer).findByRole("checkbox", { name: "角色" })).toBeChecked();
+    expect(within(drawer).queryByText("temporary tag failure")).not.toBeInTheDocument();
+    expect(listTags).toHaveBeenCalledTimes(3);
+  });
+
+  it("prefers the current tag-list response over a preserved tag with the same id", async () => {
+    const createdTag: PromptTag = {
+      id: "local-role",
+      name: "角色",
+      promptCount: 0,
+      createdAt: "2026-08-31",
+      updatedAt: "2026-08-31",
+    };
+    const currentTag = { ...createdTag, promptCount: 1 };
+    const untagged = { ...summaries[1], id: "current-tag-count", title: "标签计数更新", tags: [] };
+    const listTags = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([currentTag]);
+    const client = api({
+      listPrompts: vi.fn().mockResolvedValue(page([untagged])),
+      getPrompt: vi.fn().mockResolvedValue({ ...untagged, content: "正文" }),
+      listTags,
+      createTag: vi.fn().mockResolvedValue(createdTag),
+    });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} confirmDiscard={vi.fn().mockResolvedValue(true)} language="en" />);
+
+    await user.click(await screen.findByRole("article", { name: "标签计数更新" }));
+    const drawer = await screen.findByRole("dialog", { name: "标签计数更新" });
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    await user.type(within(drawer).getByRole("textbox", { name: "New tag name" }), "角色");
+    await user.click(within(drawer).getByRole("button", { name: "New tag" }));
+    await waitFor(() => expect(listTags).toHaveBeenCalledTimes(2));
+    await user.click(within(drawer).getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Manage tags" }));
+
+    const manager = screen.getByRole("dialog", { name: "Manage tags" });
+    const roleRow = within(manager).getByText("角色").closest<HTMLElement>(".prompt-tag-manager-row")!;
+    expect(roleRow).toHaveTextContent("角色1");
+  });
+
+  it("keeps valid editor tag choices visible after a tag-manager mutation error", async () => {
+    const renameTag = vi.fn().mockRejectedValue(new Error("rename unavailable"));
+    const client = api({ renameTag });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="en" />);
+
+    const manageTags = await screen.findByRole("button", { name: "Manage tags" });
+    await user.click(manageTags);
+    const manager = screen.getByRole("dialog", { name: "Manage tags" });
+    await user.click(within(manager).getAllByRole("button", { name: "Rename" })[0]);
+    const rename = within(manager).getByRole("textbox", { name: "Rename: 研究" });
+    await user.clear(rename);
+    await user.type(rename, "Research renamed");
+    await user.click(within(manager).getByRole("button", { name: "Save tag" }));
+    expect(await within(manager).findByRole("alert")).toHaveTextContent("rename unavailable");
+
+    await user.click(manageTags);
+    await user.click(screen.getByRole("article", { name: "深度研究问题拆解" }));
+    const drawer = await screen.findByRole("dialog", { name: "深度研究问题拆解" });
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    expect(within(drawer).getByRole("checkbox", { name: "研究" })).toBeChecked();
+    expect(within(drawer).getByRole("checkbox", { name: "写作" })).not.toBeChecked();
+  });
+
+  it("does not let a cancelled pending tag creation lock or overwrite the next editor session", async () => {
+    const firstCreated = deferred<PromptTag>();
+    const secondCreated = deferred<PromptTag>();
+    const roleTag: PromptTag = {
+      id: "local-role",
+      name: "角色",
+      promptCount: 0,
+      createdAt: "2026-08-31",
+      updatedAt: "2026-08-31",
+    };
+    const newSessionTag: PromptTag = {
+      id: "new-session",
+      name: "新会话",
+      promptCount: 0,
+      createdAt: "2026-08-31",
+      updatedAt: "2026-08-31",
+    };
+    const untagged = { ...summaries[1], id: "pending-tag", title: "未决标签", tags: [] };
+    const client = api({
+      listPrompts: vi.fn().mockResolvedValue(page([untagged])),
+      getPrompt: vi.fn().mockResolvedValue({ ...untagged, content: "正文" }),
+      listTags: vi.fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([roleTag])
+        .mockResolvedValueOnce([roleTag, newSessionTag]),
+      createTag: vi.fn()
+        .mockImplementationOnce(() => firstCreated.promise)
+        .mockImplementationOnce(() => secondCreated.promise),
+    });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="en" />);
+
+    await user.click(await screen.findByRole("article", { name: "未决标签" }));
+    const drawer = await screen.findByRole("dialog", { name: "未决标签" });
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    await user.type(within(drawer).getByRole("textbox", { name: "New tag name" }), "角色");
+    await user.click(within(drawer).getByRole("button", { name: "New tag" }));
+    expect(within(drawer).getByRole("button", { name: "Save" })).toBeDisabled();
+
+    await user.click(within(drawer).getByRole("button", { name: "Cancel" }));
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    const nextInput = within(drawer).getByRole("textbox", { name: "New tag name" });
+    expect(nextInput).not.toBeDisabled();
+    expect(within(drawer).getByRole("button", { name: "Save" })).not.toBeDisabled();
+    await user.type(nextInput, "新会话");
+    await user.click(within(drawer).getByRole("button", { name: "New tag" }));
+    expect(within(drawer).getByRole("button", { name: "Save" })).toBeDisabled();
+
+    await act(async () => firstCreated.resolve(roleTag));
+    expect(nextInput).toHaveValue("新会话");
+    expect(await within(drawer).findByRole("checkbox", { name: "角色" })).not.toBeChecked();
+    expect(within(drawer).getByRole("button", { name: "Save" })).toBeDisabled();
+
+    await act(async () => secondCreated.resolve(newSessionTag));
+    expect(await within(drawer).findByRole("checkbox", { name: "新会话" })).toBeChecked();
+    expect(nextInput).toHaveValue("");
+    expect(within(drawer).getByRole("button", { name: "Save" })).not.toBeDisabled();
+    expect(client.createTag).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not submit a tag while Enter is confirming a Chinese IME composition", async () => {
+    const roleTag: PromptTag = {
+      id: "local-role",
+      name: "角色",
+      promptCount: 0,
+      createdAt: "2026-08-31",
+      updatedAt: "2026-08-31",
+    };
+    const createTag = vi.fn().mockResolvedValue(roleTag);
+    const untagged = { ...summaries[1], id: "ime-tag", title: "输入法标签", tags: [] };
+    const client = api({
+      listPrompts: vi.fn().mockResolvedValue(page([untagged])),
+      getPrompt: vi.fn().mockResolvedValue({ ...untagged, content: "正文" }),
+      listTags: vi.fn().mockResolvedValue([]),
+      createTag,
+    });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="zh" />);
+
+    await user.click(await screen.findByRole("article", { name: "输入法标签" }));
+    const drawer = await screen.findByRole("dialog", { name: "输入法标签" });
+    await user.click(within(drawer).getByRole("button", { name: "编辑" }));
+    const input = within(drawer).getByRole("textbox", { name: "新标签名称" });
+    fireEvent.change(input, { target: { value: "juese" } });
+    fireEvent.keyDown(input, { code: "Enter", isComposing: true, key: "Enter" });
+    expect(createTag).not.toHaveBeenCalled();
+    expect(input).toHaveValue("juese");
+
+    const legacyWebKitEventAllowed = fireEvent.keyDown(input, {
+      code: "Enter",
+      isComposing: false,
+      key: "Enter",
+      keyCode: 229,
+      which: 229,
+    });
+    expect(legacyWebKitEventAllowed).toBe(false);
+    expect(createTag).not.toHaveBeenCalled();
+    expect(client.updatePrompt).not.toHaveBeenCalled();
+    expect(input).toHaveValue("juese");
+
+    fireEvent.keyDown(input, { code: "Enter", isComposing: false, key: "Enter", keyCode: 13, which: 13 });
+    await waitFor(() => expect(createTag).toHaveBeenCalledWith("juese"));
+  });
+
+  it("creates a tag in the drawer once, auto-selects it, and saves its local id", async () => {
+    const untagged: PromptSummary = { ...summaries[1], id: "untagged", title: "无标签提示词", tags: [], revision: 1 };
+    const untaggedDetail: PromptDetail = { ...untagged, content: "正文" };
+    const created = deferred<PromptTag>();
+    const roleTag: PromptTag = {
+      id: "local-role",
+      name: "角色",
+      promptCount: 0,
+      createdAt: "2026-08-31",
+      updatedAt: "2026-08-31",
+    };
+    const updatePrompt = vi.fn(async (_id: string, revision: number, input: Parameters<PromptLibraryApi["updatePrompt"]>[2]) => ({
+      ...untaggedDetail,
+      title: input.title,
+      content: input.content,
+      pinned: input.pinned,
+      revision: revision + 1,
+      tags: input.tagIds.includes(roleTag.id) ? [roleTag] : [],
+    }));
+    const client = api({
+      listPrompts: vi.fn().mockResolvedValue(page([untagged])),
+      getPrompt: vi.fn().mockResolvedValue(untaggedDetail),
+      listTags: vi.fn().mockResolvedValue([]),
+      createTag: vi.fn(() => created.promise),
+      updatePrompt,
+    });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="zh" />);
+
+    await user.click(await screen.findByRole("article", { name: "无标签提示词" }));
+    const drawer = await screen.findByRole("dialog", { name: "无标签提示词" });
+    await user.click(within(drawer).getByRole("button", { name: "编辑" }));
+    expect(within(drawer).getByText("暂无标签")).toBeInTheDocument();
+    await user.type(within(drawer).getByRole("textbox", { name: "新标签名称" }), "角色");
+    const create = within(drawer).getByRole("button", { name: "新增标签" });
+    await user.click(create);
+    expect(create).toBeDisabled();
+    fireEvent.click(create);
+    expect(client.createTag).toHaveBeenCalledTimes(1);
+
+    await act(async () => created.resolve(roleTag));
+    expect(await within(drawer).findByRole("checkbox", { name: "角色" })).toBeChecked();
+    await user.click(within(drawer).getByRole("button", { name: "保存" }));
+    expect(updatePrompt).toHaveBeenCalledWith("untagged", 1, expect.objectContaining({ tagIds: ["local-role"] }));
+    expect(within(drawer).getByText("角色")).toBeInTheDocument();
+  });
+
+  it("refreshes the tag manager count immediately after saving a newly associated tag", async () => {
+    const untagged: PromptSummary = { ...summaries[1], id: "count-sync", title: "标签计数同步", tags: [], revision: 1 };
+    const untaggedDetail: PromptDetail = { ...untagged, content: "正文" };
+    const createdTag: PromptTag = {
+      id: "local-role",
+      name: "角色",
+      promptCount: 0,
+      createdAt: "2026-08-31",
+      updatedAt: "2026-08-31",
+    };
+    const currentTag = { ...createdTag, promptCount: 1 };
+    const listTags = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([createdTag])
+      .mockResolvedValueOnce([currentTag]);
+    const client = api({
+      listPrompts: vi.fn().mockResolvedValue(page([untagged])),
+      getPrompt: vi.fn().mockResolvedValue(untaggedDetail),
+      listTags,
+      createTag: vi.fn().mockResolvedValue(createdTag),
+      updatePrompt: vi.fn(async (_id, revision, input) => ({
+        ...untaggedDetail,
+        ...input,
+        revision: revision + 1,
+        tags: input.tagIds.includes(createdTag.id) ? [createdTag] : [],
+      })),
+    });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="en" />);
+
+    await user.click(await screen.findByRole("article", { name: "标签计数同步" }));
+    const drawer = await screen.findByRole("dialog", { name: "标签计数同步" });
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    await user.type(within(drawer).getByRole("textbox", { name: "New tag name" }), "角色");
+    await user.click(within(drawer).getByRole("button", { name: "New tag" }));
+    expect(await within(drawer).findByRole("checkbox", { name: "角色" })).toBeChecked();
+    await user.click(within(drawer).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(client.updatePrompt).toHaveBeenCalledTimes(1));
+    await user.click(within(drawer).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "标签计数同步" })).not.toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: "Manage tags" }));
+    const manager = screen.getByRole("dialog", { name: "Manage tags" });
+    const roleRow = within(manager).getByText("角色").closest<HTMLElement>(".prompt-tag-manager-row")!;
+    await waitFor(() => expect(roleRow).toHaveTextContent("角色1"));
+  });
+
+  it("keeps a newly created global tag but does not associate it when editing is cancelled", async () => {
+    const untagged: PromptSummary = { ...summaries[1], id: "untagged", title: "取消标签编辑", tags: [], revision: 1 };
+    const untaggedDetail: PromptDetail = { ...untagged, content: "正文" };
+    const roleTag: PromptTag = {
+      id: "local-role",
+      name: "角色",
+      promptCount: 0,
+      createdAt: "2026-08-31",
+      updatedAt: "2026-08-31",
+    };
+    const created = deferred<PromptTag>();
+    const client = api({
+      listPrompts: vi.fn().mockResolvedValue(page([untagged])),
+      getPrompt: vi.fn().mockResolvedValue(untaggedDetail),
+      listTags: vi.fn().mockResolvedValue([]),
+      createTag: vi.fn(() => created.promise),
+    });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} confirmDiscard={vi.fn().mockResolvedValue(true)} language="en" />);
+
+    await user.click(await screen.findByRole("article", { name: "取消标签编辑" }));
+    const drawer = await screen.findByRole("dialog", { name: "取消标签编辑" });
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    await user.type(within(drawer).getByRole("textbox", { name: "New tag name" }), "角色");
+    await user.click(within(drawer).getByRole("button", { name: "New tag" }));
+    await act(async () => created.resolve(roleTag));
+    expect(await within(drawer).findByRole("checkbox", { name: "角色" })).toBeChecked();
+    await user.click(within(drawer).getByRole("button", { name: "Cancel" }));
+    expect(client.updatePrompt).not.toHaveBeenCalled();
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    expect(within(drawer).getByRole("checkbox", { name: "角色" })).not.toBeChecked();
+  });
+
+  it("prevents a twenty-first tag until one of the existing choices is cleared", async () => {
+    const twentyTags: PromptTag[] = Array.from({ length: 20 }, (_, index) => ({
+      id: `tag-${index + 1}`,
+      name: `标签${index + 1}`,
+      promptCount: 1,
+      createdAt: "2026-08-20",
+      updatedAt: "2026-08-20",
+    }));
+    const full: PromptSummary = { ...summaries[1], id: "full-tags", title: "二十个标签", tags: twentyTags };
+    const client = api({
+      listPrompts: vi.fn().mockResolvedValue(page([full])),
+      getPrompt: vi.fn().mockResolvedValue({ ...full, content: "正文" }),
+      listTags: vi.fn().mockResolvedValue(twentyTags),
+    });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="zh" />);
+
+    await user.click(await screen.findByRole("article", { name: "二十个标签" }));
+    const drawer = await screen.findByRole("dialog", { name: "二十个标签" });
+    await user.click(within(drawer).getByRole("button", { name: "编辑" }));
+    const input = within(drawer).getByRole("textbox", { name: "新标签名称" });
+    expect(input).toBeDisabled();
+    expect(within(drawer).getByRole("button", { name: "新增标签" })).toBeDisabled();
+    await user.click(within(drawer).getByRole("checkbox", { name: "标签1" }));
+    expect(input).not.toBeDisabled();
+  });
+
+  it("saves changes to the existing prompt tag selection", async () => {
+    const client = api();
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="en" />);
+
+    await user.click(await screen.findByRole("article", { name: "深度研究问题拆解" }));
+    const drawer = await screen.findByRole("dialog", { name: "深度研究问题拆解" });
+    await user.click(within(drawer).getByRole("button", { name: "Edit" }));
+    await user.click(within(drawer).getByRole("checkbox", { name: "写作" }));
+    await user.click(within(drawer).getByRole("button", { name: "Save" }));
+
+    expect(client.updatePrompt).toHaveBeenCalledWith(
+      "prompt-one",
+      3,
+      expect.objectContaining({ tagIds: ["research", "writing"] }),
+    );
   });
 
   it("replaces a merged tag id atomically in filters, the open detail, and the editor baseline", async () => {
@@ -1294,6 +1863,46 @@ describe("PromptsView", () => {
     Object.defineProperty(window, "matchMedia", { configurable: true, value: originalMatchMedia });
     Object.defineProperty(document, "elementFromPoint", { configurable: true, value: originalElementFromPoint });
     Object.defineProperty(window, "PointerEvent", { configurable: true, value: originalPointerEvent });
+  });
+
+  it("keeps a short opacity-only closing state for reduced-motion pointer input", async () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockReturnValue({
+        matches: true,
+        media: "(prefers-reduced-motion: reduce)",
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      }),
+    });
+
+    try {
+      const user = userEvent.setup();
+      render(<PromptsView api={api()} language="en" />);
+      await user.click(await screen.findByRole("article", { name: "深度研究问题拆解" }));
+      const drawer = await screen.findByRole("dialog", { name: "深度研究问题拆解" });
+      const layer = document.querySelector(".prompt-drawer-layer");
+      expect(document.querySelector(".prompts-view")).toHaveAttribute("data-reduced-motion", "true");
+
+      const timeout = vi.spyOn(window, "setTimeout");
+      try {
+        fireEvent.click(within(drawer).getByRole("button", { name: "Close" }), { detail: 1 });
+        await waitFor(() => expect(layer).toHaveClass("is-closing"));
+        expect(layer).toHaveAttribute("data-close-motion", "pointer");
+        expect(screen.getByRole("dialog")).toBeInTheDocument();
+        expect(timeout.mock.calls.some(([, delay]) => delay === 100)).toBe(true);
+        await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      } finally {
+        timeout.mockRestore();
+      }
+    } finally {
+      Object.defineProperty(window, "matchMedia", { configurable: true, value: originalMatchMedia });
+    }
   });
 
   it("uses a one-sided neighbor when moving to the start of a later page", async () => {

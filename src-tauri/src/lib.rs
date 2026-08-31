@@ -36,8 +36,8 @@ use temp_artifacts::{
     SyncDestination, TempArtifactError, TempArtifactGuard, TempArtifactKind, TempArtifactRegistry,
 };
 
-const APP_VERSION: &str = "1.2.1";
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.2.1";
+const APP_VERSION: &str = "1.2.2";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.2.2";
 const MIGRATION_SCHEMA_VERSION: i64 = 1;
 const MAX_MIGRATION_PACKAGE_FILE_BYTES: u64 = 1_342_177_280;
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";

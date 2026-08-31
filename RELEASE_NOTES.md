@@ -1,5 +1,16 @@
 # Release Notes
 
+## v1.2.2 - 标签计数与提示词库界面修复
+
+这个补丁版修复提示词保存后的标签使用数量未实时更新的问题。现在从详情编辑器新增或勾选标签并保存后，无需切换 Tab，标签管理面板会立即显示最新数量，并继续在后台以 SQLite 真值校正。
+
+- 已有提示词可以可靠地新增、勾选和取消标签；抽屉内创建的新标签会自动选中，保存后卡片、详情和标签管理同步更新。
+- 修复标签管理面板在小窗口或工具栏换行时被压缩的问题，并补齐加载、空态、错误重试和 20 标签上限保护。
+- 提示词库工具栏按钮与其他 Tab 使用一致的通用样式，打开抽屉时不再改变按钮字号或几何尺寸。
+- 抽屉动效缩短为轻量位移，保留点击外部安全关闭、未保存草稿保护和 reduced-motion 支持。
+
+English summary: v1.2.2 fixes stale prompt-tag usage counts after saving, strengthens existing-prompt tag editing, aligns Prompt Library toolbar buttons with the other tabs, and makes the detail drawer motion lighter. The macOS package is ad-hoc signed, not Developer ID signed, and not notarized.
+
 ## v1.2.1 - 提示词分享、排序与标签体验
 
 这个版本让提示词库真正具备跨设备分享闭环：批量 ZIP 保持一篇一个 Markdown，并增加不含正文的摘要清单；另一位 Skill Repo Tracker 用户可以先预检，再按明确冲突策略批量导入。标签只按规范化后的文本匹配，本机已有同名标签会复用，缺失标签会自动创建。

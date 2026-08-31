@@ -209,6 +209,7 @@ const copy: Record<"zh" | "en", MessageMap> = {
     itemsPerPage: "每页数量",
     loading: "正在加载提示词库…",
     loadingDetail: "正在加载详情…",
+    loadingTags: "正在加载标签…",
     manageTags: "标签管理",
     markdownHint: "支持 Markdown；正文最多 5 MiB",
     nextPage: "下一页",
@@ -229,6 +230,7 @@ const copy: Record<"zh" | "en", MessageMap> = {
     selectPage: "选择本页",
     selected: "已选择 {count} 项",
     tagName: "标签名称",
+    newTagName: "新标签名称",
     tagSearch: "搜索标签",
     tagManagerSearch: "搜索要管理的标签",
     title: "标题",
@@ -236,6 +238,7 @@ const copy: Record<"zh" | "en", MessageMap> = {
     unpin: "取消置顶：{title}",
     updated: "更新于 {date}",
     validationBody: "正文不能为空，且 UTF-8 大小不能超过 5 MiB。",
+    validationTagName: "标签名称不能为空，且不能超过 50 个字符。",
     validationTags: "每篇最多选择 20 个标签。",
     validationTitle: "标题不能为空，且不能超过 200 个字符。",
     viewFailed: "详情加载失败",
@@ -312,6 +315,7 @@ const copy: Record<"zh" | "en", MessageMap> = {
     itemsPerPage: "Items per page",
     loading: "Loading prompt library…",
     loadingDetail: "Loading prompt details…",
+    loadingTags: "Loading tags…",
     manageTags: "Manage tags",
     markdownHint: "Markdown supported; content is limited to 5 MiB",
     nextPage: "Next page",
@@ -332,6 +336,7 @@ const copy: Record<"zh" | "en", MessageMap> = {
     selectPage: "Select this page",
     selected: "{count} selected",
     tagName: "Tag name",
+    newTagName: "New tag name",
     tagSearch: "Search tags",
     tagManagerSearch: "Search managed tags",
     title: "Title",
@@ -339,6 +344,7 @@ const copy: Record<"zh" | "en", MessageMap> = {
     unpin: "Unpin: {title}",
     updated: "Updated {date}",
     validationBody: "Content is required and must not exceed 5 MiB in UTF-8.",
+    validationTagName: "A tag name is required and must not exceed 50 characters.",
     validationTags: "A prompt can have at most 20 tags.",
     validationTitle: "Title is required and must not exceed 200 characters.",
     viewFailed: "Couldn’t load prompt details",
@@ -646,7 +652,9 @@ export function PromptsView({
   const [error, setError] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
   const [tags, setTags] = useState<PromptTag[]>([]);
-  const [tagsError, setTagsError] = useState("");
+  const [tagsLoading, setTagsLoading] = useState(true);
+  const [tagsLoadError, setTagsLoadError] = useState("");
+  const [tagManagerError, setTagManagerError] = useState("");
   const [tagSearch, setTagSearch] = useState("");
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
   const [tagManagerMotion, setTagManagerMotion] = useState<"instant" | "pointer">("instant");
@@ -656,6 +664,10 @@ export function PromptsView({
   const [renamingTagName, setRenamingTagName] = useState("");
   const [tagCreating, setTagCreating] = useState(false);
   const [tagPendingIds, setTagPendingIds] = useState<Set<string>>(() => new Set());
+  const [editorTagDraft, setEditorTagDraft] = useState("");
+  const [editorTagCreating, setEditorTagCreating] = useState(false);
+  const [editorTagError, setEditorTagError] = useState("");
+  const [tagManagerMaxHeight, setTagManagerMaxHeight] = useState(520);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
   const [allFiltered, setAllFiltered] = useState(false);
   const [excludedIds, setExcludedIds] = useState<Set<string>>(() => new Set());
@@ -691,6 +703,7 @@ export function PromptsView({
   ));
   const [drawerClosing, setDrawerClosing] = useState(false);
   const [drawerMotion, setDrawerMotion] = useState<"instant" | "pointer">("instant");
+  const [drawerCloseMotion, setDrawerCloseMotion] = useState<"instant" | "pointer">("instant");
   const requestSequence = useRef(0);
   const detailRequestSequence = useRef(0);
   const drawerSession = useRef(0);
@@ -698,7 +711,10 @@ export function PromptsView({
   const saveSequence = useRef(0);
   const deleteSequence = useRef(0);
   const pinSequences = useRef(new Map<string, number>());
+  const tagLoadSequence = useRef(0);
   const tagCreatingRef = useRef(false);
+  const editorTagCreatingRef = useRef<number | null>(null);
+  const editorTagSequence = useRef(0);
   const tagPendingIdsRef = useRef(new Set<string>());
   const mounted = useRef(true);
   const savingRef = useRef(false);
@@ -707,6 +723,7 @@ export function PromptsView({
   const lastFocus = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const drawerRef = useRef<HTMLElement | null>(null);
+  const promptsViewRef = useRef<HTMLElement | null>(null);
   const tagManagerRef = useRef<HTMLDivElement | null>(null);
   const importDialogRef = useRef<HTMLElement | null>(null);
   const importTriggerRef = useRef<HTMLElement | null>(null);
@@ -750,6 +767,8 @@ export function PromptsView({
       detailRequestSequence.current += 1;
       saveSequence.current += 1;
       deleteSequence.current += 1;
+      tagLoadSequence.current += 1;
+      editorTagSequence.current += 1;
       pinSequences.current.clear();
       pointerDragRef.current = null;
       activeDragRef.current = null;
@@ -886,18 +905,59 @@ export function PromptsView({
     }, 180);
   }, [promptPage.items]);
 
-  const loadTags = useCallback(async () => {
+  const loadTags = useCallback(async (showLoading = true, preserved: PromptTag[] = []) => {
+    const sequence = ++tagLoadSequence.current;
+    if (showLoading) {
+      setTagsLoading(true);
+      setTagsLoadError("");
+    }
     try {
-      setTagsError("");
-      setTags(await api.listTags());
+      const response = await api.listTags();
+      if (!mounted.current || sequence !== tagLoadSequence.current) return;
+      setTagsLoadError("");
+      const merged = [...response];
+      preserved.forEach((tag) => {
+        if (!merged.some((candidate) => candidate.id === tag.id)) merged.push(tag);
+      });
+      setTags(merged);
     } catch (reason) {
-      setTagsError(localizedApiErrorMessage(reason, language, tr("operationFailed", { message: "" })).trim());
+      if (!mounted.current || sequence !== tagLoadSequence.current) return;
+      if (showLoading) {
+        setTagsLoadError(localizedApiErrorMessage(reason, language, tr("operationFailed", { message: "" })).trim());
+      }
+    } finally {
+      if (mounted.current && sequence === tagLoadSequence.current) setTagsLoading(false);
     }
   }, [api, language, tr]);
 
   useEffect(() => {
     void loadTags();
   }, [loadTags]);
+
+  useLayoutEffect(() => {
+    if (!tagManagerOpen) return undefined;
+    const root = promptsViewRef.current;
+    const anchor = tagManagerRef.current;
+    if (!root || !anchor) return undefined;
+
+    const measure = () => {
+      const rootRect = root.getBoundingClientRect();
+      const anchorRect = anchor.getBoundingClientRect();
+      const rootBottom = rootRect.bottom > anchorRect.bottom ? rootRect.bottom : window.innerHeight;
+      const available = Math.max(0, Math.floor(rootBottom - anchorRect.bottom - 12));
+      setTagManagerMaxHeight(Math.min(520, available));
+    };
+
+    measure();
+    window.addEventListener("resize", measure);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measure);
+    observer?.observe(root);
+    observer?.observe(anchor);
+    return () => {
+      window.removeEventListener("resize", measure);
+      observer?.disconnect();
+    };
+  }, [compact, language, tagManagerOpen]);
 
   useEffect(() => {
     if (!query && !tagIds.length) allPromptCount.current = promptPage.total;
@@ -975,11 +1035,21 @@ export function PromptsView({
       drawerCloseTimer.current = null;
     }
     setDrawerClosing(false);
+    setDrawerCloseMotion("instant");
+  }
+
+  function resetEditorTagSession() {
+    editorTagSequence.current += 1;
+    editorTagCreatingRef.current = null;
+    setEditorTagCreating(false);
+    setEditorTagDraft("");
+    setEditorTagError("");
   }
 
   function resetDrawer() {
     cancelDrawerClose();
     drawerSession.current += 1;
+    resetEditorTagSession();
     detailRequestSequence.current += 1;
     selectedPromptIdRef.current = "";
     setSelectedPromptId("");
@@ -1014,15 +1084,16 @@ export function PromptsView({
     restoreOpenerFocus: boolean;
   }) {
     cancelDrawerClose();
-    if (!animate || reducedMotionRef.current) {
+    if (!animate) {
       finishDrawerClose({ focusTarget, restoreOpenerFocus });
       return;
     }
+    setDrawerCloseMotion("pointer");
     setDrawerClosing(true);
     drawerCloseTimer.current = window.setTimeout(() => {
       drawerCloseTimer.current = null;
       finishDrawerClose({ focusTarget, restoreOpenerFocus });
-    }, 160);
+    }, 100);
   }
 
   async function closeDrawer(
@@ -1045,8 +1116,9 @@ export function PromptsView({
     if (id === selectedPromptId && drawerMode === "view" && detail) return;
     if (!(await canDiscard("switch"))) return;
     cancelDrawerClose();
-    setDrawerMotion(motion);
+    setDrawerMotion(drawerWasOpen.current ? "instant" : motion);
     drawerSession.current += 1;
+    resetEditorTagSession();
     const sequence = ++detailRequestSequence.current;
     if (trigger) lastFocus.current = trigger;
     selectedPromptIdRef.current = id;
@@ -1079,8 +1151,9 @@ export function PromptsView({
   async function openCreate(trigger?: HTMLElement, motion: "instant" | "pointer" = "pointer") {
     if (!(await canDiscard("new"))) return;
     cancelDrawerClose();
-    setDrawerMotion(motion);
+    setDrawerMotion(drawerWasOpen.current ? "instant" : motion);
     drawerSession.current += 1;
+    resetEditorTagSession();
     detailRequestSequence.current += 1;
     if (trigger) lastFocus.current = trigger;
     selectedPromptIdRef.current = "";
@@ -1095,6 +1168,7 @@ export function PromptsView({
 
   function startEdit() {
     if (!detail) return;
+    resetEditorTagSession();
     const nextDraft = {
       title: detail.title,
       content: detail.content,
@@ -1109,6 +1183,7 @@ export function PromptsView({
 
   async function cancelEdit() {
     if (!(await canDiscard("cancel"))) return;
+    resetEditorTagSession();
     if (drawerMode === "create") {
       resetDrawer();
       restoreFocus();
@@ -1121,6 +1196,7 @@ export function PromptsView({
 
   async function savePrompt(event: FormEvent) {
     event.preventDefault();
+    if (editorTagCreatingRef.current === editorTagSequence.current) return;
     const title = draft.title.trim();
     if (!title || codePointLength(title) > 200) {
       setSaveError(tr("validationTitle"));
@@ -1158,6 +1234,23 @@ export function PromptsView({
         if (mounted.current) setReloadToken((value) => value + 1);
         return;
       }
+      const previousTagIds = new Set(target?.tags.map((tag) => tag.id) ?? []);
+      const responseTags = new Map(response.tags.map((tag) => [tag.id, tag]));
+      setTags((current) => {
+        const next = current.map((tag) => {
+          const updated = responseTags.get(tag.id);
+          if (updated) return updated;
+          if (previousTagIds.has(tag.id)) {
+            return { ...tag, promptCount: Math.max(0, tag.promptCount - 1) };
+          }
+          return tag;
+        });
+        response.tags.forEach((tag) => {
+          if (!next.some((candidate) => candidate.id === tag.id)) next.push(tag);
+        });
+        return next;
+      });
+      void loadTags(false, response.tags);
       selectedPromptIdRef.current = response.id;
       setSelectedPromptId(response.id);
       setDetail(response);
@@ -1169,6 +1262,7 @@ export function PromptsView({
       };
       setDraft(nextDraft);
       setBaseline(nextDraft);
+      resetEditorTagSession();
       setDrawerMode("view");
       setStatusMessage(tr("promptSaved"));
       setReloadToken((value) => value + 1);
@@ -1459,16 +1553,74 @@ export function PromptsView({
     if (!name || codePointLength(name) > 50) return;
     tagCreatingRef.current = true;
     setTagCreating(true);
+    setTagManagerError("");
     try {
       const created = await api.createTag(name);
       setTagDraft("");
       setTags((current) => current.some((tag) => tag.id === created.id) ? current : [...current, created]);
-      await loadTags();
+      await loadTags(true, [created]);
     } catch (reason) {
-      setTagsError(localizedApiErrorMessage(reason, language, tr("tagCreate")));
+      setTagManagerError(localizedApiErrorMessage(reason, language, tr("tagCreate")));
     } finally {
       tagCreatingRef.current = false;
       if (mounted.current) setTagCreating(false);
+    }
+  }
+
+  async function createEditorTag() {
+    const editorSequence = editorTagSequence.current;
+    if (
+      editorTagCreatingRef.current === editorSequence
+      || tagsLoading
+      || tagsLoadError
+      || draft.tagIds.length >= 20
+    ) return;
+    const name = editorTagDraft.trim().normalize("NFC");
+    if (!name || codePointLength(name) > 50) {
+      setEditorTagError(tr("validationTagName"));
+      return;
+    }
+
+    const session = drawerSession.current;
+    editorTagCreatingRef.current = editorSequence;
+    setEditorTagCreating(true);
+    setEditorTagError("");
+    try {
+      const created = await api.createTag(name);
+      if (!mounted.current) return;
+      setTags((current) => {
+        const existing = current.findIndex((tag) => tag.id === created.id);
+        if (existing === -1) return [...current, created];
+        return current.map((tag, index) => index === existing ? created : tag);
+      });
+      void loadTags(false, [created]);
+      if (
+        drawerSession.current === session
+        && editorTagSequence.current === editorSequence
+        && (drawerMode === "edit" || drawerMode === "create")
+      ) {
+        setEditorTagDraft("");
+        setDraft((current) => current.tagIds.includes(created.id) || current.tagIds.length >= 20
+          ? current
+          : { ...current, tagIds: [...current.tagIds, created.id] });
+      }
+    } catch (reason) {
+      if (
+        mounted.current
+        && drawerSession.current === session
+        && editorTagSequence.current === editorSequence
+      ) {
+        setEditorTagError(localizedApiErrorMessage(
+          reason,
+          language,
+          tr("operationFailed", { message: "" }),
+        ).trim());
+      }
+    } finally {
+      if (editorTagCreatingRef.current === editorSequence) {
+        editorTagCreatingRef.current = null;
+        if (mounted.current) setEditorTagCreating(false);
+      }
     }
   }
 
@@ -1529,6 +1681,7 @@ export function PromptsView({
     if (!name || codePointLength(name) > 50) return;
     const collision = tags.find((candidate) => candidate.id !== tag.id && normalizeTagName(candidate.name) === normalizeTagName(name));
     setTagPending(tag.id, true);
+    setTagManagerError("");
     try {
       if (collision) {
         if (!(await runConfirmed("merge-tag", tag.name, collision.name))) return;
@@ -1542,7 +1695,7 @@ export function PromptsView({
       await loadTags();
       setReloadToken((value) => value + 1);
     } catch (reason) {
-      setTagsError(localizedApiErrorMessage(reason, language, tr("tagRename")));
+      setTagManagerError(localizedApiErrorMessage(reason, language, tr("tagRename")));
     } finally {
       setTagPending(tag.id, false);
     }
@@ -1551,6 +1704,7 @@ export function PromptsView({
   async function removeTag(tag: PromptTag) {
     if (tagPendingIdsRef.current.has(tag.id)) return;
     setTagPending(tag.id, true);
+    setTagManagerError("");
     try {
       if (!(await runConfirmed("delete-tag", tag.name))) return;
       await api.deleteTag(tag.id);
@@ -1558,7 +1712,7 @@ export function PromptsView({
       await loadTags();
       setReloadToken((value) => value + 1);
     } catch (reason) {
-      setTagsError(localizedApiErrorMessage(reason, language, tr("delete")));
+      setTagManagerError(localizedApiErrorMessage(reason, language, tr("delete")));
     } finally {
       setTagPending(tag.id, false);
     }
@@ -1972,15 +2126,16 @@ export function PromptsView({
 
   return (
     <section
-      className={`prompts-view${drawerOpen ? " has-drawer" : ""}`}
+      className="prompts-view"
       data-density={compact ? "compact" : "comfortable"}
       data-reduced-motion={reducedMotion ? "true" : "false"}
       data-theme={theme}
       onClickCapture={rootClickCapture}
+      ref={promptsViewRef}
     >
       <h1 className="sr-only">{language === "zh" ? "提示词库" : "Prompt Library"}</h1>
       <div className="prompt-toolbar" role="toolbar">
-        <button className="prompt-button" data-prompt-drawer-intent onClick={(event) => void openCreate(event.currentTarget, event.detail === 0 ? "instant" : "pointer")} type="button">
+        <button className="button prompt-toolbar-button" data-prompt-drawer-intent onClick={(event) => void openCreate(event.currentTarget, event.detail === 0 ? "instant" : "pointer")} type="button">
           <Icon name="plus" />{tr("add")}
         </button>
         <label className="prompt-search">
@@ -1999,7 +2154,7 @@ export function PromptsView({
           <button aria-pressed={sortMode === "updatedDesc"} onClick={() => setSortMode("updatedDesc")} type="button">{tr("sortUpdated")}</button>
         </div>
         <details className="prompt-tag-filter">
-          <summary className="prompt-button"><Icon name="tag" />{tagIds.length ? `${tr("allTags")} · ${tagIds.length}` : tr("allTags")}</summary>
+          <summary className="button prompt-toolbar-button"><Icon name="tag" />{tagIds.length ? `${tr("allTags")} · ${tagIds.length}` : tr("allTags")}</summary>
           <div className="prompt-popover">
             <label className="prompt-popover-search">
               <span className="sr-only">{tr("tagSearch")}</span>
@@ -2025,9 +2180,12 @@ export function PromptsView({
           <button
             aria-controls="prompt-tag-manager"
             aria-expanded={tagManagerOpen}
-            className="prompt-button"
+            className="button prompt-toolbar-button"
             onClick={(event) => {
-              if (!tagManagerOpen) setTagManagerMotion(event.detail === 0 ? "instant" : "pointer");
+              if (!tagManagerOpen) {
+                setTagManagerMotion(event.detail === 0 ? "instant" : "pointer");
+                setTagManagerError("");
+              }
               setTagManagerOpen((value) => !value);
             }}
             type="button"
@@ -2047,6 +2205,7 @@ export function PromptsView({
                 setTagManagerOpen(false);
               }}
               role="dialog"
+              style={{ maxHeight: `${tagManagerMaxHeight}px` }}
             >
               <div className="prompt-tag-manager-heading">
                 <strong>{tr("manageTags")}</strong>
@@ -2061,9 +2220,16 @@ export function PromptsView({
                 <Icon name="search" />
                 <input aria-label={tr("tagManagerSearch")} onChange={(event) => setTagManagerSearch(event.target.value)} placeholder={tr("tagManagerSearch")} type="search" value={tagManagerSearch} />
               </label>
-              {tagsError && <p className="prompt-inline-error" role="alert">{tagsError}</p>}
+              {tagsLoadError && (
+                <div className="prompt-tag-manager-error">
+                  <p className="prompt-inline-error" role="alert">{tagsLoadError}</p>
+                  <button className="prompt-button" onClick={() => void loadTags()} type="button">{tr("retry")}</button>
+                </div>
+              )}
+              {tagManagerError && <p className="prompt-inline-error" role="alert">{tagManagerError}</p>}
               <div className="prompt-tag-manager-list">
-                {filteredManagedTags.map((tag) => (
+                {tagsLoading && <p className="prompt-muted" role="status">{tr("loadingTags")}</p>}
+                {!tagsLoading && filteredManagedTags.map((tag) => (
                   <div className="prompt-tag-manager-row" key={tag.id}>
                     {renamingTagId === tag.id ? (
                       <input
@@ -2088,19 +2254,19 @@ export function PromptsView({
                     </div>
                   </div>
                 ))}
-                {!filteredManagedTags.length && <p className="prompt-muted">{tr("noTags")}</p>}
+                {!tagsLoading && !filteredManagedTags.length && <p className="prompt-muted">{tr("noTags")}</p>}
               </div>
             </section>
           )}
         </div>
         <button
-          className="prompt-button"
+          className="button prompt-toolbar-button"
           data-prompt-drawer-intent
           disabled={previewingImport || importing}
           onClick={(event) => void previewPromptZipImport(event.currentTarget, event.detail === 0 ? "instant" : "pointer")}
           type="button"
         ><Icon name="upload" />{tr("batchImport")}</button>
-        <button className="prompt-button" disabled={!selectedCount || exporting} onClick={() => void exportSelection()} type="button"><Icon name="download" />{tr("batchExport")}</button>
+        <button className="button prompt-toolbar-button" disabled={!selectedCount || exporting} onClick={() => void exportSelection()} type="button"><Icon name="download" />{tr("batchExport")}</button>
       </div>
 
       <div className="prompt-results-bar">
@@ -2358,7 +2524,11 @@ export function PromptsView({
       )}
 
       {drawerOpen && (
-        <div className={`prompt-drawer-layer${drawerClosing ? " is-closing" : ""}`} data-motion={drawerMotion}>
+        <div
+          className={`prompt-drawer-layer${drawerClosing ? " is-closing" : ""}`}
+          data-close-motion={drawerCloseMotion}
+          data-motion={drawerMotion}
+        >
           <aside aria-label={drawerTitle} aria-modal="false" className="prompt-drawer" ref={drawerRef} role="dialog">
             <header className="prompt-drawer-header">
               <div>
@@ -2394,12 +2564,78 @@ export function PromptsView({
               <form className="prompt-editor" onSubmit={savePrompt}>
                 <div className="prompt-editor-scroll">
                   <label className="prompt-field"><span>{tr("title")}</span><input aria-label={tr("title")} autoFocus onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))} placeholder={tr("titlePlaceholder")} value={draft.title} /></label>
-                  <fieldset className="prompt-tag-field"><legend>{tr("allTags")}</legend><div>{tags.map((tag) => <label key={tag.id}><input checked={draft.tagIds.includes(tag.id)} disabled={!draft.tagIds.includes(tag.id) && draft.tagIds.length >= 20} onChange={() => setDraft((current) => ({ ...current, tagIds: current.tagIds.includes(tag.id) ? current.tagIds.filter((id) => id !== tag.id) : [...current.tagIds, tag.id] }))} type="checkbox" /><span className="prompt-tag">{tag.name}</span></label>)}</div></fieldset>
+                  <fieldset className="prompt-tag-field">
+                    <legend>{tr("allTags")}</legend>
+                    {tagsLoading ? (
+                      <p className="prompt-tag-field-status" role="status">{tr("loadingTags")}</p>
+                    ) : tagsLoadError ? (
+                      <div className="prompt-tag-field-error">
+                        <p className="prompt-inline-error" role="alert">{tagsLoadError}</p>
+                        <button className="prompt-button" onClick={() => void loadTags()} type="button">{tr("retry")}</button>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="prompt-tag-options">
+                          {tags.map((tag) => (
+                            <label key={tag.id}>
+                              <input
+                                checked={draft.tagIds.includes(tag.id)}
+                                disabled={editorTagCreating || (!draft.tagIds.includes(tag.id) && draft.tagIds.length >= 20)}
+                                onChange={() => {
+                                  setEditorTagError("");
+                                  setDraft((current) => ({
+                                    ...current,
+                                    tagIds: current.tagIds.includes(tag.id)
+                                      ? current.tagIds.filter((id) => id !== tag.id)
+                                      : current.tagIds.length < 20 ? [...current.tagIds, tag.id] : current.tagIds,
+                                  }));
+                                }}
+                                type="checkbox"
+                              />
+                              <span className="prompt-tag">{tag.name}</span>
+                            </label>
+                          ))}
+                        </div>
+                        {!tags.length && <p className="prompt-tag-field-status">{tr("noTags")}</p>}
+                        <div className="prompt-editor-tag-create">
+                          <label>
+                            <span className="sr-only">{tr("newTagName")}</span>
+                            <input
+                              aria-label={tr("newTagName")}
+                              disabled={editorTagCreating || draft.tagIds.length >= 20}
+                              onChange={(event) => {
+                                setEditorTagDraft(event.target.value);
+                                setEditorTagError("");
+                              }}
+                              onKeyDown={(event) => {
+                                if (event.key !== "Enter") return;
+                                if (event.nativeEvent.isComposing) return;
+                                event.preventDefault();
+                                if (event.nativeEvent.keyCode === 229) return;
+                                void createEditorTag();
+                              }}
+                              placeholder={tr("newTagName")}
+                              value={editorTagDraft}
+                            />
+                          </label>
+                          <button
+                            className="prompt-button"
+                            disabled={editorTagCreating || draft.tagIds.length >= 20}
+                            onClick={() => void createEditorTag()}
+                            type="button"
+                          >{tr("tagCreate")}</button>
+                          <small aria-label={tr("validationTags")}>{draft.tagIds.length} / 20</small>
+                        </div>
+                        {draft.tagIds.length >= 20 && <p className="prompt-tag-field-status">{tr("validationTags")}</p>}
+                        {editorTagError && <p className="prompt-inline-error" role="alert">{editorTagError}</p>}
+                      </>
+                    )}
+                  </fieldset>
                   <label className="prompt-field prompt-field-body"><span>{tr("body")}</span><textarea aria-label={tr("body")} onChange={(event) => setDraft((current) => ({ ...current, content: event.target.value }))} spellCheck={false} value={draft.content} /><small>{tr("markdownHint")} · {draftContentBytes.toLocaleString()} / {MAX_CONTENT_BYTES.toLocaleString()}</small></label>
                   <label className="prompt-pin-field"><input checked={draft.pinned} onChange={(event) => setDraft((current) => ({ ...current, pinned: event.target.checked }))} type="checkbox" />{tr("pinned")}</label>
                   {saveError && <p className="prompt-inline-error" role="alert">{saveError}</p>}
                 </div>
-                <footer className="prompt-editor-actions"><button className="prompt-button" disabled={saving} onClick={() => void cancelEdit()} type="button">{tr("cancel")}</button><button className="prompt-button prompt-button-primary" disabled={saving} type="submit">{saving ? tr("saving") : tr("save")}</button></footer>
+                <footer className="prompt-editor-actions"><button className="prompt-button" disabled={saving} onClick={() => void cancelEdit()} type="button">{tr("cancel")}</button><button className="prompt-button prompt-button-primary" disabled={saving || editorTagCreating} type="submit">{saving ? tr("saving") : tr("save")}</button></footer>
               </form>
             )}
           </aside>
