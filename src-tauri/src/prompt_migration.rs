@@ -267,6 +267,7 @@ struct PromptPackageManifest {
 struct PromptMeta {
     id: String,
     content_sha256: String,
+    pinned: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -281,6 +282,7 @@ struct PackageInspection {
     preflight: PromptMigrationPreflight,
     decisions: HashMap<String, PromptImportDecision>,
     tag_resolutions: HashMap<String, TagResolution>,
+    manual_order_counts: [usize; 2],
 }
 
 #[derive(Debug)]
@@ -1380,6 +1382,20 @@ where
     verify_entry_digest(&inspection.manifest.tags, &tags_digest)?;
 
     let imported_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let mut manual_orders = [
+        crate::prompts::manual_orders_for_front(
+            &transaction,
+            false,
+            inspection.manual_order_counts[0],
+        )?
+        .into_iter(),
+        crate::prompts::manual_orders_for_front(
+            &transaction,
+            true,
+            inspection.manual_order_counts[1],
+        )?
+        .into_iter(),
+    ];
     let mut changed_prompt_targets = HashSet::new();
     let prompts_digest = read_jsonl_entry::<_, PromptMigrationPrompt, _>(
         &mut archive,
@@ -1396,16 +1412,24 @@ where
             match decision.action {
                 PromptImportAction::SkipSame | PromptImportAction::KeepLocal => return Ok(()),
                 PromptImportAction::Insert => {
+                    let group = if prompt.pinned { 1 } else { 0 };
+                    let manual_order = manual_orders[group].next().ok_or_else(|| {
+                        PromptMigrationError::new(
+                            "prompt_migration_preflight_drift",
+                            "提示词手动排序预分配数量不足。",
+                        )
+                    })?;
                     transaction.execute(
                         "INSERT INTO prompts
-                         (id, title, content, excerpt, pinned, revision, created_at, updated_at)
-                         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                         (id, title, content, excerpt, pinned, manual_order, revision, created_at, updated_at)
+                         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                         params![
                             decision.target_id,
                             prompt.title,
                             prompt.content,
                             prompt.excerpt,
                             if prompt.pinned { 1 } else { 0 },
+                            manual_order,
                             prompt.revision,
                             prompt.created_at,
                             prompt.updated_at
@@ -1413,21 +1437,36 @@ where
                     )?;
                 }
                 PromptImportAction::Duplicate => {
+                    let group = if prompt.pinned { 1 } else { 0 };
+                    let manual_order = manual_orders[group].next().ok_or_else(|| {
+                        PromptMigrationError::new(
+                            "prompt_migration_preflight_drift",
+                            "提示词手动排序预分配数量不足。",
+                        )
+                    })?;
                     transaction.execute(
                         "INSERT INTO prompts
-                         (id, title, content, excerpt, pinned, revision, created_at, updated_at)
-                         VALUES(?1, ?2, ?3, ?4, ?5, 1, ?6, ?6)",
+                         (id, title, content, excerpt, pinned, manual_order, revision, created_at, updated_at)
+                         VALUES(?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7)",
                         params![
                             decision.target_id,
                             prompt.title,
                             prompt.content,
                             prompt.excerpt,
                             if prompt.pinned { 1 } else { 0 },
+                            manual_order,
                             imported_at
                         ],
                     )?;
                 }
                 PromptImportAction::Overwrite => {
+                    let group = if prompt.pinned { 1 } else { 0 };
+                    let manual_order = manual_orders[group].next().ok_or_else(|| {
+                        PromptMigrationError::new(
+                            "prompt_migration_preflight_drift",
+                            "提示词手动排序预分配数量不足。",
+                        )
+                    })?;
                     let local_revision: i64 = transaction.query_row(
                         "SELECT revision FROM prompts WHERE id = ?1",
                         [&decision.target_id],
@@ -1437,7 +1476,7 @@ where
                     let changed = transaction.execute(
                         "UPDATE prompts
                          SET title = ?2, content = ?3, excerpt = ?4, pinned = ?5,
-                             revision = ?6, updated_at = ?7
+                             manual_order = ?6, revision = ?7, updated_at = ?8
                          WHERE id = ?1",
                         params![
                             decision.target_id,
@@ -1445,6 +1484,7 @@ where
                             prompt.content,
                             prompt.excerpt,
                             if prompt.pinned { 1 } else { 0 },
+                            manual_order,
                             next_revision,
                             prompt.updated_at
                         ],
@@ -1467,6 +1507,12 @@ where
         },
     )?;
     verify_entry_digest(&inspection.manifest.prompts, &prompts_digest)?;
+    if manual_orders.iter().any(|orders| orders.len() != 0) {
+        return Err(PromptMigrationError::new(
+            "prompt_migration_preflight_drift",
+            "提示词手动排序预分配数量与导入结果不一致。",
+        ));
+    }
 
     let links_digest = read_jsonl_entry::<_, PromptMigrationLink, _>(
         &mut archive,
@@ -1660,6 +1706,7 @@ fn inspect_v2_package<R: Read + Seek>(
             prompt_meta.push(PromptMeta {
                 id: prompt.id,
                 content_sha256: prompt.content_sha256,
+                pinned: prompt.pinned,
             });
             Ok(())
         },
@@ -1715,6 +1762,7 @@ fn inspect_v2_package<R: Read + Seek>(
     let mut kept_local = 0_u64;
     let mut overwritten = 0_u64;
     let mut duplicated = 0_u64;
+    let mut manual_order_counts = [0_usize; 2];
     for prompt in prompt_meta {
         let local = connection
             .query_row(
@@ -1759,6 +1807,21 @@ fn inspect_v2_package<R: Read + Seek>(
             target_id,
             action,
         };
+        if matches!(
+            decision.action,
+            PromptImportAction::Insert
+                | PromptImportAction::Duplicate
+                | PromptImportAction::Overwrite
+        ) {
+            let group = if prompt.pinned { 1 } else { 0 };
+            manual_order_counts[group] =
+                manual_order_counts[group].checked_add(1).ok_or_else(|| {
+                    PromptMigrationError::new(
+                        "prompt_migration_order_count_overflow",
+                        "迁移包手动排序计数溢出。",
+                    )
+                })?;
+        }
         decisions.insert(prompt.id, decision.clone());
         decision_list.push(decision);
     }
@@ -1781,6 +1844,7 @@ fn inspect_v2_package<R: Read + Seek>(
         },
         decisions,
         tag_resolutions,
+        manual_order_counts,
     })
 }
 
@@ -2064,6 +2128,68 @@ mod tests {
     }
 
     #[test]
+    fn v2_import_preserves_jsonl_stream_order_without_adding_a_wire_rank() {
+        let mut pinned_second = prompt("pinned-second", "置顶二", "置顶正文二");
+        pinned_second.pinned = true;
+        let mut pinned_first = prompt("pinned-first", "置顶一", "置顶正文一");
+        pinned_first.pinned = true;
+        let prompts = vec![
+            prompt("normal-z", "普通 Z", "普通正文 Z"),
+            pinned_second,
+            prompt("normal-a", "普通 A", "普通正文 A"),
+            pinned_first,
+        ];
+        let mut migration = package(vec![], prompts, vec![]);
+
+        {
+            let mut archive = ZipArchive::new(&mut migration).unwrap();
+            let mut entry = archive.by_name(PROMPTS_PATH).unwrap();
+            let mut jsonl = String::new();
+            entry.read_to_string(&mut jsonl).unwrap();
+            assert!(!jsonl.contains("manualOrder"));
+            assert!(!jsonl.contains("manual_order"));
+        }
+        migration.set_position(0);
+
+        let mut connection = database();
+        insert_local_prompt(&connection, "local-existing", "本机正文");
+        connection
+            .execute(
+                "UPDATE prompts SET manual_order = ?1 WHERE id = 'local-existing'",
+                [i64::MIN],
+            )
+            .unwrap();
+        import_v2_transactional(
+            &mut connection,
+            &mut migration,
+            &PromptMigrationLimits::default(),
+            PromptConflictStrategy::Duplicate,
+        )
+        .unwrap();
+
+        let visible_ids = connection
+            .prepare(
+                "SELECT id FROM prompts
+                 ORDER BY pinned DESC, manual_order ASC, id ASC",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            visible_ids,
+            [
+                "pinned-second",
+                "pinned-first",
+                "normal-z",
+                "normal-a",
+                "local-existing",
+            ]
+        );
+    }
+
+    #[test]
     fn enforces_single_and_total_utf8_body_limits_during_preflight() {
         let mut single = package(vec![], vec![prompt("prompt-one", "一", "四个字")], vec![]);
         let connection = database();
@@ -2303,6 +2429,192 @@ mod tests {
                 )
                 .unwrap(),
             "tag-new"
+        );
+    }
+
+    #[test]
+    fn overwrite_uses_incoming_stream_order_for_same_and_cross_pinned_groups() {
+        let mut connection = database();
+        for (id, content) in [
+            ("local-a", "本机 A"),
+            ("local-b", "本机 B"),
+            ("local-cross", "本机跨组"),
+            ("normal-sentinel", "普通哨兵"),
+            ("pinned-sentinel", "置顶哨兵"),
+        ] {
+            insert_local_prompt(&connection, id, content);
+        }
+        connection
+            .execute(
+                "UPDATE prompts SET manual_order = ?1 WHERE id = 'normal-sentinel'",
+                [i64::MIN],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE prompts SET pinned = 1, manual_order = ?1
+                 WHERE id = 'pinned-sentinel'",
+                [i64::MIN],
+            )
+            .unwrap();
+
+        let incoming_b = prompt("local-b", "远端 B", "远端正文 B");
+        let mut incoming_cross = prompt("local-cross", "远端跨组", "远端跨组正文");
+        incoming_cross.pinned = true;
+        let incoming_a = prompt("local-a", "远端 A", "远端正文 A");
+        let mut migration = package(vec![], vec![incoming_b, incoming_cross, incoming_a], vec![]);
+
+        {
+            let mut archive = ZipArchive::new(&mut migration).unwrap();
+            let mut entry = archive.by_name(PROMPTS_PATH).unwrap();
+            let mut jsonl = String::new();
+            entry.read_to_string(&mut jsonl).unwrap();
+            assert!(!jsonl.contains("manualOrder"));
+            assert!(!jsonl.contains("manual_order"));
+        }
+        migration.set_position(0);
+
+        let imported = import_v2_transactional(
+            &mut connection,
+            &mut migration,
+            &PromptMigrationLimits::default(),
+            PromptConflictStrategy::Overwrite,
+        )
+        .unwrap();
+        assert_eq!(imported.preflight.overwritten, 3);
+
+        let visible = connection
+            .prepare(
+                "SELECT id, pinned, manual_order FROM prompts
+                 ORDER BY pinned DESC, manual_order ASC, id ASC",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(
+            visible.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+            [
+                "local-cross",
+                "pinned-sentinel",
+                "local-b",
+                "local-a",
+                "normal-sentinel",
+            ]
+        );
+        assert!(visible
+            .windows(2)
+            .all(|rows| { rows[0].1 != rows[1].1 || rows[0].2 < rows[1].2 }));
+        let (pinned, revision, created_at): (bool, i64, String) = connection
+            .query_row(
+                "SELECT pinned, revision, created_at FROM prompts WHERE id = 'local-cross'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert!(pinned);
+        assert_eq!(revision, 8);
+        assert_eq!(created_at, "local-created");
+    }
+
+    #[test]
+    fn overwrite_rank_reallocation_rolls_back_with_late_prompt_failure() {
+        let mut connection = database();
+        insert_local_prompt(&connection, "local-overwrite", "本机正文");
+        connection
+            .execute(
+                "UPDATE prompts SET manual_order = ?1 WHERE id = 'local-overwrite'",
+                [i64::MIN],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO prompt_tags
+                 (id, name, normalized_name, created_at, updated_at)
+                 VALUES('tag-old', '旧标签', '旧标签', 'local', 'local')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO prompt_tag_links(prompt_row_id, tag_row_id)
+                 SELECT prompt.row_id, tag.row_id FROM prompts AS prompt, prompt_tags AS tag
+                 WHERE prompt.id = 'local-overwrite' AND tag.id = 'tag-old'",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute_batch(
+                "CREATE TRIGGER reject_late_prompt
+                 BEFORE INSERT ON prompts WHEN new.id = 'prompt-b'
+                 BEGIN SELECT RAISE(ABORT, 'forced late import failure'); END;",
+            )
+            .unwrap();
+        let mut migration = package(
+            vec![tag("tag-new", "新标签", "新标签")],
+            vec![
+                prompt("local-overwrite", "远端标题", "远端正文"),
+                prompt("prompt-b", "B", "正文 B"),
+            ],
+            vec![PromptMigrationLink {
+                prompt_id: "local-overwrite".to_string(),
+                tag_id: "tag-new".to_string(),
+            }],
+        );
+
+        let error = import_v2_transactional(
+            &mut connection,
+            &mut migration,
+            &PromptMigrationLimits::default(),
+            PromptConflictStrategy::Overwrite,
+        )
+        .unwrap_err();
+        assert_eq!(error.code(), "prompt_migration_database_failed");
+        let local: (String, bool, i64, i64) = connection
+            .query_row(
+                "SELECT content, pinned, manual_order, revision
+                 FROM prompts WHERE id = 'local-overwrite'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(local, ("本机正文".to_string(), false, i64::MIN, 7));
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT tag.id FROM prompt_tag_links AS link
+                     JOIN prompt_tags AS tag ON tag.row_id = link.tag_row_id
+                     JOIN prompts AS prompt ON prompt.row_id = link.prompt_row_id
+                     WHERE prompt.id = 'local-overwrite'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "tag-old"
+        );
+        assert_eq!(
+            connection
+                .query_row("SELECT COUNT(*) FROM prompt_tags", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT library_revision FROM prompt_library_meta WHERE id = 1",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
         );
     }
 

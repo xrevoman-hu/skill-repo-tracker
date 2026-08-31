@@ -57,6 +57,37 @@ describe("prompt library API boundary", () => {
     });
   });
 
+  it("reorders prompts with revisioned neighbour anchors", async () => {
+    const { api } = await import("./api");
+    const request = {
+      id: "prompt-2",
+      previousId: "prompt-1",
+      nextId: "prompt-3",
+      expectedRevision: 7,
+      expectedLibraryRevision: 19,
+    };
+
+    await api.reorderPrompt(request);
+
+    expect(invoke).toHaveBeenCalledWith("reorder_prompt", { request });
+  });
+
+  it("passes an explicit global group boundary without neighbour anchors", async () => {
+    const { api } = await import("./api");
+    const request = {
+      id: "prompt-2",
+      previousId: null,
+      nextId: null,
+      boundary: "last" as const,
+      expectedRevision: 7,
+      expectedLibraryRevision: 19,
+    };
+
+    await api.reorderPrompt(request);
+
+    expect(invoke).toHaveBeenCalledWith("reorder_prompt", { request });
+  });
+
   it("preserves the mutually exclusive batch selection modes", async () => {
     const { api } = await import("./api");
     const explicit = { mode: "explicit" as const, ids: ["prompt-1", "prompt-2"] };
@@ -120,6 +151,30 @@ describe("prompt library API boundary", () => {
     });
   });
 
+  it("keeps prompt sharing ZIP import separate from full-library migration", async () => {
+    const { api } = await import("./api");
+
+    await api.previewPromptsZipImport();
+    await api.importPromptsZip({
+      path: "/private/tmp/shared-prompts.zip",
+      sha256: "b".repeat(64),
+      sizeBytes: 4567,
+      expectedLibraryRevision: 23,
+      conflictStrategy: "duplicate",
+    });
+
+    expect(invoke).toHaveBeenNthCalledWith(1, "preview_prompts_zip_import", {});
+    expect(invoke).toHaveBeenNthCalledWith(2, "import_prompts_zip", {
+      request: {
+        path: "/private/tmp/shared-prompts.zip",
+        sha256: "b".repeat(64),
+        sizeBytes: 4567,
+        expectedLibraryRevision: 23,
+        conflictStrategy: "duplicate",
+      },
+    });
+  });
+
   it("localizes key prompt and migration error codes in English without dropping details", async () => {
     const { localizedApiErrorMessage } = await import("./api");
     const promptError = Object.assign(new Error("中文提示"), {
@@ -142,6 +197,31 @@ describe("prompt library API boundary", () => {
       details: "limit=100000, actual=100001",
     }), "en", "Fallback")).toBe(
       "The migration package contains too many prompts. (limit=100000, actual=100001)",
+    );
+    expect(localizedApiErrorMessage(Object.assign(new Error("旧版 ZIP 不支持"), {
+      code: "prompt_zip_legacy_unsupported",
+    }), "en", "Fallback")).toBe(
+      "This manifest-less prompt ZIP is from an older export and cannot be imported.",
+    );
+    expect(localizedApiErrorMessage(Object.assign(new Error("标签数量过多"), {
+      code: "prompt_zip_too_many_tags",
+    }), "en", "Fallback")).toBe(
+      "The prompt ZIP contains too many unique tags.",
+    );
+    expect(localizedApiErrorMessage(Object.assign(new Error("元数据过大"), {
+      code: "prompt_zip_metadata_too_large",
+    }), "en", "Fallback")).toBe(
+      "The prompt ZIP contains too much retained metadata.",
+    );
+    expect(localizedApiErrorMessage(Object.assign(new Error("排序已漂移"), {
+      code: "prompt_reorder_drift",
+    }), "en", "Fallback")).toBe(
+      "The prompt library changed while reordering. Refresh and try again.",
+    );
+    expect(localizedApiErrorMessage(Object.assign(new Error("排序请求无效"), {
+      code: "prompt_reorder_invalid_request",
+    }), "en", "Fallback")).toBe(
+      "The requested prompt position is invalid. Try moving it again.",
     );
   });
 });

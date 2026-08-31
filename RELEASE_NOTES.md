@@ -1,5 +1,16 @@
 # Release Notes
 
+## v1.2.1 - 提示词分享、排序与标签体验
+
+这个版本让提示词库真正具备跨设备分享闭环：批量 ZIP 保持一篇一个 Markdown，并增加不含正文的摘要清单；另一位 Skill Repo Tracker 用户可以先预检，再按明确冲突策略批量导入。标签只按规范化后的文本匹配，本机已有同名标签会复用，缺失标签会自动创建。
+
+- 默认支持持久化手动排序，并保留“最近更新”视图；拖放有明确占位和落点，也支持键盘及组内首尾移动。
+- 标签管理入口更清晰，补齐创建、搜索、重命名、同名合并、删除和防重复提交，并清理筛选、详情与草稿中的旧标签状态。
+- 卡片显示更多紧凑标签，工具栏占用更少高度；抽屉支持安全的外部点击收起及 reduced-motion。
+- 设置页 v1 JSON / v2 `.srtmigration` 继续兼容，提示词 ZIP 使用独立入口和严格清单校验。
+
+English summary: v1.2.1 adds round-trip prompt ZIP import with text-matched tags, persistent manual ordering, reliable tag state, denser cards and toolbar controls, safe drawer click-away, and accessible drag feedback. The macOS package is ad-hoc signed, not Developer ID signed, and not notarized.
+
 ## v1.1.7 - 本地验证包
 
 这个版本聚焦可验证的软件包记录。它延续 v1.1.6 的插件入口识别与失败态收口能力，并把本地 `.app` / `.dmg` 产物验证、版本号和校验和单独对齐。

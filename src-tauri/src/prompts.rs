@@ -8,12 +8,11 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
-    io::{BufWriter, Write},
+    io::Write,
     path::{Path, PathBuf},
     time::Duration,
 };
 use unicode_normalization::UnicodeNormalization;
-use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
 use crate::{temp_artifacts::unique_operation_id, AppError};
 
@@ -21,11 +20,12 @@ pub const PROMPT_CONTENT_MAX_BYTES: usize = 5_242_880;
 pub const PROMPT_TITLE_MAX_CHARS: usize = 200;
 pub const PROMPT_TAG_MAX_CHARS: usize = 50;
 pub const PROMPT_MAX_TAGS: usize = 20;
-pub const PROMPT_SCHEMA_USER_VERSION: i64 = 2;
+pub const PROMPT_SCHEMA_USER_VERSION: i64 = 3;
 
 const DEFAULT_PAGE_SIZE: u32 = 30;
 const ALLOWED_PAGE_SIZES: [u32; 3] = [30, 50, 100];
 const EXCERPT_MAX_CHARS: usize = 720;
+const MANUAL_ORDER_STRIDE: i64 = 1_000_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +72,7 @@ pub enum PromptTagMode {
 #[serde(rename_all = "camelCase")]
 pub enum PromptSort {
     #[default]
+    Manual,
     UpdatedDesc,
 }
 
@@ -108,7 +109,7 @@ impl Default for PromptListRequest {
             query: String::new(),
             tag_ids: Vec::new(),
             tag_mode: PromptTagMode::Any,
-            sort: PromptSort::UpdatedDesc,
+            sort: PromptSort::Manual,
         }
     }
 }
@@ -148,6 +149,33 @@ pub struct PromptUpdateInput {
     #[serde(default)]
     pub pinned: Option<bool>,
     pub expected_revision: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptReorderInput {
+    pub id: String,
+    #[serde(default)]
+    pub previous_id: Option<String>,
+    #[serde(default)]
+    pub next_id: Option<String>,
+    #[serde(default)]
+    pub boundary: Option<PromptReorderBoundary>,
+    pub expected_revision: i64,
+    pub expected_library_revision: i64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum PromptReorderBoundary {
+    First,
+    Last,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptReorderResult {
+    pub library_revision: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -302,6 +330,7 @@ pub(crate) fn migrate_prompt_library(conn: &Connection) -> Result<(), AppError> 
           content TEXT NOT NULL,
           excerpt TEXT NOT NULL,
           pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+          manual_order INTEGER NOT NULL DEFAULT 0,
           revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
@@ -367,6 +396,36 @@ pub(crate) fn migrate_prompt_library(conn: &Connection) -> Result<(), AppError> 
         END;
         "#,
     )?;
+    let has_manual_order = {
+        let mut statement = tx.prepare("PRAGMA table_info(prompts)")?;
+        let columns = statement.query_map([], |row| row.get::<_, String>(1))?;
+        columns
+            .collect::<Result<HashSet<_>, _>>()?
+            .contains("manual_order")
+    };
+    if !has_manual_order {
+        tx.execute_batch(
+            "ALTER TABLE prompts ADD COLUMN manual_order INTEGER NOT NULL DEFAULT 0;",
+        )?;
+        tx.execute(
+            "WITH ranked AS (
+               SELECT row_id,
+                      ROW_NUMBER() OVER (
+                        PARTITION BY pinned ORDER BY updated_at DESC, id ASC
+                      ) AS position
+               FROM prompts
+             )
+             UPDATE prompts
+             SET manual_order = (
+               SELECT position * ?1 FROM ranked WHERE ranked.row_id = prompts.row_id
+             )",
+            [MANUAL_ORDER_STRIDE],
+        )?;
+    }
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS prompts_manual_sort_idx
+           ON prompts(pinned DESC, manual_order ASC, id ASC);",
+    )?;
     if needs_first_rebuild {
         tx.execute("INSERT INTO prompt_fts(prompt_fts) VALUES('rebuild')", [])?;
     }
@@ -389,6 +448,7 @@ fn validate_prompt_schema_tx(tx: &Transaction<'_>) -> Result<(), AppError> {
                 "content",
                 "excerpt",
                 "pinned",
+                "manual_order",
                 "revision",
                 "created_at",
                 "updated_at",
@@ -596,6 +656,58 @@ fn replace_prompt_links(
     Ok(())
 }
 
+fn calculate_manual_orders_for_front(first: i64, count: usize) -> Option<Vec<i64>> {
+    if count == 0 {
+        return Some(Vec::new());
+    }
+    let count = i64::try_from(count).ok()?;
+    let block_width = count.checked_mul(MANUAL_ORDER_STRIDE)?;
+    let first_order = first.checked_sub(block_width)?;
+    (0..count)
+        .map(|offset| {
+            offset
+                .checked_mul(MANUAL_ORDER_STRIDE)
+                .and_then(|delta| first_order.checked_add(delta))
+        })
+        .collect()
+}
+
+/// Reserves a contiguous rank block before the current pinned/normal group.
+///
+/// Callers must insert every returned rank through the same transaction/connection before any
+/// competing writer can mutate the group. The vector order is the visible order: the first
+/// incoming prompt receives the first rank. If the integer range is exhausted, the existing
+/// group is normalized in-place and the allocation is retried without changing content metadata.
+pub(crate) fn manual_orders_for_front(
+    conn: &Connection,
+    pinned: bool,
+    count: usize,
+) -> Result<Vec<i64>, AppError> {
+    let read_first = |connection: &Connection| -> Result<Option<i64>, AppError> {
+        connection
+            .query_row(
+                "SELECT MIN(manual_order) FROM prompts WHERE pinned = ?1",
+                [pinned],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .map_err(AppError::from)
+    };
+    let first = read_first(conn)?.unwrap_or(MANUAL_ORDER_STRIDE);
+    if let Some(orders) = calculate_manual_orders_for_front(first, count) {
+        return Ok(orders);
+    }
+    normalize_manual_order_group(conn, pinned)?;
+    calculate_manual_orders_for_front(read_first(conn)?.unwrap_or(MANUAL_ORDER_STRIDE), count)
+        .ok_or_else(|| sqlite_integrity_error("提示词手动排序归一化后仍超出可用范围。"))
+}
+
+fn manual_order_for_front(conn: &Connection, pinned: bool) -> Result<i64, AppError> {
+    manual_orders_for_front(conn, pinned, 1)?
+        .into_iter()
+        .next()
+        .ok_or_else(|| sqlite_integrity_error("提示词手动排序未能分配位置。"))
+}
+
 pub(crate) fn create_prompt(
     conn: &Connection,
     input: &PromptCreateInput,
@@ -608,10 +720,20 @@ pub(crate) fn create_prompt(
     let now = now_utc();
     let excerpt = plain_text_excerpt(&input.content);
     let tx = conn.unchecked_transaction()?;
+    let manual_order = manual_order_for_front(&tx, input.pinned)?;
     let insert = tx.execute(
-        "INSERT INTO prompts(id, title, content, excerpt, pinned, revision, created_at, updated_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, 1, ?6, ?6)",
-        params![id, title, input.content, excerpt, input.pinned, now],
+        "INSERT INTO prompts
+         (id, title, content, excerpt, pinned, manual_order, revision, created_at, updated_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7)",
+        params![
+            id,
+            title,
+            input.content,
+            excerpt,
+            input.pinned,
+            manual_order,
+            now
+        ],
     );
     if let Err(error) = insert {
         if matches!(error, rusqlite::Error::SqliteFailure(_, Some(ref message)) if message.contains("prompts.id"))
@@ -638,15 +760,28 @@ pub(crate) fn update_prompt(
     let excerpt = plain_text_excerpt(&input.content);
     let now = now_utc();
     let tx = conn.unchecked_transaction()?;
-    let row_id = tx
+    let record = tx
         .query_row(
-            "SELECT row_id FROM prompts WHERE id = ?1 AND revision = ?2",
+            "SELECT row_id, pinned, manual_order
+             FROM prompts WHERE id = ?1 AND revision = ?2",
             params![input.id, input.expected_revision],
-            |row| row.get::<_, i64>(0),
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
         )
         .optional()?;
-    let Some(row_id) = row_id else {
+    let Some((row_id, current_pinned, current_manual_order)) = record else {
         return revision_or_missing_error(&tx, &input.id, input.expected_revision);
+    };
+    let target_pinned = input.pinned.unwrap_or(current_pinned);
+    let manual_order = if target_pinned == current_pinned {
+        current_manual_order
+    } else {
+        manual_order_for_front(&tx, target_pinned)?
     };
     tx.execute(
         "UPDATE prompts
@@ -654,10 +789,19 @@ pub(crate) fn update_prompt(
              content = ?2,
              excerpt = ?3,
              pinned = COALESCE(?4, pinned),
+             manual_order = ?5,
              revision = revision + 1,
-             updated_at = ?5
-         WHERE row_id = ?6",
-        params![title, input.content, excerpt, input.pinned, now, row_id],
+             updated_at = ?6
+         WHERE row_id = ?7",
+        params![
+            title,
+            input.content,
+            excerpt,
+            input.pinned,
+            manual_order,
+            now,
+            row_id
+        ],
     )?;
     replace_prompt_links(&tx, row_id, &tag_ids)?;
     bump_library_revision(&tx)?;
@@ -696,11 +840,27 @@ pub(crate) fn set_prompt_pinned(
     expected_revision: i64,
 ) -> Result<PromptSummary, AppError> {
     let tx = conn.unchecked_transaction()?;
+    let current = tx
+        .query_row(
+            "SELECT pinned, manual_order FROM prompts
+             WHERE id = ?1 AND revision = ?2",
+            params![id, expected_revision],
+            |row| Ok((row.get::<_, bool>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?;
+    let Some((current_pinned, current_manual_order)) = current else {
+        return revision_or_missing_error(&tx, id, expected_revision);
+    };
+    let manual_order = if current_pinned == pinned {
+        current_manual_order
+    } else {
+        manual_order_for_front(&tx, pinned)?
+    };
     let changed = tx.execute(
         "UPDATE prompts
-         SET pinned = ?1, revision = revision + 1
-         WHERE id = ?2 AND revision = ?3",
-        params![pinned, id, expected_revision],
+         SET pinned = ?1, manual_order = ?2, revision = revision + 1
+         WHERE id = ?3 AND revision = ?4",
+        params![pinned, manual_order, id, expected_revision],
     )?;
     if changed != 1 {
         return revision_or_missing_error(&tx, id, expected_revision);
@@ -710,6 +870,298 @@ pub(crate) fn set_prompt_pinned(
     get_prompt_detail(conn, id)?
         .map(|detail| detail.summary)
         .ok_or_else(|| sqlite_integrity_error("置顶更新后无法读取提示词。"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReorderAnchor {
+    id: String,
+    manual_order: i64,
+}
+
+fn reorder_anchor(
+    conn: &Connection,
+    id: &str,
+    active_id: &str,
+    pinned: bool,
+) -> Result<ReorderAnchor, AppError> {
+    if id == active_id {
+        return Err(AppError::new(
+            "prompt_reorder_invalid_neighbors",
+            "排序落点不能引用正在移动的提示词。",
+        ));
+    }
+    let anchor = conn
+        .query_row(
+            "SELECT pinned, manual_order FROM prompts WHERE id = ?1",
+            [id],
+            |row| Ok((row.get::<_, bool>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()?
+        .ok_or_else(|| {
+            AppError::with_details(
+                "prompt_reorder_neighbor_not_found",
+                "排序落点中的相邻提示词不存在。",
+                id.to_string(),
+            )
+        })?;
+    if anchor.0 != pinned {
+        return Err(AppError::new(
+            "prompt_reorder_pinned_boundary",
+            "置顶提示词和普通提示词不能通过拖动跨组排序。",
+        ));
+    }
+    Ok(ReorderAnchor {
+        id: id.to_string(),
+        manual_order: anchor.1,
+    })
+}
+
+fn order_between(previous: Option<i64>, next: Option<i64>) -> Option<i64> {
+    match (previous, next) {
+        (Some(previous), Some(next)) if previous < next => {
+            let distance = i128::from(next) - i128::from(previous);
+            if distance <= 1 {
+                None
+            } else {
+                Some((i128::from(previous) + distance / 2) as i64)
+            }
+        }
+        (Some(previous), None) => previous.checked_add(MANUAL_ORDER_STRIDE),
+        (None, Some(next)) => next.checked_sub(MANUAL_ORDER_STRIDE),
+        (None, None) => Some(0),
+        _ => None,
+    }
+}
+
+fn normalize_manual_order_group(conn: &Connection, pinned: bool) -> Result<(), AppError> {
+    let row_ids = {
+        let mut statement = conn.prepare(
+            "SELECT row_id FROM prompts
+             WHERE pinned = ?1
+             ORDER BY manual_order ASC, id ASC",
+        )?;
+        let rows = statement.query_map([pinned], |row| row.get::<_, i64>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    };
+    let mut update = conn.prepare("UPDATE prompts SET manual_order = ?1 WHERE row_id = ?2")?;
+    for (index, row_id) in row_ids.into_iter().enumerate() {
+        let position = i64::try_from(index + 1)
+            .ok()
+            .and_then(|value| value.checked_mul(MANUAL_ORDER_STRIDE))
+            .ok_or_else(|| sqlite_integrity_error("提示词数量超出手动排序可用范围。"))?;
+        update.execute(params![position, row_id])?;
+    }
+    Ok(())
+}
+
+fn reorder_anchor_after(
+    conn: &Connection,
+    active_id: &str,
+    pinned: bool,
+    previous: &ReorderAnchor,
+) -> Result<Option<ReorderAnchor>, AppError> {
+    conn.query_row(
+        "SELECT id, manual_order FROM prompts
+         WHERE pinned = ?1 AND id <> ?2
+           AND (manual_order > ?3 OR (manual_order = ?3 AND id > ?4))
+         ORDER BY manual_order ASC, id ASC
+         LIMIT 1",
+        params![pinned, active_id, previous.manual_order, previous.id],
+        |row| {
+            Ok(ReorderAnchor {
+                id: row.get(0)?,
+                manual_order: row.get(1)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+fn reorder_anchor_before(
+    conn: &Connection,
+    active_id: &str,
+    pinned: bool,
+    next: &ReorderAnchor,
+) -> Result<Option<ReorderAnchor>, AppError> {
+    conn.query_row(
+        "SELECT id, manual_order FROM prompts
+         WHERE pinned = ?1 AND id <> ?2
+           AND (manual_order < ?3 OR (manual_order = ?3 AND id < ?4))
+         ORDER BY manual_order DESC, id DESC
+         LIMIT 1",
+        params![pinned, active_id, next.manual_order, next.id],
+        |row| {
+            Ok(ReorderAnchor {
+                id: row.get(0)?,
+                manual_order: row.get(1)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(AppError::from)
+}
+
+fn reorder_group_edge(
+    conn: &Connection,
+    active_id: Option<&str>,
+    pinned: bool,
+    boundary: PromptReorderBoundary,
+) -> Result<Option<ReorderAnchor>, AppError> {
+    let sql = match boundary {
+        PromptReorderBoundary::First => {
+            "SELECT id, manual_order FROM prompts
+             WHERE pinned = ?1 AND (?2 IS NULL OR id <> ?2)
+             ORDER BY manual_order ASC, id ASC LIMIT 1"
+        }
+        PromptReorderBoundary::Last => {
+            "SELECT id, manual_order FROM prompts
+             WHERE pinned = ?1 AND (?2 IS NULL OR id <> ?2)
+             ORDER BY manual_order DESC, id DESC LIMIT 1"
+        }
+    };
+    conn.query_row(sql, params![pinned, active_id], |row| {
+        Ok(ReorderAnchor {
+            id: row.get(0)?,
+            manual_order: row.get(1)?,
+        })
+    })
+    .optional()
+    .map_err(AppError::from)
+}
+
+fn validate_reorder_input_shape(input: &PromptReorderInput) -> Result<(), AppError> {
+    let has_anchor = input.previous_id.is_some() || input.next_id.is_some();
+    match (input.boundary, has_anchor) {
+        (Some(_), false) | (None, true) => Ok(()),
+        _ => Err(AppError::new(
+            "prompt_reorder_invalid_request",
+            "排序请求必须提供相邻提示词，或单独指定全局首尾边界。",
+        )),
+    }
+}
+
+fn resolve_reorder_gap(
+    conn: &Connection,
+    input: &PromptReorderInput,
+    pinned: bool,
+) -> Result<(Option<ReorderAnchor>, Option<ReorderAnchor>), AppError> {
+    if let Some(boundary) = input.boundary {
+        let edge = reorder_group_edge(conn, Some(&input.id), pinned, boundary)?;
+        return Ok(match boundary {
+            PromptReorderBoundary::First => (None, edge),
+            PromptReorderBoundary::Last => (edge, None),
+        });
+    }
+
+    let previous = input
+        .previous_id
+        .as_deref()
+        .map(|id| reorder_anchor(conn, id, &input.id, pinned))
+        .transpose()?;
+    let next = input
+        .next_id
+        .as_deref()
+        .map(|id| reorder_anchor(conn, id, &input.id, pinned))
+        .transpose()?;
+    match (previous, next) {
+        (Some(previous), Some(next)) => {
+            let actual_next = reorder_anchor_after(conn, &input.id, pinned, &previous)?;
+            if actual_next.as_ref().map(|anchor| anchor.id.as_str()) != Some(next.id.as_str()) {
+                return Err(AppError::new(
+                    "prompt_reorder_invalid_neighbors",
+                    "排序落点的相邻提示词已发生变化，请重新拖动。",
+                ));
+            }
+            Ok((Some(previous), Some(next)))
+        }
+        (Some(previous), None) => {
+            let next = reorder_anchor_after(conn, &input.id, pinned, &previous)?;
+            Ok((Some(previous), next))
+        }
+        (None, Some(next)) => {
+            let previous = reorder_anchor_before(conn, &input.id, pinned, &next)?;
+            Ok((previous, Some(next)))
+        }
+        (None, None) => Err(AppError::new(
+            "prompt_reorder_invalid_request",
+            "排序请求缺少落点。",
+        )),
+    }
+}
+
+pub(crate) fn reorder_prompt(
+    conn: &Connection,
+    input: &PromptReorderInput,
+) -> Result<PromptReorderResult, AppError> {
+    let tx = Transaction::new_unchecked(conn, TransactionBehavior::Immediate)?;
+    let actual_library_revision = library_revision(&tx)?;
+    if actual_library_revision != input.expected_library_revision {
+        return Err(AppError::with_details(
+            "prompt_reorder_drift",
+            "提示词库在拖动期间已发生变化，请重新排序。",
+            format!(
+                "expected={}, actual={actual_library_revision}",
+                input.expected_library_revision
+            ),
+        ));
+    }
+    let active = tx
+        .query_row(
+            "SELECT row_id, pinned, revision FROM prompts WHERE id = ?1",
+            [&input.id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, bool>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((row_id, pinned, revision)) = active else {
+        return Err(AppError::new(
+            "prompt_not_found",
+            "提示词不存在或已被删除。",
+        ));
+    };
+    if revision != input.expected_revision {
+        return revision_or_missing_error(&tx, &input.id, input.expected_revision);
+    }
+    validate_reorder_input_shape(input)?;
+    if let Some(boundary) = input.boundary {
+        let active_is_at_boundary = reorder_group_edge(&tx, None, pinned, boundary)?
+            .is_some_and(|edge| edge.id == input.id);
+        if active_is_at_boundary {
+            return Ok(PromptReorderResult {
+                library_revision: actual_library_revision,
+            });
+        }
+    }
+
+    let (mut previous, mut next) = resolve_reorder_gap(&tx, input, pinned)?;
+    let manual_order = match order_between(
+        previous.as_ref().map(|anchor| anchor.manual_order),
+        next.as_ref().map(|anchor| anchor.manual_order),
+    ) {
+        Some(value) => value,
+        None => {
+            normalize_manual_order_group(&tx, pinned)?;
+            (previous, next) = resolve_reorder_gap(&tx, input, pinned)?;
+            order_between(
+                previous.as_ref().map(|anchor| anchor.manual_order),
+                next.as_ref().map(|anchor| anchor.manual_order),
+            )
+            .ok_or_else(|| sqlite_integrity_error("提示词手动排序归一化后仍无法生成落点。"))?
+        }
+    };
+    tx.execute(
+        "UPDATE prompts SET manual_order = ?1 WHERE row_id = ?2",
+        params![manual_order, row_id],
+    )?;
+    let library_revision = bump_library_revision(&tx)?;
+    tx.commit()?;
+    Ok(PromptReorderResult { library_revision })
 }
 
 pub(crate) fn delete_prompt(
@@ -941,6 +1393,13 @@ fn validate_list_request(request: &PromptListRequest) -> Result<(), AppError> {
     Ok(())
 }
 
+fn prompt_order_clause(sort: PromptSort) -> &'static str {
+    match sort {
+        PromptSort::Manual => "p.pinned DESC, p.manual_order ASC, p.id ASC",
+        PromptSort::UpdatedDesc => "p.pinned DESC, p.updated_at DESC, p.id ASC",
+    }
+}
+
 fn rows_to_summaries(
     conn: &Connection,
     records: Vec<(i64, String, String, String, bool, u64, String, String, i64)>,
@@ -999,11 +1458,12 @@ fn list_prompts_in_snapshot(
     };
     let effective_page = request.page.min(total_pages);
     let offset = u64::from(effective_page - 1) * u64::from(request.page_size);
+    let order_clause = prompt_order_clause(request.sort);
     let data_sql = format!(
         "SELECT p.row_id, p.id, p.title, p.excerpt, p.pinned,
                 length(CAST(p.content AS BLOB)), p.created_at, p.updated_at, p.revision
          FROM prompts p{where_clause}
-         ORDER BY p.pinned DESC, p.updated_at DESC, p.id ASC
+         ORDER BY {order_clause}
          LIMIT ? OFFSET ?"
     );
     let mut data_values = values;
@@ -1179,7 +1639,7 @@ pub(crate) fn merge_prompt_tags(
             "不能将标签合并到自身。",
         ));
     }
-    let target = find_tag_by_id(conn, target_id)?
+    find_tag_by_id(conn, target_id)?
         .ok_or_else(|| AppError::new("prompt_tag_not_found", "目标标签不存在或已被删除。"))?;
     if find_tag_by_id(conn, source_id)?.is_none() {
         return Err(AppError::new(
@@ -1200,7 +1660,8 @@ pub(crate) fn merge_prompt_tags(
     tx.execute("DELETE FROM prompt_tags WHERE id = ?1", [source_id])?;
     bump_library_revision(&tx)?;
     tx.commit()?;
-    Ok(target)
+    find_tag_by_id(conn, target_id)?
+        .ok_or_else(|| sqlite_integrity_error("标签合并后无法读取目标标签。"))
 }
 
 pub(crate) fn delete_prompt_tag(conn: &Connection, id: &str) -> Result<(), AppError> {
@@ -1259,9 +1720,10 @@ pub(crate) fn resolve_prompt_selection_ids(
             }
             let (where_clause, values) =
                 build_filter_clause(&filter.query, &filter.tag_ids, filter.tag_mode);
+            let order_clause = prompt_order_clause(filter.sort);
             let sql = format!(
                 "SELECT p.id FROM prompts p{where_clause}
-                 ORDER BY p.pinned DESC, p.updated_at DESC, p.id ASC"
+                 ORDER BY {order_clause}"
             );
             let excluded = excluded_ids.iter().collect::<HashSet<_>>();
             let ids = {
@@ -1489,183 +1951,6 @@ pub(crate) fn safe_prompt_zip_title(title: &str) -> String {
     }
 }
 
-fn prompt_id_short_code(id: &str) -> String {
-    let code = id
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric())
-        .take(8)
-        .collect::<String>();
-    if code.is_empty() {
-        hex::encode(&Sha256::digest(id.as_bytes())[..4])
-    } else {
-        code
-    }
-}
-
-fn unique_zip_entry_name(
-    index: usize,
-    detail: &PromptDetail,
-    used: &mut HashSet<String>,
-) -> String {
-    let title = safe_prompt_zip_title(&detail.summary.title);
-    let short_code = prompt_id_short_code(&detail.summary.id);
-    let base = format!("prompts/{:04}_{title}_{short_code}", index + 1);
-    let mut candidate = format!("{base}.md");
-    let mut duplicate = 2usize;
-    while !used.insert(candidate.clone()) {
-        candidate = format!("{base}_{duplicate}.md");
-        duplicate += 1;
-    }
-    candidate
-}
-
-fn ensure_filter_export_revision_and_replace(
-    conn: &Connection,
-    temp_path: &Path,
-    destination: &Path,
-    expected_library_revision: i64,
-) -> Result<(), AppError> {
-    let verify_revision = |connection: &Connection| -> Result<(), AppError> {
-        let actual_revision = library_revision(connection)?;
-        if actual_revision != expected_library_revision {
-            return Err(AppError::with_details(
-                "prompt_selection_drift",
-                "提示词库在批量导出期间发生变化，请重新确认选择范围。",
-                format!("expected={expected_library_revision}, actual={actual_revision}"),
-            ));
-        }
-        Ok(())
-    };
-
-    // Production exports use a persistent database. Holding an IMMEDIATE transaction on a
-    // short-lived read-write connection closes the race between the final revision check and the
-    // atomic filesystem replacement: another writer can commit either before the check or after
-    // the replacement, never between them.
-    if let Some(database_path) = conn.path().filter(|path| !path.is_empty()) {
-        let guard_conn = Connection::open_with_flags(
-            Path::new(database_path),
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        guard_conn.busy_timeout(Duration::from_secs(5))?;
-        let guard = Transaction::new_unchecked(&guard_conn, TransactionBehavior::Immediate)?;
-        verify_revision(&guard)?;
-        finish_atomic_replace(temp_path, destination)?;
-        guard.commit()?;
-        return Ok(());
-    }
-
-    // In-memory databases cannot be reopened into the same database. They are used by unit tests
-    // and have no independent writer, so an immediate final check is sufficient.
-    verify_revision(conn)?;
-    finish_atomic_replace(temp_path, destination)
-}
-
-fn export_prompts_zip_in_snapshot(
-    conn: &Connection,
-    selection: &PromptSelection,
-    destination: &Path,
-    exported_at: DateTime<Local>,
-    before_snapshot_release: impl FnOnce(),
-) -> Result<PromptExportArtifact, AppError> {
-    let snapshot = Transaction::new_unchecked(conn, TransactionBehavior::Deferred)?;
-    let ids = resolve_prompt_selection_ids(&snapshot, selection)?;
-    if ids.is_empty() {
-        return Err(AppError::new(
-            "prompt_export_empty_selection",
-            "请至少选择一篇提示词再导出。",
-        ));
-    }
-    let temp_path = atomic_temp_path(destination)?;
-    let result = (|| -> Result<u64, AppError> {
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)?;
-        let buffer = BufWriter::new(file);
-        let mut archive = ZipWriter::new(buffer);
-        let options = SimpleFileOptions::default()
-            .compression_method(CompressionMethod::Deflated)
-            .unix_permissions(0o644);
-        let mut used_names = HashSet::new();
-        for (index, id) in ids.iter().enumerate() {
-            let detail = read_prompt_detail_parts(&snapshot, id, || {})?.ok_or_else(|| {
-                AppError::with_details(
-                    "prompt_not_found",
-                    "导出期间提示词不存在或已被删除。",
-                    id.clone(),
-                )
-            })?;
-            let entry_name = unique_zip_entry_name(index, &detail, &mut used_names);
-            if !entry_name.starts_with("prompts/")
-                || entry_name.contains("../")
-                || entry_name.contains('\\')
-            {
-                return Err(AppError::new(
-                    "prompt_zip_path_unsafe",
-                    "生成的 ZIP 条目路径不安全。",
-                ));
-            }
-            archive.start_file(entry_name, options)?;
-            archive.write_all(&render_prompt_markdown(&detail, exported_at)?)?;
-        }
-        let mut buffer = archive.finish()?;
-        buffer.flush()?;
-        let file = buffer.into_inner().map_err(|error| {
-            AppError::with_details(
-                "prompt_export_flush_failed",
-                "ZIP 缓冲区写入失败。",
-                error.into_error().to_string(),
-            )
-        })?;
-        file.sync_all()?;
-        drop(file);
-        Ok(fs::metadata(&temp_path)?.len())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
-    }
-    let size_bytes = result?;
-    before_snapshot_release();
-    if let Err(error) = snapshot.commit() {
-        let _ = fs::remove_file(&temp_path);
-        return Err(error.into());
-    }
-    let replace_result = match selection {
-        PromptSelection::Explicit { .. } => finish_atomic_replace(&temp_path, destination),
-        PromptSelection::Filter {
-            expected_library_revision,
-            ..
-        } => ensure_filter_export_revision_and_replace(
-            conn,
-            &temp_path,
-            destination,
-            *expected_library_revision,
-        ),
-    };
-    if let Err(error) = replace_result {
-        let _ = fs::remove_file(&temp_path);
-        return Err(error);
-    }
-    Ok(PromptExportArtifact {
-        path: destination.to_string_lossy().into_owned(),
-        file_name: destination
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default(),
-        item_count: ids.len(),
-        size_bytes,
-    })
-}
-
-pub(crate) fn export_prompts_zip_to_path(
-    conn: &Connection,
-    selection: &PromptSelection,
-    destination: &Path,
-    exported_at: DateTime<Local>,
-) -> Result<PromptExportArtifact, AppError> {
-    export_prompts_zip_in_snapshot(conn, selection, destination, exported_at, || {})
-}
-
 #[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -1850,10 +2135,22 @@ pub(crate) fn seed_debug_prompt_fixture(
         actual_total += content.len() as u64;
         let id = format!("debug-prompt-{run_id}-{index:05}");
         let excerpt = plain_text_excerpt(&content);
+        let pinned = index < 3;
+        let group_position = if pinned { index + 1 } else { index - 2 };
+        let manual_order = i64::try_from(group_position)
+            .ok()
+            .and_then(|position| position.checked_mul(MANUAL_ORDER_STRIDE))
+            .ok_or_else(|| {
+                AppError::new(
+                    "prompt_fixture_order_overflow",
+                    "性能语料数量超出手动排序可用范围。",
+                )
+            })?;
         tx.execute(
-            "INSERT INTO prompts(id, title, content, excerpt, pinned, revision, created_at, updated_at)
-             VALUES(?1, ?2, ?3, ?4, ?5, 1, ?6, ?6)",
-            params![id, title, content, excerpt, index < 3, now],
+            "INSERT INTO prompts
+             (id, title, content, excerpt, pinned, manual_order, revision, created_at, updated_at)
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7)",
+            params![id, title, content, excerpt, pinned, manual_order, now],
         )?;
         let prompt_row_id = tx.last_insert_rowid();
         for offset in 0..3.min(tag_count) {
@@ -1881,9 +2178,7 @@ pub(crate) fn seed_debug_prompt_fixture(
 mod tests {
     use super::*;
     use chrono::TimeZone;
-    use std::io::Read;
     use std::time::Instant;
-    use zip::ZipArchive;
 
     fn database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -1951,6 +2246,81 @@ mod tests {
         assert!(
             !prompts_created,
             "failed migration must roll back new tables"
+        );
+    }
+
+    #[test]
+    fn v2_schema_migrates_to_manual_order_without_changing_visible_order() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            r#"
+            PRAGMA user_version = 2;
+            CREATE TABLE prompts (
+              row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              id TEXT NOT NULL UNIQUE,
+              title TEXT NOT NULL,
+              content TEXT NOT NULL,
+              excerpt TEXT NOT NULL,
+              pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+              revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
+              created_at TEXT NOT NULL,
+              updated_at TEXT NOT NULL,
+              CHECK (length(title) BETWEEN 1 AND 200),
+              CHECK (length(CAST(content AS BLOB)) BETWEEN 1 AND 5242880)
+            );
+            INSERT INTO prompts
+              (id, title, content, excerpt, pinned, revision, created_at, updated_at)
+            VALUES
+              ('normal-older', '普通旧', '正文', '正文', 0, 1, '2026-01-01', '2026-01-01'),
+              ('normal-newer', '普通新', '正文', '正文', 0, 1, '2026-01-01', '2026-01-02'),
+              ('pinned-older', '置顶旧', '正文', '正文', 1, 1, '2026-01-01', '2026-01-01'),
+              ('pinned-newer', '置顶新', '正文', '正文', 1, 1, '2026-01-01', '2026-01-02');
+            "#,
+        )
+        .unwrap();
+
+        migrate_prompt_library(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+        let manual_order_column_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM pragma_table_info('prompts') WHERE name = 'manual_order'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(manual_order_column_exists);
+        let manual_index_exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(
+                   SELECT 1 FROM sqlite_master
+                   WHERE type = 'index' AND name = 'prompts_manual_sort_idx'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(manual_index_exists);
+
+        let ids = list_prompts(&conn, &PromptListRequest::default())
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|prompt| prompt.id)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ids,
+            [
+                "pinned-newer",
+                "pinned-older",
+                "normal-newer",
+                "normal-older",
+            ]
         );
     }
 
@@ -2160,6 +2530,635 @@ mod tests {
     }
 
     #[test]
+    fn manual_sort_is_default_and_updated_sort_remains_available() {
+        let conn = database();
+        let first = create_named_prompt(&conn, "first", "第一篇", "第一版", vec![], false);
+        create_named_prompt(&conn, "second", "第二篇", "正文", vec![], false);
+
+        let manual_ids = list_prompts(&conn, &PromptListRequest::default())
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|prompt| prompt.id)
+            .collect::<Vec<_>>();
+        assert_eq!(manual_ids, ["second", "first"]);
+
+        update_prompt(
+            &conn,
+            &PromptUpdateInput {
+                id: first.summary.id.clone(),
+                title: first.summary.title,
+                content: "第二版".into(),
+                tag_ids: vec![],
+                pinned: None,
+                expected_revision: first.summary.revision,
+            },
+        )
+        .unwrap();
+
+        let manual_after_edit = list_prompts(&conn, &PromptListRequest::default())
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|prompt| prompt.id)
+            .collect::<Vec<_>>();
+        assert_eq!(manual_after_edit, ["second", "first"]);
+        let updated_ids = list_prompts(
+            &conn,
+            &PromptListRequest {
+                sort: PromptSort::UpdatedDesc,
+                ..PromptListRequest::default()
+            },
+        )
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|prompt| prompt.id)
+        .collect::<Vec<_>>();
+        assert_eq!(updated_ids, ["first", "second"]);
+
+        let default_wire: PromptListRequest = serde_json::from_value(serde_json::json!({}))
+            .expect("missing sort must use the manual default");
+        assert_eq!(default_wire.sort, PromptSort::Manual);
+    }
+
+    #[test]
+    fn reorder_moves_between_adjacent_neighbors_without_touching_content_revision() {
+        let conn = database();
+        let first = create_named_prompt(&conn, "first", "第一篇", "正文", vec![], false);
+        create_named_prompt(&conn, "second", "第二篇", "正文", vec![], false);
+        create_named_prompt(&conn, "third", "第三篇", "正文", vec![], false);
+        let before = get_prompt_detail(&conn, &first.summary.id)
+            .unwrap()
+            .unwrap();
+        let expected_library_revision = library_revision(&conn).unwrap();
+
+        let reordered = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: first.summary.id.clone(),
+                previous_id: Some("third".into()),
+                next_id: Some("second".into()),
+                boundary: None,
+                expected_revision: before.summary.revision,
+                expected_library_revision,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(reordered.library_revision, expected_library_revision + 1);
+        let ids = list_prompts(&conn, &PromptListRequest::default())
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|prompt| prompt.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["third", "first", "second"]);
+        let after = get_prompt_detail(&conn, &first.summary.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.summary.revision, before.summary.revision);
+        assert_eq!(after.summary.updated_at, before.summary.updated_at);
+    }
+
+    #[test]
+    fn reorder_rejects_neighbors_that_do_not_describe_one_visible_gap() {
+        let conn = database();
+        let first = create_named_prompt(&conn, "first", "第一篇", "正文", vec![], false);
+        create_named_prompt(&conn, "second", "第二篇", "正文", vec![], false);
+        create_named_prompt(&conn, "third", "第三篇", "正文", vec![], false);
+        create_named_prompt(&conn, "fourth", "第四篇", "正文", vec![], false);
+        let before_revision = library_revision(&conn).unwrap();
+
+        let error = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: first.summary.id,
+                previous_id: Some("fourth".into()),
+                next_id: Some("second".into()),
+                boundary: None,
+                expected_revision: first.summary.revision,
+                expected_library_revision: before_revision,
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, "prompt_reorder_invalid_neighbors");
+        assert_eq!(library_revision(&conn).unwrap(), before_revision);
+        let ids = list_prompts(&conn, &PromptListRequest::default())
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|prompt| prompt.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["fourth", "third", "second", "first"]);
+    }
+
+    #[test]
+    fn one_sided_anchors_resolve_the_hidden_neighbor_at_page_edges() {
+        let conn = database();
+        for index in 0..35 {
+            create_named_prompt(
+                &conn,
+                &format!("page-{index:02}"),
+                &format!("分页 {index:02}"),
+                "正文",
+                vec![],
+                false,
+            );
+        }
+        let first_page = list_prompts(&conn, &PromptListRequest::default()).unwrap();
+        assert_eq!(first_page.items.first().unwrap().id, "page-34");
+        assert_eq!(first_page.items.last().unwrap().id, "page-05");
+        let second_page = list_prompts(
+            &conn,
+            &PromptListRequest {
+                page: 2,
+                ..PromptListRequest::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(second_page.items.first().unwrap().id, "page-04");
+
+        let moved_to_page_start = get_prompt_detail(&conn, "page-34").unwrap().unwrap();
+        let first_revision = library_revision(&conn).unwrap();
+        reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: "page-34".into(),
+                previous_id: None,
+                next_id: Some("page-04".into()),
+                boundary: None,
+                expected_revision: moved_to_page_start.summary.revision,
+                expected_library_revision: first_revision,
+            },
+        )
+        .unwrap();
+
+        let moved_to_page_end = get_prompt_detail(&conn, "page-00").unwrap().unwrap();
+        let second_revision = library_revision(&conn).unwrap();
+        reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: "page-00".into(),
+                previous_id: Some("page-05".into()),
+                next_id: None,
+                boundary: None,
+                expected_revision: moved_to_page_end.summary.revision,
+                expected_library_revision: second_revision,
+            },
+        )
+        .unwrap();
+
+        let ids = list_prompts(
+            &conn,
+            &PromptListRequest {
+                page_size: 50,
+                ..PromptListRequest::default()
+            },
+        )
+        .unwrap()
+        .items
+        .into_iter()
+        .map(|prompt| prompt.id)
+        .collect::<Vec<_>>();
+        let page_boundary = ids
+            .windows(4)
+            .find(|window| window[0] == "page-05")
+            .unwrap();
+        assert_eq!(page_boundary, ["page-05", "page-00", "page-34", "page-04"]);
+        for before in [moved_to_page_start, moved_to_page_end] {
+            let after = get_prompt_detail(&conn, &before.summary.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(after.summary.revision, before.summary.revision);
+            assert_eq!(after.summary.updated_at, before.summary.updated_at);
+        }
+    }
+
+    #[test]
+    fn global_boundaries_validate_revisions_normalize_ranks_and_noop_at_the_edge() {
+        let conn = database();
+        create_named_prompt(&conn, "normal", "普通", "正文", vec![], false);
+        let pinned_first =
+            create_named_prompt(&conn, "pinned-first", "置顶一", "正文", vec![], true);
+        create_named_prompt(&conn, "pinned-second", "置顶二", "正文", vec![], true);
+        conn.execute(
+            "UPDATE prompts SET manual_order = ?1 WHERE id = 'pinned-second'",
+            [i64::MIN],
+        )
+        .unwrap();
+        let original = get_prompt_detail(&conn, "pinned-first").unwrap().unwrap();
+        let revision = library_revision(&conn).unwrap();
+
+        let drift = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: "pinned-first".into(),
+                previous_id: None,
+                next_id: None,
+                boundary: Some(PromptReorderBoundary::First),
+                expected_revision: pinned_first.summary.revision,
+                expected_library_revision: revision - 1,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(drift.code, "prompt_reorder_drift");
+        let stale = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: "pinned-first".into(),
+                previous_id: None,
+                next_id: None,
+                boundary: Some(PromptReorderBoundary::First),
+                expected_revision: pinned_first.summary.revision + 1,
+                expected_library_revision: revision,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(stale.code, "prompt_revision_conflict");
+
+        let moved_first = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: "pinned-first".into(),
+                previous_id: None,
+                next_id: None,
+                boundary: Some(PromptReorderBoundary::First),
+                expected_revision: pinned_first.summary.revision,
+                expected_library_revision: revision,
+            },
+        )
+        .unwrap();
+        assert_eq!(moved_first.library_revision, revision + 1);
+        assert_eq!(
+            list_prompts(&conn, &PromptListRequest::default())
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|prompt| prompt.id)
+                .collect::<Vec<_>>(),
+            ["pinned-first", "pinned-second", "normal"]
+        );
+
+        let noop_first = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: "pinned-first".into(),
+                previous_id: None,
+                next_id: None,
+                boundary: Some(PromptReorderBoundary::First),
+                expected_revision: pinned_first.summary.revision,
+                expected_library_revision: moved_first.library_revision,
+            },
+        )
+        .unwrap();
+        assert_eq!(noop_first.library_revision, moved_first.library_revision);
+
+        conn.execute(
+            "UPDATE prompts SET manual_order = ?1 WHERE id = 'pinned-second'",
+            [i64::MAX],
+        )
+        .unwrap();
+        let moved_last = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: "pinned-first".into(),
+                previous_id: None,
+                next_id: None,
+                boundary: Some(PromptReorderBoundary::Last),
+                expected_revision: pinned_first.summary.revision,
+                expected_library_revision: moved_first.library_revision,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            moved_last.library_revision,
+            moved_first.library_revision + 1
+        );
+        assert_eq!(
+            list_prompts(&conn, &PromptListRequest::default())
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|prompt| prompt.id)
+                .collect::<Vec<_>>(),
+            ["pinned-second", "pinned-first", "normal"]
+        );
+        let noop_last = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: "pinned-first".into(),
+                previous_id: None,
+                next_id: None,
+                boundary: Some(PromptReorderBoundary::Last),
+                expected_revision: pinned_first.summary.revision,
+                expected_library_revision: moved_last.library_revision,
+            },
+        )
+        .unwrap();
+        assert_eq!(noop_last.library_revision, moved_last.library_revision);
+        let after = get_prompt_detail(&conn, "pinned-first").unwrap().unwrap();
+        assert_eq!(after.summary.revision, original.summary.revision);
+        assert_eq!(after.summary.updated_at, original.summary.updated_at);
+    }
+
+    #[test]
+    fn reorder_rejects_boundary_anchor_combinations_and_missing_destinations() {
+        let conn = database();
+        let first = create_named_prompt(&conn, "first", "第一篇", "正文", vec![], false);
+        create_named_prompt(&conn, "second", "第二篇", "正文", vec![], false);
+        let revision = library_revision(&conn).unwrap();
+        for input in [
+            PromptReorderInput {
+                id: first.summary.id.clone(),
+                previous_id: None,
+                next_id: Some("second".into()),
+                boundary: Some(PromptReorderBoundary::First),
+                expected_revision: first.summary.revision,
+                expected_library_revision: revision,
+            },
+            PromptReorderInput {
+                id: first.summary.id.clone(),
+                previous_id: None,
+                next_id: None,
+                boundary: None,
+                expected_revision: first.summary.revision,
+                expected_library_revision: revision,
+            },
+        ] {
+            let error = reorder_prompt(&conn, &input).unwrap_err();
+            assert_eq!(error.code, "prompt_reorder_invalid_request");
+        }
+        assert_eq!(library_revision(&conn).unwrap(), revision);
+
+        let decoded: PromptReorderInput = serde_json::from_value(serde_json::json!({
+            "id": "first",
+            "previousId": null,
+            "nextId": null,
+            "boundary": "last",
+            "expectedRevision": 1,
+            "expectedLibraryRevision": revision
+        }))
+        .unwrap();
+        assert_eq!(decoded.boundary, Some(PromptReorderBoundary::Last));
+    }
+
+    #[test]
+    fn reorder_rejects_stale_revisions_and_cross_pinned_group_anchors_atomically() {
+        let conn = database();
+        let active = create_named_prompt(&conn, "active", "移动项", "正文", vec![], false);
+        create_named_prompt(&conn, "normal", "普通锚点", "正文", vec![], false);
+        create_named_prompt(&conn, "pinned", "置顶锚点", "正文", vec![], true);
+        let current_library_revision = library_revision(&conn).unwrap();
+
+        let drift = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: active.summary.id.clone(),
+                previous_id: None,
+                next_id: Some("normal".into()),
+                boundary: None,
+                expected_revision: active.summary.revision,
+                expected_library_revision: current_library_revision - 1,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(drift.code, "prompt_reorder_drift");
+
+        let stale_prompt = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: active.summary.id.clone(),
+                previous_id: None,
+                next_id: Some("normal".into()),
+                boundary: None,
+                expected_revision: active.summary.revision + 1,
+                expected_library_revision: current_library_revision,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(stale_prompt.code, "prompt_revision_conflict");
+
+        let pinned_boundary = reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: active.summary.id,
+                previous_id: Some("pinned".into()),
+                next_id: None,
+                boundary: None,
+                expected_revision: active.summary.revision,
+                expected_library_revision: current_library_revision,
+            },
+        )
+        .unwrap_err();
+        assert_eq!(pinned_boundary.code, "prompt_reorder_pinned_boundary");
+        assert_eq!(library_revision(&conn).unwrap(), current_library_revision);
+        assert_eq!(
+            list_prompts(&conn, &PromptListRequest::default())
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|prompt| prompt.id)
+                .collect::<Vec<_>>(),
+            ["pinned", "normal", "active"]
+        );
+    }
+
+    #[test]
+    fn reorder_normalizes_only_when_adjacent_ranks_have_no_gap() {
+        let conn = database();
+        let first = create_named_prompt(&conn, "first", "第一篇", "正文", vec![], false);
+        create_named_prompt(&conn, "second", "第二篇", "正文", vec![], false);
+        create_named_prompt(&conn, "third", "第三篇", "正文", vec![], false);
+        conn.execute(
+            "UPDATE prompts
+             SET manual_order = CASE id
+               WHEN 'third' THEN 10
+               WHEN 'second' THEN 11
+               ELSE 20
+             END",
+            [],
+        )
+        .unwrap();
+        let before_revision = library_revision(&conn).unwrap();
+
+        reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: first.summary.id,
+                previous_id: Some("third".into()),
+                next_id: Some("second".into()),
+                boundary: None,
+                expected_revision: first.summary.revision,
+                expected_library_revision: before_revision,
+            },
+        )
+        .unwrap();
+
+        let ids = list_prompts(&conn, &PromptListRequest::default())
+            .unwrap()
+            .items
+            .into_iter()
+            .map(|prompt| prompt.id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["third", "first", "second"]);
+        let ranks = conn
+            .prepare(
+                "SELECT manual_order FROM prompts
+                 WHERE pinned = 0 ORDER BY manual_order ASC, id ASC",
+            )
+            .unwrap()
+            .query_map([], |row| row.get::<_, i64>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(ranks.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(library_revision(&conn).unwrap(), before_revision + 1);
+    }
+
+    #[test]
+    fn pinning_from_both_public_mutations_moves_only_cross_group_items_to_the_front() {
+        let conn = database();
+        let normal_first =
+            create_named_prompt(&conn, "normal-first", "普通一", "正文", vec![], false);
+        let normal_second =
+            create_named_prompt(&conn, "normal-second", "普通二", "正文", vec![], false);
+        let pinned_first =
+            create_named_prompt(&conn, "pinned-first", "置顶一", "正文", vec![], true);
+        create_named_prompt(&conn, "pinned-second", "置顶二", "正文", vec![], true);
+
+        let pinned = set_prompt_pinned(
+            &conn,
+            &normal_first.summary.id,
+            true,
+            normal_first.summary.revision,
+        )
+        .unwrap();
+        assert_eq!(
+            list_prompts(&conn, &PromptListRequest::default())
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|prompt| prompt.id)
+                .collect::<Vec<_>>(),
+            [
+                "normal-first",
+                "pinned-second",
+                "pinned-first",
+                "normal-second",
+            ]
+        );
+
+        let edited = update_prompt(
+            &conn,
+            &PromptUpdateInput {
+                id: normal_second.summary.id,
+                title: normal_second.summary.title,
+                content: normal_second.content,
+                tag_ids: vec![],
+                pinned: Some(true),
+                expected_revision: normal_second.summary.revision,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            list_prompts(&conn, &PromptListRequest::default())
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|prompt| prompt.id)
+                .collect::<Vec<_>>(),
+            [
+                "normal-second",
+                "normal-first",
+                "pinned-second",
+                "pinned-first",
+            ]
+        );
+
+        update_prompt(
+            &conn,
+            &PromptUpdateInput {
+                id: pinned_first.summary.id,
+                title: pinned_first.summary.title,
+                content: pinned_first.content,
+                tag_ids: vec![],
+                pinned: Some(true),
+                expected_revision: pinned_first.summary.revision,
+            },
+        )
+        .unwrap();
+        set_prompt_pinned(&conn, &pinned.id, true, pinned.revision).unwrap();
+        assert_eq!(
+            list_prompts(&conn, &PromptListRequest::default())
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|prompt| prompt.id)
+                .collect::<Vec<_>>(),
+            [
+                "normal-second",
+                "normal-first",
+                "pinned-second",
+                "pinned-first",
+            ]
+        );
+        assert_eq!(edited.summary.revision, normal_second.summary.revision + 1);
+    }
+
+    #[test]
+    fn front_insert_and_tail_reorder_recover_from_integer_boundaries() {
+        let conn = database();
+        create_named_prompt(&conn, "first", "第一篇", "正文", vec![], false);
+        create_named_prompt(&conn, "second", "第二篇", "正文", vec![], false);
+        conn.execute(
+            "UPDATE prompts SET manual_order = ?1 WHERE id = 'second'",
+            [i64::MIN],
+        )
+        .unwrap();
+
+        let third = create_named_prompt(&conn, "third", "第三篇", "正文", vec![], false);
+        assert_eq!(
+            list_prompts(&conn, &PromptListRequest::default())
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|prompt| prompt.id)
+                .collect::<Vec<_>>(),
+            ["third", "second", "first"]
+        );
+
+        conn.execute(
+            "UPDATE prompts SET manual_order = ?1 WHERE id = 'first'",
+            [i64::MAX],
+        )
+        .unwrap();
+        let revision = library_revision(&conn).unwrap();
+        reorder_prompt(
+            &conn,
+            &PromptReorderInput {
+                id: third.summary.id,
+                previous_id: Some("first".into()),
+                next_id: None,
+                boundary: None,
+                expected_revision: third.summary.revision,
+                expected_library_revision: revision,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            list_prompts(&conn, &PromptListRequest::default())
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|prompt| prompt.id)
+                .collect::<Vec<_>>(),
+            ["second", "first", "third"]
+        );
+    }
+
+    #[test]
     fn crud_enforces_revision_and_pinning_does_not_touch_content_timestamp() {
         let conn = database();
         let tag = create_tag(&conn, "研究");
@@ -2348,6 +3347,43 @@ mod tests {
     }
 
     #[test]
+    fn merge_prompt_tags_returns_the_committed_usage_count() {
+        let conn = database();
+        let source = create_tag(&conn, "来源");
+        let target = create_tag(&conn, "目标");
+        create_named_prompt(
+            &conn,
+            "source-prompt",
+            "来源提示词",
+            "正文",
+            vec![source.id.clone()],
+            false,
+        );
+        create_named_prompt(
+            &conn,
+            "target-prompt",
+            "目标提示词",
+            "正文",
+            vec![target.id.clone()],
+            false,
+        );
+
+        let merged = merge_prompt_tags(&conn, &source.id, &target.id).unwrap();
+
+        assert_eq!(merged.id, target.id);
+        assert_eq!(merged.prompt_count, 2);
+        assert_eq!(
+            list_prompt_tags(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|tag| tag.id == target.id)
+                .unwrap()
+                .prompt_count,
+            2
+        );
+    }
+
+    #[test]
     fn search_handles_chinese_fts_short_queries_tags_and_literal_wildcards() {
         let conn = database();
         let image = create_tag(&conn, "图像");
@@ -2441,6 +3477,45 @@ mod tests {
     }
 
     #[test]
+    fn filtered_selection_respects_manual_and_updated_sort_modes() {
+        let conn = database();
+        let first = create_named_prompt(&conn, "first", "第一篇", "第一版", vec![], false);
+        create_named_prompt(&conn, "second", "第二篇", "正文", vec![], false);
+        update_prompt(
+            &conn,
+            &PromptUpdateInput {
+                id: first.summary.id,
+                title: first.summary.title,
+                content: "第二版".into(),
+                tag_ids: vec![],
+                pinned: None,
+                expected_revision: first.summary.revision,
+            },
+        )
+        .unwrap();
+        let expected_library_revision = library_revision(&conn).unwrap();
+        let selection = |sort| PromptSelection::Filter {
+            filter: PromptFilter {
+                query: String::new(),
+                tag_ids: vec![],
+                tag_mode: PromptTagMode::Any,
+                sort,
+            },
+            excluded_ids: vec![],
+            expected_library_revision,
+        };
+
+        assert_eq!(
+            resolve_prompt_selection_ids(&conn, &selection(PromptSort::Manual)).unwrap(),
+            ["second", "first"]
+        );
+        assert_eq!(
+            resolve_prompt_selection_ids(&conn, &selection(PromptSort::UpdatedDesc)).unwrap(),
+            ["first", "second"]
+        );
+    }
+
+    #[test]
     fn pagination_clamps_to_the_last_valid_page_after_deletion() {
         let conn = database();
         for index in 0..31 {
@@ -2483,7 +3558,7 @@ mod tests {
     }
 
     #[test]
-    fn markdown_and_zip_exports_are_bomless_exact_safe_and_atomic() {
+    fn markdown_export_is_bomless_exact_and_atomic() {
         let conn = database();
         let tag = create_tag(&conn, "研究");
         let body = "# 原始正文\n\n保留  空格\n<script>alert(1)</script>";
@@ -2509,138 +3584,6 @@ mod tests {
         let md_path = directory.path().join("single.md");
         export_prompt_markdown_to_path(&conn, "export-one", &md_path, exported_at).unwrap();
         assert!(fs::read_to_string(&md_path).unwrap().ends_with(body));
-
-        let zip_path = directory.path().join("batch.zip");
-        let selection = PromptSelection::Explicit {
-            ids: vec!["export-one".into()],
-        };
-        let artifact =
-            export_prompts_zip_to_path(&conn, &selection, &zip_path, exported_at).unwrap();
-        assert_eq!(artifact.item_count, 1);
-        let mut archive = ZipArchive::new(File::open(&zip_path).unwrap()).unwrap();
-        assert_eq!(archive.len(), 1);
-        let mut entry = archive.by_index(0).unwrap();
-        let name = entry.name().to_string();
-        assert!(name.starts_with("prompts/0001_"));
-        assert!(!name.contains("../"));
-        assert!(!name.contains('\\'));
-        let mut exported = String::new();
-        entry.read_to_string(&mut exported).unwrap();
-        assert!(exported.ends_with(body));
-
-        fs::write(&zip_path, b"keep-me").unwrap();
-        let missing = PromptSelection::Explicit {
-            ids: vec!["missing".into()],
-        };
-        assert!(export_prompts_zip_to_path(&conn, &missing, &zip_path, exported_at).is_err());
-        assert_eq!(fs::read(&zip_path).unwrap(), b"keep-me");
-    }
-
-    #[test]
-    fn zip_export_uses_one_snapshot_and_filter_drift_never_replaces_destination() {
-        let directory = tempfile::tempdir().unwrap();
-        let database_path = directory.path().join("prompt-export-snapshot.sqlite");
-        let writer = Connection::open(&database_path).unwrap();
-        migrate_prompt_library(&writer).unwrap();
-        let first = create_named_prompt(
-            &writer,
-            "snapshot-export",
-            "快照导出",
-            "快照正文 v1",
-            vec![],
-            false,
-        );
-        create_named_prompt(
-            &writer,
-            "excluded-export",
-            "排除项",
-            "不应导出",
-            vec![],
-            false,
-        );
-        let reader = open_prompt_read_connection(&database_path).unwrap();
-        let exported_at = Local
-            .with_ymd_and_hms(2026, 8, 30, 12, 34, 56)
-            .single()
-            .unwrap();
-
-        let explicit_path = directory.path().join("explicit.zip");
-        let explicit = PromptSelection::Explicit {
-            ids: vec![first.summary.id.clone(), first.summary.id.clone()],
-        };
-        let explicit_artifact =
-            export_prompts_zip_in_snapshot(&reader, &explicit, &explicit_path, exported_at, || {
-                update_prompt(
-                    &writer,
-                    &PromptUpdateInput {
-                        id: first.summary.id.clone(),
-                        title: first.summary.title.clone(),
-                        content: "快照正文 v2".into(),
-                        tag_ids: vec![],
-                        pinned: None,
-                        expected_revision: first.summary.revision,
-                    },
-                )
-                .unwrap();
-            })
-            .unwrap();
-        assert_eq!(explicit_artifact.item_count, 1);
-        let mut explicit_archive = ZipArchive::new(File::open(&explicit_path).unwrap()).unwrap();
-        assert_eq!(explicit_archive.len(), 1);
-        let mut explicit_markdown = String::new();
-        explicit_archive
-            .by_index(0)
-            .unwrap()
-            .read_to_string(&mut explicit_markdown)
-            .unwrap();
-        assert!(explicit_markdown.ends_with("快照正文 v1"));
-
-        let expected_library_revision = library_revision(&writer).unwrap();
-        let filter = PromptSelection::Filter {
-            filter: PromptFilter {
-                query: String::new(),
-                tag_ids: vec![],
-                tag_mode: PromptTagMode::Any,
-                sort: PromptSort::UpdatedDesc,
-            },
-            excluded_ids: vec!["excluded-export".into()],
-            expected_library_revision,
-        };
-        let stable_filter_path = directory.path().join("filter-stable.zip");
-        let stable =
-            export_prompts_zip_to_path(&reader, &filter, &stable_filter_path, exported_at).unwrap();
-        assert_eq!(stable.item_count, 1);
-
-        let drift_path = directory.path().join("filter-drift.zip");
-        fs::write(&drift_path, b"keep-existing-export").unwrap();
-        let current = get_prompt_detail(&writer, "snapshot-export")
-            .unwrap()
-            .unwrap();
-        let error =
-            export_prompts_zip_in_snapshot(&reader, &filter, &drift_path, exported_at, || {
-                update_prompt(
-                    &writer,
-                    &PromptUpdateInput {
-                        id: current.summary.id.clone(),
-                        title: current.summary.title.clone(),
-                        content: "快照正文 v3".into(),
-                        tag_ids: vec![],
-                        pinned: None,
-                        expected_revision: current.summary.revision,
-                    },
-                )
-                .unwrap();
-            })
-            .unwrap_err();
-        assert_eq!(error.code, "prompt_selection_drift");
-        assert_eq!(fs::read(&drift_path).unwrap(), b"keep-existing-export");
-        assert_eq!(
-            get_prompt_detail(&writer, "snapshot-export")
-                .unwrap()
-                .unwrap()
-                .content,
-            "快照正文 v3"
-        );
     }
 
     #[test]

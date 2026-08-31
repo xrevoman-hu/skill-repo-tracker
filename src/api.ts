@@ -48,6 +48,33 @@ const ENGLISH_API_ERRORS: Record<string, string> = {
   prompt_title_too_long: "Prompt title must not exceed 200 characters.",
   prompt_too_many_tags: "A prompt can have at most 20 tags.",
   prompt_zip_path_unsafe: "An unsafe ZIP entry path was blocked.",
+  prompt_zip_bom_forbidden: "Prompt ZIP files must be UTF-8 without a byte-order mark.",
+  prompt_zip_database_failed: "The prompt ZIP could not be imported into the local database.",
+  prompt_zip_dialog_failed: "The prompt ZIP file picker could not be opened.",
+  prompt_zip_duplicate_entry: "The prompt ZIP contains a duplicate archive path.",
+  prompt_zip_duplicate_prompt: "The prompt ZIP contains a duplicate prompt ID.",
+  prompt_zip_entry_hash_mismatch: "A prompt ZIP entry failed its SHA-256 integrity check.",
+  prompt_zip_extra_entry: "The prompt ZIP contains a file that is not listed in its manifest.",
+  prompt_zip_file_changed: "The selected prompt ZIP changed after preview. Preview it again.",
+  prompt_zip_frontmatter_invalid: "A prompt Markdown file contains invalid or unsupported front matter.",
+  prompt_zip_fts_integrity_failed: "The prompt search index failed its integrity check after import.",
+  prompt_zip_import_request_invalid: "The prompt ZIP import request is incomplete. Preview the package again.",
+  prompt_zip_io_failed: "The prompt ZIP could not be read or written.",
+  prompt_zip_legacy_unsupported: "This manifest-less prompt ZIP is from an older export and cannot be imported.",
+  prompt_zip_library_changed: "The prompt library changed after preview. Preview the ZIP again.",
+  prompt_zip_manifest_invalid: "The prompt ZIP manifest is missing or invalid.",
+  prompt_zip_metadata_too_large: "The prompt ZIP contains too much retained metadata.",
+  prompt_zip_path_failed: "The selected prompt ZIP path could not be resolved.",
+  prompt_zip_schema_unsupported: "This prompt ZIP schema version is not supported.",
+  prompt_zip_size_limit_exceeded: "The prompt ZIP exceeds the supported size limits.",
+  prompt_zip_total_size_overflow: "The prompt ZIP content total is invalid.",
+  prompt_zip_too_many_tags: "The prompt ZIP contains too many unique tags.",
+  prompt_zip_utf8_invalid: "A prompt ZIP entry is not valid UTF-8.",
+  prompt_reorder_drift: "The prompt library changed while reordering. Refresh and try again.",
+  prompt_reorder_invalid_request: "The requested prompt position is invalid. Try moving it again.",
+  prompt_reorder_invalid_neighbors: "The selected prompt position is no longer valid. Try dragging again.",
+  prompt_reorder_neighbor_not_found: "A neighbouring prompt no longer exists. Refresh and try again.",
+  prompt_reorder_pinned_boundary: "Pinned and unpinned prompts cannot be reordered across groups.",
   migration_export_failed: "The migration package could not be exported.",
   migration_import_fingerprint_invalid: "The migration package fingerprint is missing or invalid. Preview the package again.",
   migration_import_path_invalid: "The migration package path is invalid.",
@@ -80,6 +107,7 @@ const ENGLISH_API_ERRORS: Record<string, string> = {
   prompt_migration_jsonl_record_too_large: "A migration JSONL record exceeds the supported size limit.",
   prompt_migration_manifest_invalid: "The migration manifest is invalid.",
   prompt_migration_meta_missing: "The prompt library metadata row is missing.",
+  prompt_migration_order_count_overflow: "The migration package contains too many prompt ordering records.",
   prompt_migration_parent_missing: "The migration package destination folder is missing.",
   prompt_migration_path_invalid: "The migration package contains an unsafe or invalid path.",
   prompt_migration_preflight_drift: "Migration validation changed before import. Preview the package again.",
@@ -267,7 +295,7 @@ export type MigrationPackageSummary = {
 };
 
 export type PromptTagMode = "all" | "any";
-export type PromptSort = "updatedDesc";
+export type PromptSort = "manual" | "updatedDesc";
 export type PromptPageSize = 30 | 50 | 100;
 
 export type PromptTag = {
@@ -340,6 +368,19 @@ export type UpdatePromptRequest = {
   expectedRevision: number;
 };
 
+export type ReorderPromptRequest = {
+  id: string;
+  previousId: string | null;
+  nextId: string | null;
+  boundary?: "first" | "last";
+  expectedRevision: number;
+  expectedLibraryRevision: number;
+};
+
+export type ReorderPromptResult = {
+  libraryRevision: number;
+};
+
 export type PromptExportSummary = {
   path?: string | null;
   cancelled: boolean;
@@ -369,6 +410,53 @@ export type PromptMigrationPreview = {
 };
 
 export type PromptMigrationConflictStrategy = "keep-local" | "overwrite" | "duplicate";
+
+export type PromptZipConflictStrategy = PromptMigrationConflictStrategy;
+
+export type PromptZipImportConflict = {
+  id: string;
+  importedTitle: string;
+  localTitle: string;
+};
+
+export type PromptZipImportPreview = {
+  path?: string | null;
+  fileName?: string | null;
+  cancelled: boolean;
+  sha256?: string | null;
+  sizeBytes: number;
+  expectedLibraryRevision: number;
+  prompts: number;
+  totalContentBytes: number;
+  newPrompts: number;
+  identicalPrompts: number;
+  conflictingPrompts: number;
+  tagsToCreate: number;
+  tagsToReuse: number;
+  conflicts: PromptZipImportConflict[];
+  valid: boolean;
+  message: string;
+};
+
+export type PromptZipImportRequest = {
+  path: string;
+  sha256: string;
+  sizeBytes: number;
+  expectedLibraryRevision: number;
+  conflictStrategy: PromptZipConflictStrategy;
+};
+
+export type PromptZipImportResult = {
+  inserted: number;
+  skippedSame: number;
+  keptLocal: number;
+  overwritten: number;
+  duplicated: number;
+  createdTags: number;
+  reusedTags: number;
+  libraryRevision: number;
+  message: string;
+};
 
 export type UiTask = {
   id: string;
@@ -582,6 +670,8 @@ export const api = {
     command<PromptSummary>("set_prompt_pinned", {
       request: { id, pinned, expectedRevision },
     }),
+  reorderPrompt: (request: ReorderPromptRequest) =>
+    command<ReorderPromptResult>("reorder_prompt", { request }),
   listPromptTags: () => command<PromptTag[]>("list_prompt_tags"),
   createPromptTag: (name: string) =>
     command<PromptTag>("create_prompt_tag", { request: { name } }),
@@ -597,6 +687,10 @@ export const api = {
     command<PromptExportSummary>("export_prompt_markdown", { request: { id } }),
   exportPromptsZip: (selection: PromptSelection) =>
     command<PromptExportSummary>("export_prompts_zip", { request: { selection } }),
+  previewPromptsZipImport: () =>
+    command<PromptZipImportPreview>("preview_prompts_zip_import"),
+  importPromptsZip: (request: PromptZipImportRequest) =>
+    command<PromptZipImportResult>("import_prompts_zip", { request }),
   previewPromptMigrationPackage: () =>
     command<PromptMigrationPreview>("preview_prompt_migration_package"),
   exportMigrationPackage: (includePrompts = false) =>

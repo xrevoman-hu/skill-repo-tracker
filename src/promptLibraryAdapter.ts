@@ -9,6 +9,7 @@ type PromptBackendClient = Pick<
   | "updatePrompt"
   | "deletePrompt"
   | "setPromptPinned"
+  | "reorderPrompt"
   | "listPromptTags"
   | "createPromptTag"
   | "renamePromptTag"
@@ -16,6 +17,8 @@ type PromptBackendClient = Pick<
   | "deletePromptTag"
   | "exportPromptMarkdown"
   | "exportPromptsZip"
+  | "previewPromptsZipImport"
+  | "importPromptsZip"
 >;
 
 export function createPromptLibraryApi(client: PromptBackendClient = api): PromptLibraryApi {
@@ -30,17 +33,48 @@ export function createPromptLibraryApi(client: PromptBackendClient = api): Promp
     },
     setPromptPinned: (id, expectedRevision, pinned) =>
       client.setPromptPinned(id, pinned, expectedRevision),
+    reorderPrompt: (request) => client.reorderPrompt(request),
     listTags: () => client.listPromptTags(),
     createTag: (name) => client.createPromptTag(name),
     renameTag: (id, name) => client.renamePromptTag(id, name),
-    mergeTags: async (sourceId, targetId) => {
-      await client.mergePromptTags(sourceId, targetId);
-    },
+    mergeTags: (sourceId, targetId) => client.mergePromptTags(sourceId, targetId),
     deleteTag: async (id) => {
       await client.deletePromptTag(id);
     },
     exportPrompt: (id) => client.exportPromptMarkdown(id),
     exportPrompts: (selection) => client.exportPromptsZip(selection),
+    previewPromptsZipImport: async () => {
+      const preview = await client.previewPromptsZipImport();
+      if (preview.cancelled || !preview.path || !preview.sha256) return null;
+      return {
+        path: preview.path,
+        fileName: preview.fileName || preview.path.split("/").pop() || "prompts.zip",
+        sha256: preview.sha256,
+        sizeBytes: preview.sizeBytes,
+        libraryRevision: preview.expectedLibraryRevision,
+        promptCount: preview.prompts,
+        newCount: preview.newPrompts,
+        identicalCount: preview.identicalPrompts,
+        conflictCount: preview.conflictingPrompts,
+        tagsToCreate: preview.tagsToCreate,
+        tagsToReuse: preview.tagsToReuse,
+        totalContentBytes: preview.totalContentBytes,
+        conflicts: preview.conflicts,
+      };
+    },
+    importPromptsZip: async (request) => {
+      const result = await client.importPromptsZip(request);
+      return {
+        inserted: result.inserted,
+        skipped: result.skippedSame + result.keptLocal,
+        duplicated: result.duplicated,
+        overwritten: result.overwritten,
+        tagsCreated: result.createdTags,
+        tagsReused: result.reusedTags,
+        libraryRevision: result.libraryRevision,
+        message: result.message,
+      };
+    },
   };
 }
 

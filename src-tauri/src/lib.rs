@@ -25,6 +25,7 @@ use zip::ZipArchive;
 
 mod plugins;
 mod prompt_migration;
+mod prompt_zip;
 mod prompts;
 mod temp_artifacts;
 
@@ -35,8 +36,8 @@ use temp_artifacts::{
     SyncDestination, TempArtifactError, TempArtifactGuard, TempArtifactKind, TempArtifactRegistry,
 };
 
-const APP_VERSION: &str = "1.2.0";
-const APP_USER_AGENT: &str = "SkillRepoTracker/1.2.0";
+const APP_VERSION: &str = "1.2.1";
+const APP_USER_AGENT: &str = "SkillRepoTracker/1.2.1";
 const MIGRATION_SCHEMA_VERSION: i64 = 1;
 const MAX_MIGRATION_PACKAGE_FILE_BYTES: u64 = 1_342_177_280;
 const TOKEN_SERVICE: &str = "Skill Repo Tracker";
@@ -9515,7 +9516,7 @@ fn write_migration_package_to_path(
 
     let mut prompt_statement = conn.prepare(
         "SELECT id, title, content, excerpt, pinned, revision, created_at, updated_at
-         FROM prompts ORDER BY id ASC",
+         FROM prompts ORDER BY pinned DESC, manual_order ASC, id ASC",
     )?;
     let prompt_rows = prompt_statement.query_map([], |row| {
         let content = row.get::<_, String>(2)?;
@@ -10569,6 +10570,18 @@ fn set_prompt_pinned(
 }
 
 #[tauri::command]
+fn reorder_prompt(
+    request: prompts::PromptReorderInput,
+    state: State<'_, AppState>,
+) -> ApiResponse<prompts::PromptReorderResult> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    match prompts::reorder_prompt(&db, &request) {
+        Ok(result) => ApiResponse::ok(result),
+        Err(error) => api_err(error),
+    }
+}
+
+#[tauri::command]
 fn list_prompt_tags(state: State<'_, AppState>) -> ApiResponse<Vec<prompts::PromptTag>> {
     let db = state.db.lock().expect("db mutex poisoned");
     match prompts::list_prompt_tags(&db) {
@@ -10741,12 +10754,124 @@ async fn export_prompts_zip(
         Err(error) => return Ok(api_err(error)),
     };
     Ok(
-        match prompts::export_prompts_zip_to_path(&conn, &request.selection, &path, exported_at) {
+        match prompt_zip::export_prompts_zip_to_path(
+            &conn,
+            &request.selection,
+            &path,
+            exported_at,
+            APP_VERSION,
+        ) {
             Ok(artifact) => ApiResponse::ok(prompt_export_summary(
                 Some(artifact),
                 false,
                 "ZIP 导出完成。",
             )),
+            Err(error) => api_err(error),
+        },
+    )
+}
+
+#[tauri::command]
+async fn preview_prompts_zip_import(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> CommandResult<prompt_zip::PromptZipPreview> {
+    let selected = tauri::async_runtime::spawn_blocking(move || {
+        app.dialog()
+            .file()
+            .add_filter("Prompt library ZIP", &["zip"])
+            .blocking_pick_file()
+    })
+    .await;
+    let Some(path) = (match selected {
+        Ok(path) => path,
+        Err(error) => {
+            return Ok(api_err(AppError::with_details(
+                "prompt_zip_dialog_failed",
+                "选择提示词分享 ZIP 失败。",
+                error.to_string(),
+            )))
+        }
+    }) else {
+        let conn = match prompts::open_prompt_read_connection(&state.db_path) {
+            Ok(conn) => conn,
+            Err(error) => return Ok(api_err(error)),
+        };
+        let expected_library_revision = match prompts::library_revision(&conn) {
+            Ok(revision) => revision,
+            Err(error) => return Ok(api_err(error)),
+        };
+        return Ok(ApiResponse::ok(prompt_zip::PromptZipPreview {
+            path: None,
+            file_name: None,
+            cancelled: true,
+            sha256: None,
+            size_bytes: 0,
+            expected_library_revision,
+            prompts: 0,
+            total_content_bytes: 0,
+            new_prompts: 0,
+            identical_prompts: 0,
+            conflicting_prompts: 0,
+            tags_to_create: 0,
+            tags_to_reuse: 0,
+            conflicts: Vec::new(),
+            valid: true,
+            message: "导入已取消。".to_string(),
+        }));
+    };
+    let path = match path.into_path() {
+        Ok(path) => path,
+        Err(error) => {
+            return Ok(api_err(AppError::with_details(
+                "prompt_zip_path_failed",
+                "解析提示词分享 ZIP 路径失败。",
+                error.to_string(),
+            )))
+        }
+    };
+    let db_path = state.db_path.clone();
+    let preview = tauri::async_runtime::spawn_blocking(move || {
+        let conn = prompts::open_prompt_read_connection(&db_path)?;
+        prompt_zip::preview_prompts_zip_from_path(&conn, &path)
+    })
+    .await;
+    Ok(match preview {
+        Ok(Ok(preview)) => ApiResponse::ok(preview),
+        Ok(Err(error)) => api_err(error),
+        Err(error) => api_err(AppError::with_details(
+            "prompt_zip_io_failed",
+            "提示词分享 ZIP 预检任务执行失败。",
+            error.to_string(),
+        )),
+    })
+}
+
+#[tauri::command]
+async fn import_prompts_zip(
+    request: prompt_zip::PromptZipImportRequest,
+    state: State<'_, AppState>,
+) -> CommandResult<prompt_zip::PromptZipImportSummary> {
+    let prepare_request = request.clone();
+    let prepared = tauri::async_runtime::spawn_blocking(move || {
+        prompt_zip::prepare_prompts_zip_import(&prepare_request)
+    })
+    .await;
+    let prepared = match prepared {
+        Ok(Ok(prepared)) => prepared,
+        Ok(Err(error)) => return Ok(api_err(error)),
+        Err(error) => {
+            return Ok(api_err(AppError::with_details(
+                "prompt_zip_io_failed",
+                "提示词分享 ZIP 准备任务执行失败。",
+                error.to_string(),
+            )))
+        }
+    };
+    let db = state.db.lock().expect("db mutex poisoned");
+    Ok(
+        match prompt_zip::import_prepared_prompts_zip(&db, &request, prepared) {
+            Ok(summary) => ApiResponse::ok(summary),
             Err(error) => api_err(error),
         },
     )
@@ -11021,6 +11146,7 @@ pub fn run() {
             update_prompt,
             delete_prompt,
             set_prompt_pinned,
+            reorder_prompt,
             list_prompt_tags,
             create_prompt_tag,
             rename_prompt_tag,
@@ -11028,6 +11154,8 @@ pub fn run() {
             delete_prompt_tag,
             export_prompt_markdown,
             export_prompts_zip,
+            preview_prompts_zip_import,
+            import_prompts_zip,
             open_external_url,
             preview_prompt_migration_package,
             export_migration_package,

@@ -10,6 +10,7 @@ function client() {
     updatePrompt: vi.fn().mockResolvedValue({ id: "prompt-1" }),
     deletePrompt: vi.fn().mockResolvedValue(undefined),
     setPromptPinned: vi.fn().mockResolvedValue({ id: "prompt-1" }),
+    reorderPrompt: vi.fn().mockResolvedValue({ libraryRevision: 13 }),
     listPromptTags: vi.fn().mockResolvedValue([]),
     createPromptTag: vi.fn().mockResolvedValue({ id: "tag-1" }),
     renamePromptTag: vi.fn().mockResolvedValue({ id: "tag-1" }),
@@ -17,6 +18,35 @@ function client() {
     deletePromptTag: vi.fn().mockResolvedValue(undefined),
     exportPromptMarkdown: vi.fn().mockResolvedValue({ path: "/tmp/prompt.md", cancelled: false, count: 1, bytes: 10, message: "done" }),
     exportPromptsZip: vi.fn().mockResolvedValue({ path: "/tmp/prompts.zip", cancelled: false, count: 2, bytes: 20, message: "done" }),
+    previewPromptsZipImport: vi.fn().mockResolvedValue({
+      path: "/tmp/shared.zip",
+      fileName: "shared.zip",
+      cancelled: false,
+      sha256: "a".repeat(64),
+      sizeBytes: 200,
+      expectedLibraryRevision: 12,
+      prompts: 4,
+      totalContentBytes: 100,
+      newPrompts: 2,
+      identicalPrompts: 1,
+      conflictingPrompts: 1,
+      tagsToCreate: 3,
+      tagsToReuse: 2,
+      conflicts: [],
+      valid: true,
+      message: "ready",
+    }),
+    importPromptsZip: vi.fn().mockResolvedValue({
+      inserted: 2,
+      skippedSame: 1,
+      keptLocal: 1,
+      overwritten: 0,
+      duplicated: 1,
+      createdTags: 3,
+      reusedTags: 2,
+      libraryRevision: 13,
+      message: "done",
+    }),
   };
 }
 
@@ -67,6 +97,66 @@ describe("prompt library view adapter", () => {
 
     expect(backend.exportPromptsZip).toHaveBeenCalledWith(selection);
     expect(summary).toMatchObject({ cancelled: false, path: "/tmp/prompts.zip" });
+  });
+
+  it("passes revisioned prompt reordering through with neighbour anchors", async () => {
+    const backend = client();
+    const view = createPromptLibraryApi(backend as never);
+    const request = {
+      id: "prompt-2",
+      previousId: "prompt-1",
+      nextId: "prompt-3",
+      expectedRevision: 5,
+      expectedLibraryRevision: 12,
+    };
+
+    await expect(view.reorderPrompt(request)).resolves.toEqual({ libraryRevision: 13 });
+    expect(backend.reorderPrompt).toHaveBeenCalledWith(request);
+  });
+
+  it("maps native prompt ZIP preview and import summaries to the view seam", async () => {
+    const backend = client();
+    const view = createPromptLibraryApi(backend as never);
+
+    const preview = await view.previewPromptsZipImport();
+    expect(preview).toMatchObject({
+      path: "/tmp/shared.zip",
+      libraryRevision: 12,
+      promptCount: 4,
+      newCount: 2,
+      identicalCount: 1,
+      conflictCount: 1,
+    });
+
+    const request = {
+      path: "/tmp/shared.zip",
+      sha256: "a".repeat(64),
+      sizeBytes: 200,
+      expectedLibraryRevision: 12,
+      conflictStrategy: "duplicate" as const,
+    };
+    const result = await view.importPromptsZip(request);
+
+    expect(backend.importPromptsZip).toHaveBeenCalledWith(request);
+    expect(result).toMatchObject({
+      inserted: 2,
+      skipped: 2,
+      duplicated: 1,
+      tagsCreated: 3,
+      tagsReused: 2,
+    });
+  });
+
+  it("maps a cancelled native ZIP picker to no preview", async () => {
+    const backend = client();
+    backend.previewPromptsZipImport.mockResolvedValue({
+      ...await backend.previewPromptsZipImport(),
+      cancelled: true,
+      path: null,
+    });
+    const view = createPromptLibraryApi(backend as never);
+
+    await expect(view.previewPromptsZipImport()).resolves.toBeNull();
   });
 
   it("returns cancellation summaries from the native save dialog unchanged", async () => {
