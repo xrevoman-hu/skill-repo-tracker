@@ -1,6 +1,7 @@
 prototype/.npm-cache/
 prototype/dist/
 prototype/node_modules/
+/AGENTS.md
 docs/promo/
 docs/internal/
 docs/images/skill-repo-tracker-v1.1.1.png
