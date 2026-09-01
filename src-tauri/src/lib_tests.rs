@@ -11,6 +11,13 @@ fn zip_with_file(path: &str, bytes: &[u8]) -> Vec<u8> {
     zip_with_files(&[(path, bytes)])
 }
 
+#[test]
+fn gate_probe_clippy_warning() {
+    let gate_is_open = true;
+    let observed = if gate_is_open { true } else { false };
+    assert!(observed);
+}
+
 fn zip_with_files(files: &[(&str, &[u8])]) -> Vec<u8> {
     let mut buffer = Cursor::new(Vec::new());
     {
