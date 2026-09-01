@@ -2,7 +2,7 @@
   "newModuleMaxLines": 800,
   "hotSpots": {
     "src/App.tsx": {
-      "maxLines": 6682,
+      "maxLines": 6679,
       "targetLines": 700,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
@@ -12,7 +12,7 @@
       "adr": "docs/adr/0007-staged-modularization.md"
     },
     "src-tauri/src/lib.rs": {
-      "maxLines": 10763,
+      "maxLines": 10660,
       "targetLines": 500,
       "adr": "docs/adr/0007-staged-modularization.md"
     },

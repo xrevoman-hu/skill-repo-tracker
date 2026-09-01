@@ -18,11 +18,13 @@ use walkdir::WalkDir;
 use zip::ZipArchive;
 
 mod adapters;
+mod app_update;
 mod backup_fs;
 mod backup_paths;
 mod backups;
 mod database;
 mod github_accounts;
+mod github_auth;
 mod github_response;
 mod github_transport;
 mod plugins;
@@ -37,6 +39,9 @@ mod startup_guard_tests;
 mod temp_artifacts;
 
 use adapters::AppAdapters;
+#[cfg(test)]
+use github_auth::GithubAuth;
+use github_auth::GithubAuthSource;
 use github_transport::{
     download_zip, fetch_github_content, fetch_remote_info, set_star_remote, validate_token_identity,
 };
@@ -207,70 +212,6 @@ struct AppState {
     prompt_search: prompt_search::PromptSearchCoordinator,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum GithubAuthSource {
-    RepoAccount,
-    DefaultAccount,
-    None,
-    KeychainMissing,
-}
-
-impl GithubAuthSource {
-    fn label(self) -> &'static str {
-        match self {
-            Self::RepoAccount => "repo_account",
-            Self::DefaultAccount => "default_account",
-            Self::None => "none",
-            Self::KeychainMissing => "keychain_missing",
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct GithubAuth {
-    token: Option<String>,
-    account_id: Option<String>,
-    source: GithubAuthSource,
-}
-
-impl GithubAuth {
-    fn anonymous() -> Self {
-        Self {
-            token: None,
-            account_id: None,
-            source: GithubAuthSource::None,
-        }
-    }
-
-    fn keychain_missing(account_id: String) -> Self {
-        Self {
-            token: None,
-            account_id: Some(account_id),
-            source: GithubAuthSource::KeychainMissing,
-        }
-    }
-
-    fn label(&self) -> &'static str {
-        self.source.label()
-    }
-
-    fn token(&self) -> Option<&str> {
-        self.token.as_deref()
-    }
-
-    fn usable(&self) -> Result<(), AppError> {
-        if self.source == GithubAuthSource::KeychainMissing {
-            Err(AppError::with_details(
-                "github_token_keychain_missing",
-                "GitHub token 已配置，但无法从系统安全存储读取。请重新验证 GitHub 账号。",
-                "auth=keychain_missing",
-            ))
-        } else {
-            Ok(())
-        }
-    }
-}
-
 fn database_path_for_run(data_dir: &Path) -> Result<(PathBuf, bool), AppError> {
     #[cfg(debug_assertions)]
     if let Some(value) = std::env::var_os("SRT_DEBUG_DATABASE_PATH") {
@@ -356,8 +297,13 @@ impl AppState {
         let had_library_setting = previous_library_root.is_some();
 
         seed_settings(&conn, &home, &default_backup_root, &default_library_root)?;
-        cleanup_legacy_github_account_metadata(&conn)?;
-        let _ = adapters.credentials.delete(TOKEN_SERVICE, TOKEN_USER);
+        github_accounts::delete_legacy_account(
+            &conn,
+            &credential_lock,
+            adapters.credentials.as_ref(),
+            TOKEN_SERVICE,
+            TOKEN_USER,
+        )?;
         migrate_default_sync_targets(&conn, &home)?;
         migrate_independent_skill_library(
             &conn,
@@ -409,72 +355,6 @@ impl AppState {
             temp_registry,
             prompt_search: prompt_search::PromptSearchCoordinator::default(),
         })
-    }
-
-    fn token_for_key(&self, token_key: &str) -> Option<String> {
-        self.adapters
-            .credentials
-            .get(TOKEN_SERVICE, token_key)
-            .ok()
-            .flatten()
-            .filter(|token| !token.trim().is_empty())
-    }
-
-    fn auth_for_account_record(
-        &self,
-        account: GithubAccountRecord,
-        source: GithubAuthSource,
-    ) -> GithubAuth {
-        match self.token_for_key(&account.token_key) {
-            Some(token) => GithubAuth {
-                token: Some(token),
-                account_id: Some(account.id),
-                source,
-            },
-            None => GithubAuth::keychain_missing(account.id),
-        }
-    }
-
-    fn default_github_auth(&self) -> GithubAuth {
-        let account = {
-            let db = match self.db.lock() {
-                Ok(db) => db,
-                Err(_) => return GithubAuth::anonymous(),
-            };
-            preferred_github_account(&db).ok().flatten()
-        };
-        account
-            .map(|account| self.auth_for_account_record(account, GithubAuthSource::DefaultAccount))
-            .unwrap_or_else(GithubAuth::anonymous)
-    }
-
-    fn github_auth_for_account(&self, account_id: &str, source: GithubAuthSource) -> GithubAuth {
-        let account = {
-            let db = match self.db.lock() {
-                Ok(db) => db,
-                Err(_) => return GithubAuth::anonymous(),
-            };
-            github_account_by_id(&db, account_id).ok().flatten()
-        };
-        account
-            .map(|account| self.auth_for_account_record(account, source))
-            .unwrap_or_else(|| self.default_github_auth())
-    }
-
-    fn github_auth_for_repo(&self, repo: &RepoRecord) -> GithubAuth {
-        if let Some(account_id) = repo.github_account_id.as_deref() {
-            let account = {
-                let db = match self.db.lock() {
-                    Ok(db) => db,
-                    Err(_) => return GithubAuth::anonymous(),
-                };
-                github_account_by_id(&db, account_id).ok().flatten()
-            };
-            if let Some(account) = account {
-                return self.auth_for_account_record(account, GithubAuthSource::RepoAccount);
-            }
-        }
-        self.default_github_auth()
     }
 }
 
@@ -6041,6 +5921,16 @@ fn get_app_metadata() -> ApiResponse<AppMetadata> {
 }
 
 #[tauri::command]
+async fn check_app_update(state: State<'_, AppState>) -> CommandResult<app_update::AppUpdateCheck> {
+    Ok(
+        match app_update::check_latest_release(state.adapters.github.as_ref(), APP_VERSION).await {
+            Ok(update) => ApiResponse::ok(update),
+            Err(error) => api_err(error),
+        },
+    )
+}
+
+#[tauri::command]
 fn update_settings(
     request: UpdateSettingsRequest,
     state: State<'_, AppState>,
@@ -9664,16 +9554,22 @@ fn set_github_token(
 
 #[tauri::command]
 fn clear_github_token(state: State<'_, AppState>) -> ApiResponse<AppSettings> {
-    let _ = state.adapters.credentials.delete(TOKEN_SERVICE, TOKEN_USER);
-    let db = state.db.lock().expect("db mutex poisoned");
-    let result = (|| -> Result<AppSettings, AppError> {
-        cleanup_legacy_github_account_metadata(&db)?;
-        settings_from_db(&db, github_auth_configured(&db))
-    })();
-    match result {
+    match clear_github_token_inner(&state) {
         Ok(settings) => ApiResponse::ok(settings),
         Err(error) => api_err(error),
     }
+}
+
+fn clear_github_token_inner(state: &AppState) -> Result<AppSettings, AppError> {
+    let db = state.db.lock().expect("db mutex poisoned");
+    github_accounts::delete_legacy_account(
+        &db,
+        &state.credential_lock,
+        state.adapters.credentials.as_ref(),
+        TOKEN_SERVICE,
+        TOKEN_USER,
+    )?;
+    settings_from_db(&db, github_auth_configured(&db))
 }
 
 #[tauri::command]
@@ -10715,6 +10611,7 @@ pub fn run() {
             copy_task_summary,
             get_settings,
             get_app_metadata,
+            check_app_update,
             update_settings,
             validate_directory,
             pick_directory,

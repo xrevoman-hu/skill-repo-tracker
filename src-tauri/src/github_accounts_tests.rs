@@ -7,7 +7,7 @@ use std::time::Duration;
 use super::*;
 use crate::{
     get_setting, github_account_by_id, github_account_token_key, load_ui_github_accounts, migrate,
-    set_setting, upsert_github_account, TOKEN_SERVICE,
+    set_setting, upsert_github_account, LEGACY_GITHUB_ACCOUNT_ID, TOKEN_SERVICE, TOKEN_USER,
 };
 
 struct FailingCredentialStore;
@@ -18,11 +18,27 @@ impl CredentialStore for FailingCredentialStore {
     }
 
     fn set(&self, _service: &str, _key: &str, _secret: &str) -> Result<(), String> {
-        Err("fictional keychain unavailable".into())
+        Err("private adapter set diagnostic".into())
     }
 
     fn delete(&self, _service: &str, _key: &str) -> Result<(), String> {
         Ok(())
+    }
+}
+
+struct FailingReadCredentialStore;
+
+impl CredentialStore for FailingReadCredentialStore {
+    fn get(&self, _service: &str, _key: &str) -> Result<Option<String>, String> {
+        Err("private adapter read diagnostic".into())
+    }
+
+    fn set(&self, _service: &str, _key: &str, _secret: &str) -> Result<(), String> {
+        unreachable!("a failed credential read must stop before set")
+    }
+
+    fn delete(&self, _service: &str, _key: &str) -> Result<(), String> {
+        unreachable!("a failed credential read must stop before delete")
     }
 }
 
@@ -170,6 +186,46 @@ fn seed_linked_account(conn: &Connection) {
     .unwrap();
 }
 
+fn seed_legacy_linked_account(conn: &Connection) {
+    upsert_github_account(
+        conn,
+        &GithubAccountRecord {
+            id: LEGACY_GITHUB_ACCOUNT_ID.into(),
+            login: "legacy-fixture".into(),
+            display_name: "Legacy Fixture".into(),
+            avatar_url: None,
+            token_key: TOKEN_USER.into(),
+            status: "verified".into(),
+            scopes: "repo".into(),
+            last_verified: Some("2026-09-01T00:00:00Z".into()),
+            is_default: true,
+        },
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO repositories
+         (id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
+          url, branch, source_type, github_account_id, created_at, updated_at)
+         VALUES ('repo:legacy-fixture', 'Legacy Fixture Repository', 'example-org',
+          'legacy-fixture', 'main', 'generic', 0, 'fictional-sha',
+          'https://example.invalid/legacy-fixture', 'main', 'github', ?1,
+          '2026-09-01', '2026-09-01')",
+        params![LEGACY_GITHUB_ACCOUNT_ID],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO github_repo_catalog
+         (account_id, full_name, owner, repo, html_url, last_refreshed)
+         VALUES (?1, 'example-org/legacy-fixture', 'example-org', 'legacy-fixture',
+          'https://example.invalid/legacy-fixture', '2026-09-01')",
+        params![LEGACY_GITHUB_ACCOUNT_ID],
+    )
+    .unwrap();
+    set_setting(conn, "github_token_configured", "true").unwrap();
+    set_setting(conn, "github_token_status", "verified").unwrap();
+    set_setting(conn, "github_token_last_verified", "2026-09-01T00:00:00Z").unwrap();
+}
+
 fn linked_account_counts(conn: &Connection) -> (i64, i64, i64) {
     (
         conn.query_row("SELECT COUNT(*) FROM github_accounts", [], |row| row.get(0))
@@ -222,6 +278,40 @@ fn credential_store_failure_leaves_account_database_unchanged() {
     .unwrap_err();
 
     assert_eq!(error.code, "token_store_failed");
+    assert_eq!(error.details.as_deref(), Some("credential_store=set"));
+    assert!(!error
+        .details
+        .as_deref()
+        .unwrap_or_default()
+        .contains("private adapter set diagnostic"));
+    assert_eq!(conn.total_changes(), database_changes_before);
+    assert!(load_ui_github_accounts(&conn).unwrap().is_empty());
+}
+
+#[test]
+fn credential_store_read_failure_is_redacted_and_leaves_database_unchanged() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    let database_changes_before = conn.total_changes();
+    let (_lock_dir, lock) = credential_lock();
+
+    let error = save_validated_account(
+        &conn,
+        &lock,
+        &FailingReadCredentialStore,
+        TOKEN_SERVICE,
+        "fictional-secret-never-persisted",
+        account("Fictional Octopus"),
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code, "token_store_read_failed");
+    assert_eq!(error.details.as_deref(), Some("credential_store=get"));
+    assert!(!error
+        .details
+        .as_deref()
+        .unwrap_or_default()
+        .contains("private adapter read diagnostic"));
     assert_eq!(conn.total_changes(), database_changes_before);
     assert!(load_ui_github_accounts(&conn).unwrap().is_empty());
 }
@@ -339,7 +429,8 @@ fn save_reports_database_and_compensation_failures_together() {
     assert_eq!(error.code, "token_store_compensation_failed");
     let details = error.details.unwrap();
     assert!(details.contains("fictional late account failure"));
-    assert!(details.contains("fictional set failure #2"));
+    assert!(details.contains("compensation=credential_store_set_failed"));
+    assert!(!details.contains("fictional set failure #2"));
     assert!(!details.contains("old-fictional-secret"));
     assert!(!details.contains("new-fictional-secret"));
 }
@@ -428,10 +519,42 @@ fn delete_credential_failure_leaves_all_database_links_unchanged() {
     .unwrap_err();
 
     assert_eq!(error.code, "token_delete_failed");
+    assert_eq!(error.details.as_deref(), Some("credential_store=delete"));
+    assert!(!error
+        .details
+        .as_deref()
+        .unwrap_or_default()
+        .contains("fictional delete failure"));
     assert_eq!(
         credentials.secret().as_deref(),
         Some("old-fictional-secret")
     );
+    assert_eq!(linked_account_counts(&conn), (1, 1, 1));
+}
+
+#[test]
+fn delete_credential_read_failure_is_redacted_and_preserves_all_links() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    seed_linked_account(&conn);
+    let (_lock_dir, lock) = credential_lock();
+
+    let error = delete_account(
+        &conn,
+        &lock,
+        &FailingReadCredentialStore,
+        TOKEN_SERVICE,
+        "github:fictional-octopus",
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code, "token_delete_failed");
+    assert_eq!(error.details.as_deref(), Some("credential_store=get"));
+    assert!(!error
+        .details
+        .as_deref()
+        .unwrap_or_default()
+        .contains("private adapter read diagnostic"));
     assert_eq!(linked_account_counts(&conn), (1, 1, 1));
 }
 
@@ -463,6 +586,39 @@ fn delete_database_late_failure_restores_secret_and_all_links() {
         credentials.secret().as_deref(),
         Some("old-fictional-secret")
     );
+    assert_eq!(linked_account_counts(&conn), (1, 1, 1));
+}
+
+#[test]
+fn delete_compensation_failure_redacts_the_credential_adapter_error() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    seed_linked_account(&conn);
+    conn.execute_batch(
+        "CREATE TRIGGER reject_compensated_account_delete
+         BEFORE DELETE ON github_accounts
+         BEGIN SELECT RAISE(ABORT, 'fictional late delete failure'); END;",
+    )
+    .unwrap();
+    let credentials =
+        MemoryCredentialStore::with_secret(Some("old-fictional-secret")).failing_set_on_call(1);
+    let (_lock_dir, lock) = credential_lock();
+
+    let error = delete_account(
+        &conn,
+        &lock,
+        &credentials,
+        TOKEN_SERVICE,
+        "github:fictional-octopus",
+    )
+    .unwrap_err();
+
+    assert_eq!(error.code, "token_delete_compensation_failed");
+    let details = error.details.unwrap();
+    assert!(details.contains("fictional late delete failure"));
+    assert!(details.contains("compensation=credential_store_set_failed"));
+    assert!(!details.contains("fictional set failure #1"));
+    assert!(!details.contains("old-fictional-secret"));
     assert_eq!(linked_account_counts(&conn), (1, 1, 1));
 }
 
@@ -521,6 +677,97 @@ fn delete_success_removes_secret_account_catalog_and_repository_link() {
     assert!(accounts.is_empty());
     assert_eq!(credentials.secret(), None);
     assert_eq!(linked_account_counts(&conn), (0, 0, 0));
+}
+
+#[test]
+fn legacy_delete_credential_failure_leaves_all_database_metadata_unchanged() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    seed_legacy_linked_account(&conn);
+    let credentials =
+        MemoryCredentialStore::with_secret(Some("legacy-fictional-secret")).failing_delete();
+    let (_lock_dir, lock) = credential_lock();
+
+    let error =
+        delete_legacy_account(&conn, &lock, &credentials, TOKEN_SERVICE, TOKEN_USER).unwrap_err();
+
+    assert_eq!(error.code, "token_delete_failed");
+    assert_eq!(error.details.as_deref(), Some("credential_store=delete"));
+    assert_eq!(
+        credentials.secret().as_deref(),
+        Some("legacy-fictional-secret")
+    );
+    assert_eq!(linked_account_counts(&conn), (1, 1, 1));
+    assert_eq!(
+        get_setting(&conn, "github_token_configured")
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        get_setting(&conn, "github_token_status")
+            .unwrap()
+            .as_deref(),
+        Some("verified")
+    );
+}
+
+#[test]
+fn legacy_delete_database_failure_restores_secret_and_all_metadata() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    seed_legacy_linked_account(&conn);
+    conn.execute_batch(
+        "CREATE TRIGGER reject_legacy_account_delete
+         BEFORE DELETE ON github_accounts
+         WHEN OLD.token_key = 'github-token'
+         BEGIN SELECT RAISE(ABORT, 'fictional legacy delete failure'); END;",
+    )
+    .unwrap();
+    let credentials = MemoryCredentialStore::with_secret(Some("legacy-fictional-secret"));
+    let (_lock_dir, lock) = credential_lock();
+
+    let error =
+        delete_legacy_account(&conn, &lock, &credentials, TOKEN_SERVICE, TOKEN_USER).unwrap_err();
+
+    assert_eq!(error.code, "sqlite_error");
+    assert_eq!(
+        credentials.secret().as_deref(),
+        Some("legacy-fictional-secret")
+    );
+    assert_eq!(linked_account_counts(&conn), (1, 1, 1));
+    assert_eq!(
+        get_setting(&conn, "github_token_status")
+            .unwrap()
+            .as_deref(),
+        Some("verified")
+    );
+}
+
+#[test]
+fn legacy_delete_success_removes_secret_and_cleans_all_metadata() {
+    let conn = Connection::open_in_memory().unwrap();
+    migrate(&conn).unwrap();
+    seed_legacy_linked_account(&conn);
+    let credentials = MemoryCredentialStore::with_secret(Some("legacy-fictional-secret"));
+    let (_lock_dir, lock) = credential_lock();
+
+    delete_legacy_account(&conn, &lock, &credentials, TOKEN_SERVICE, TOKEN_USER).unwrap();
+
+    assert_eq!(credentials.secret(), None);
+    assert_eq!(linked_account_counts(&conn), (0, 0, 0));
+    assert_eq!(
+        get_setting(&conn, "github_token_configured")
+            .unwrap()
+            .as_deref(),
+        Some("false")
+    );
+    assert_eq!(
+        get_setting(&conn, "github_token_status")
+            .unwrap()
+            .as_deref(),
+        Some("not_configured")
+    );
 }
 
 #[test]

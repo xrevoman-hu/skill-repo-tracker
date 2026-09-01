@@ -13,6 +13,7 @@ import {
   findExplicitAny,
   findForbiddenClippySuppressions,
   findForbiddenFrontendAliases,
+  findForbiddenFrontendRuntimeUsage,
   findForbiddenRustIncludes,
   findForbiddenGithubTransportUsage,
   findForbiddenRustIgnores,
@@ -773,6 +774,67 @@ test("GitHub transport policy keeps raw reqwest clients inside the adapter", () 
     ),
     [],
   );
+  for (const directGet of ["reqwest::get(url).await?;", "reqwest::blocking::get(url)?;"]) {
+    assert.deepEqual(
+      findForbiddenGithubTransportUsage("src-tauri/src/lib.rs", directGet),
+      ["src-tauri/src/lib.rs sends an HTTP request outside adapters.rs"],
+    );
+  }
+  for (const rawClient of [
+    "let client = reqwest::ClientBuilder::new().build()?;",
+    "let client = reqwest::blocking::Client::new();",
+    "use reqwest::blocking::{Client, ClientBuilder}; let client = ClientBuilder::new();",
+  ]) {
+    assert.deepEqual(
+      findForbiddenGithubTransportUsage("src-tauri/src/lib.rs", rawClient),
+      ["src-tauri/src/lib.rs constructs or names a raw reqwest client outside adapters.rs"],
+    );
+  }
+});
+
+test("frontend runtime policy keeps network and Tauri invoke behind governed adapters", () => {
+  assert.deepEqual(
+    findForbiddenFrontendRuntimeUsage(
+      "src/UnsafeView.tsx",
+      [
+        'import { invoke as rawInvoke } from "@tauri-apps/api/core";',
+        'fetch("https://api.github.com/repos/example/repo");',
+        'window.fetch("https://example.invalid");',
+        "new XMLHttpRequest();",
+        'new window.EventSource("https://example.invalid/events");',
+        'new globalThis.WebSocket("wss://example.invalid");',
+        'navigator.sendBeacon("https://example.invalid", "payload");',
+        'window.__TAURI__.core.invoke("open_backup_folder", { path: "/tmp" });',
+        'window.__TAURI_INTERNALS__.invoke("open_backup_folder", { path: "/tmp" });',
+      ].join("\n"),
+    ),
+    [
+      "src/UnsafeView.tsx uses raw frontend network API fetch; route network access through AppService and Rust adapters",
+      "src/UnsafeView.tsx uses raw frontend network API XMLHttpRequest; route network access through AppService and Rust adapters",
+      "src/UnsafeView.tsx uses raw frontend network API EventSource; route network access through AppService and Rust adapters",
+      "src/UnsafeView.tsx uses raw frontend network API WebSocket; route network access through AppService and Rust adapters",
+      "src/UnsafeView.tsx uses raw frontend network API sendBeacon; route network access through AppService and Rust adapters",
+      "src/UnsafeView.tsx imports @tauri-apps/api/core outside the governed src/api.ts wrapper",
+      "src/UnsafeView.tsx invokes the raw Tauri global outside the governed src/api.ts wrapper",
+    ],
+  );
+  assert.deepEqual(
+    findForbiddenFrontendRuntimeUsage(
+      "src/api.ts",
+      [
+        'import { invoke } from "@tauri-apps/api/core";',
+        'export const command = (name: string) => invoke(name);',
+      ].join("\n"),
+    ),
+    [],
+  );
+  assert.deepEqual(
+    findForbiddenFrontendRuntimeUsage(
+      "src/App.tsx",
+      'service.checkForUpdates("1.2.3"); api.openUrl("https://example.invalid");',
+    ),
+    [],
+  );
 });
 
 test("Tauri command inventory matches the frontend API boundary", () => {
@@ -790,6 +852,27 @@ test("Tauri command inventory matches the frontend API boundary", () => {
   assert.deepEqual(frontend, ["list_repositories", "open_backup_folder"]);
   assert.deepEqual(rust, ["list_repositories", "open_backup_folder"]);
   assert.deepEqual(compareCommandInventories({ frontend, rust }), []);
+});
+
+test("Tauri command inventory ignores comments and string decoys", () => {
+  const frontend = extractFrontendCommands(`
+    /* command("ghost_block") */
+    // command("ghost_line")
+    const decoy = 'command("ghost_string")';
+    command<void>("real_command");
+  `);
+  const rust = extractRustCommands(`
+    /* tauri::generate_handler![ghost_block] */
+    const _: &str = "tauri::generate_handler![ghost_string]";
+    .invoke_handler(tauri::generate_handler![
+      #[cfg(target_os = "macos")]
+      crate::commands::real_command,
+      /* ghost_nested, */
+    ])
+  `);
+
+  assert.deepEqual(frontend, ["real_command"]);
+  assert.deepEqual(rust, ["real_command"]);
 });
 
 test("Tauri command inventory fails closed on drift and retired scheduling command", () => {

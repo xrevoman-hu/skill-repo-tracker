@@ -61,7 +61,6 @@ export function createTaskCoordinator(): TaskCoordinator {
     },
     invalidate() {
       generation += 1;
-      activeGeneration = null;
     },
     isBusy() {
       return activeGeneration !== null;

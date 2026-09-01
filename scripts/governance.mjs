@@ -109,47 +109,52 @@ export function checkRepositoryBoundaries({ trackedFiles, packageJson, lockUrls 
 
 export function extractFrontendCommands(contents) {
   const commands = [];
-  const marker = /\bcommand\b/g;
-  for (const match of contents.matchAll(marker)) {
-    let cursor = match.index + match[0].length;
-    while (/\s/.test(contents[cursor] ?? "")) cursor += 1;
-    if (contents[cursor] === "<") {
-      let depth = 0;
-      do {
-        if (contents[cursor] === "<") depth += 1;
-        if (contents[cursor] === ">") depth -= 1;
-        cursor += 1;
-      } while (cursor < contents.length && depth > 0);
+  const sourceFile = parseTypeScript("src/api.ts", contents);
+  const visit = (node) => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "command" &&
+      ts.isStringLiteralLike(node.arguments[0]) &&
+      /^[a-z][a-z0-9_]*$/.test(node.arguments[0].text)
+    ) {
+      commands.push(node.arguments[0].text);
     }
-    while (/\s/.test(contents[cursor] ?? "")) cursor += 1;
-    if (contents[cursor] !== "(") continue;
-    cursor += 1;
-    while (/\s/.test(contents[cursor] ?? "")) cursor += 1;
-    const quote = contents[cursor];
-    if (quote !== '"' && quote !== "'") continue;
-    const end = contents.indexOf(quote, cursor + 1);
-    if (end === -1) continue;
-    const name = contents.slice(cursor + 1, end);
-    if (/^[a-z][a-z0-9_]*$/.test(name)) commands.push(name);
-  }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
   return commands;
 }
 
 export function extractRustCommands(contents) {
-  const marker = "tauri::generate_handler![";
-  const start = contents.indexOf(marker);
-  if (start === -1) return [];
-  const bodyStart = start + marker.length;
-  const bodyEnd = contents.indexOf("]", bodyStart);
-  if (bodyEnd === -1) return [];
-  const body = contents
-    .slice(bodyStart, bodyEnd)
-    .replace(/\/\/.*$/gm, "")
-    .replace(/#\[[^\]]+\]/g, "");
-  return body
-    .split(",")
-    .map((entry) => entry.trim().split("::").at(-1))
-    .filter((name) => /^[a-z][a-z0-9_]*$/.test(name ?? ""));
+  const code = maskRustNonCode(contents).split("");
+  for (const attribute of rustAttributes(contents)) {
+    for (let index = attribute.start; index < attribute.end; index += 1) {
+      if (code[index] !== "\n" && code[index] !== "\r") code[index] = " ";
+    }
+  }
+  const masked = code.join("");
+  const commands = [];
+  const marker = /\btauri\s*::\s*generate_handler\s*!\s*\[/g;
+  for (const match of masked.matchAll(marker)) {
+    const bodyStart = match.index + match[0].length;
+    let cursor = bodyStart;
+    let depth = 1;
+    while (cursor < masked.length && depth > 0) {
+      if (masked[cursor] === "[") depth += 1;
+      else if (masked[cursor] === "]") depth -= 1;
+      cursor += 1;
+    }
+    if (depth !== 0) continue;
+    for (const entry of masked.slice(bodyStart, cursor - 1).split(",")) {
+      const compact = entry.replace(/\s+/g, "");
+      const name = compact.match(
+        /^(?:[A-Za-z_][A-Za-z0-9_]*::)*([a-z][a-z0-9_]*)$/,
+      )?.[1];
+      if (name) commands.push(name);
+    }
+  }
+  return commands;
 }
 
 export function compareCommandInventories({ frontend, rust }) {
@@ -873,12 +878,16 @@ export function findForbiddenClippySuppressions(path, contents) {
 
 export function findForbiddenGithubTransportUsage(path, contents) {
   const errors = [];
-  if (/\bfn\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*&\s*reqwest::Client\b/.test(contents)) {
+  if (
+    /\bfn\s+[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*->\s*&\s*reqwest::(?:(?:blocking|r#blocking)::)?(?:Client|ClientBuilder)\b/.test(
+      contents,
+    )
+  ) {
     errors.push(`${path} exposes the raw GitHub HTTP client`);
   }
   if (path === "src-tauri/src/adapters.rs") return errors;
   if (
-    /\breqwest::(?:Client|RequestBuilder)\b|\bClient::(?:new|builder)\s*\(|\breqwest::\{[^}]*\b(?:Client|RequestBuilder)\b/.test(
+    /\breqwest::(?:(?:blocking|r#blocking)::)?(?:Client|ClientBuilder|RequestBuilder)\b|\b(?:Client|ClientBuilder)::(?:new|builder)\s*\(|\breqwest::\{[^}]*\b(?:Client|ClientBuilder|RequestBuilder)\b/.test(
       contents,
     )
   ) {
@@ -912,9 +921,79 @@ export function findForbiddenGithubTransportUsage(path, contents) {
     /(?:\breqwest::Client\b|\b(?:client|github|adapter)\s*\.\s*(?:get|post|put|patch|delete|head|request)\s*\()[^;]{0,1000}?\.\s*send\s*\(/.test(
       compact,
     );
-  const hasRawHttpSend = receiverSend || chainedSend;
+  const directReqwestSend = /\breqwest::(?:(?:blocking|r#blocking)::)?get\s*\(/.test(compact);
+  const hasRawHttpSend = receiverSend || chainedSend || directReqwestSend;
   if (hasRawHttpSend) {
     errors.push(`${path} sends an HTTP request outside adapters.rs`);
+  }
+  return errors;
+}
+
+export function findForbiddenFrontendRuntimeUsage(path, contents) {
+  const sourceFile = parseTypeScript(path, contents);
+  const rawNetworkApis = new Set();
+  let importsTauriCoreOutsideApi = false;
+  let invokesTauriGlobal = false;
+
+  const recordNetworkApi = (expression) => {
+    const chain = propertyAccessChain(expression);
+    if (!chain?.length) return;
+    const api = chain.at(-1);
+    const isGlobal = chain.length === 1 || ["window", "globalThis", "self"].includes(chain[0]);
+    if (isGlobal && ["fetch", "XMLHttpRequest", "EventSource", "WebSocket"].includes(api)) {
+      rawNetworkApis.add(api);
+    }
+    if (api === "sendBeacon" && chain.includes("navigator")) rawNetworkApis.add("sendBeacon");
+    if (
+      api === "invoke" &&
+      (chain.includes("__TAURI__") || chain.includes("__TAURI_INTERNALS__"))
+    ) {
+      invokesTauriGlobal = true;
+    }
+  };
+
+  const recordModuleSpecifier = (node) => {
+    if (
+      path !== "src/api.ts" &&
+      ts.isStringLiteralLike(node) &&
+      /^@tauri-apps\/api\/core(?:$|\/)/.test(node.text)
+    ) {
+      importsTauriCoreOutsideApi = true;
+    }
+  };
+
+  const visit = (node) => {
+    if (
+      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+      node.moduleSpecifier
+    ) {
+      recordModuleSpecifier(node.moduleSpecifier);
+    }
+    if (ts.isCallExpression(node)) {
+      recordNetworkApi(node.expression);
+      if (
+        node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require")
+      ) {
+        recordModuleSpecifier(node.arguments[0]);
+      }
+    }
+    if (ts.isNewExpression(node)) recordNetworkApi(node.expression);
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+
+  const errors = ["fetch", "XMLHttpRequest", "EventSource", "WebSocket", "sendBeacon"]
+    .filter((api) => rawNetworkApis.has(api))
+    .map(
+      (api) =>
+        `${path} uses raw frontend network API ${api}; route network access through AppService and Rust adapters`,
+    );
+  if (importsTauriCoreOutsideApi) {
+    errors.push(`${path} imports @tauri-apps/api/core outside the governed src/api.ts wrapper`);
+  }
+  if (invokesTauriGlobal) {
+    errors.push(`${path} invokes the raw Tauri global outside the governed src/api.ts wrapper`);
   }
   return errors;
 }
@@ -1714,6 +1793,7 @@ export function checkBoundaries(root = REPOSITORY_ROOT) {
       errors.push(...findProductionTestImports(path, contents));
       errors.push(...findFrontendImportEscapes(path, contents));
       errors.push(...findFrontendModuleGraphHazards(path, contents));
+      errors.push(...findForbiddenFrontendRuntimeUsage(path, contents));
     }
     if (/\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/.test(path)) {
       errors.push(...findForbiddenTestModifiers(path, contents));

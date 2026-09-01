@@ -39,13 +39,18 @@ describe("foreground task coordination", () => {
 
     const running = coordinator.run(() => old.promise, (value) => { applied.push(value); });
     coordinator.invalidate();
+    const overlapping = await coordinator.run(
+      async () => "current",
+      (value) => { applied.push(value); },
+    );
+    expect(overlapping).toEqual({ status: "skipped", reason: "busy" });
+    old.resolve("stale");
+
+    await expect(running).resolves.toEqual({ status: "superseded" });
     const current = await coordinator.run(
       async () => "current",
       (value) => { applied.push(value); },
     );
-    old.resolve("stale");
-
-    await expect(running).resolves.toEqual({ status: "superseded" });
     expect(current).toEqual({ status: "completed", value: "current" });
     expect(applied).toEqual(["current"]);
   });

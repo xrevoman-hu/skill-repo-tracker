@@ -2,6 +2,7 @@ import { api } from "./api";
 import type {
   AppMetadata,
   AppSettings,
+  AppUpdateCheck,
   GitHubAccount,
   GitHubRepository,
   UiPlugin,
@@ -48,6 +49,7 @@ export interface AppService {
   backupRepositories(request: BackupRequest): Promise<BackupResult>;
   retryTask(taskId: string, current: WorkspaceSnapshot): Promise<WorkspaceSnapshot>;
   openBackupFolder(repositoryId?: string): Promise<void>;
+  checkForUpdates(currentVersion: string): Promise<AppUpdateCheck>;
 }
 
 type TauriTransport = Pick<
@@ -63,6 +65,7 @@ type TauriTransport = Pick<
   | "listGithubAccounts"
   | "listGithubRepositoryCatalog"
   | "getAppMetadata"
+  | "checkAppUpdate"
   | "openBackupFolder"
 >;
 
@@ -131,6 +134,10 @@ export class TauriAppService implements AppService {
 
   async openBackupFolder(repositoryId?: string) {
     await this.transport.openBackupFolder(repositoryId);
+  }
+
+  async checkForUpdates(_currentVersion: string) {
+    return this.transport.checkAppUpdate();
   }
 }
 
@@ -224,6 +231,14 @@ export class DemoAppService implements AppService {
   }
 
   async openBackupFolder(_repositoryId?: string) {}
+
+  async checkForUpdates(currentVersion: string): Promise<AppUpdateCheck> {
+    return {
+      currentVersion,
+      latestVersion: currentVersion,
+      updateAvailable: false,
+    };
+  }
 }
 
 function demoTask(now: Date, task: Omit<UiTask, "id">): UiTask {

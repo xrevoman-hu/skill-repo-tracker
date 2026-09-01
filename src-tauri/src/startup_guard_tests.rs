@@ -1,7 +1,7 @@
 use super::*;
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     sync::Arc,
 };
 
@@ -13,6 +13,8 @@ use adapters::{
 struct MemoryCredentials {
     values: Mutex<HashMap<String, String>>,
     deleted: Mutex<Vec<String>>,
+    failed_reads: Mutex<HashSet<String>>,
+    failed_deletes: Mutex<HashSet<String>>,
 }
 
 impl MemoryCredentials {
@@ -22,10 +24,21 @@ impl MemoryCredentials {
             .unwrap()
             .insert(key.to_string(), value.to_string());
     }
+
+    fn fail_read(&self, key: &str) {
+        self.failed_reads.lock().unwrap().insert(key.to_string());
+    }
+
+    fn fail_delete(&self, key: &str) {
+        self.failed_deletes.lock().unwrap().insert(key.to_string());
+    }
 }
 
 impl CredentialStore for MemoryCredentials {
     fn get(&self, _service: &str, key: &str) -> Result<Option<String>, String> {
+        if self.failed_reads.lock().unwrap().contains(key) {
+            return Err("fictional keychain failure containing fixture-token".into());
+        }
         Ok(self.values.lock().unwrap().get(key).cloned())
     }
 
@@ -38,6 +51,9 @@ impl CredentialStore for MemoryCredentials {
     }
 
     fn delete(&self, _service: &str, key: &str) -> Result<(), String> {
+        if self.failed_deletes.lock().unwrap().contains(key) {
+            return Err("fictional keychain delete failure containing legacy-token".into());
+        }
         self.values.lock().unwrap().remove(key);
         self.deleted.lock().unwrap().push(key.to_string());
         Ok(())
@@ -82,6 +98,27 @@ fn github_response(status: u16, body: impl Into<Vec<u8>>) -> GithubHttpResponse 
     }
 }
 
+fn seed_legacy_github_metadata(conn: &Connection) {
+    upsert_github_account(
+        conn,
+        &GithubAccountRecord {
+            id: LEGACY_GITHUB_ACCOUNT_ID.into(),
+            login: "legacy-fixture".into(),
+            display_name: "Legacy Fixture".into(),
+            avatar_url: None,
+            token_key: TOKEN_USER.into(),
+            status: "verified".into(),
+            scopes: "repo".into(),
+            last_verified: Some("2026-09-01T00:00:00Z".into()),
+            is_default: true,
+        },
+    )
+    .unwrap();
+    set_setting(conn, "github_token_configured", "true").unwrap();
+    set_setting(conn, "github_token_status", "verified").unwrap();
+    set_setting(conn, "github_token_last_verified", "2026-09-01T00:00:00Z").unwrap();
+}
+
 #[test]
 fn successful_startup_uses_injected_credentials_and_initializes_all_resources() {
     let data_dir = tempfile::tempdir().unwrap();
@@ -115,11 +152,174 @@ fn successful_startup_uses_injected_credentials_and_initializes_all_resources() 
         &[TOKEN_USER.to_string()]
     );
     assert_eq!(
-        state.token_for_key("fixture-account-token").as_deref(),
+        state
+            .token_for_key("fixture-account-token")
+            .unwrap()
+            .as_deref(),
         Some("  fixture-token  ")
     );
-    assert_eq!(state.token_for_key("blank-token"), None);
-    assert_eq!(state.token_for_key("missing-token"), None);
+    assert_eq!(state.token_for_key("blank-token").unwrap(), None);
+    assert_eq!(state.token_for_key("missing-token").unwrap(), None);
+}
+
+#[test]
+fn credential_read_failure_is_not_reported_as_a_missing_token_or_leaked() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let credentials = Arc::new(MemoryCredentials::default());
+    credentials.insert("fixture-account-token", "fixture-token");
+    let state = AppState::new_with_adapters(
+        data_dir.path().to_path_buf(),
+        AppAdapters {
+            credentials: credentials.clone(),
+            github: Arc::new(ScriptedGithub::new([])),
+            filesystem: Arc::new(SystemFilesystem),
+        },
+    )
+    .unwrap();
+    credentials.fail_read("fixture-account-token");
+
+    let read_error = state.token_for_key("fixture-account-token").unwrap_err();
+    assert_eq!(read_error.code, "token_store_read_failed");
+    let read_details = read_error.details.unwrap();
+    assert_eq!(read_details, "credential_store=get");
+    assert!(!read_details.contains("fixture-token"));
+    assert!(!read_details.contains("fictional keychain failure"));
+
+    let auth = state.auth_for_account_record(
+        GithubAccountRecord {
+            id: "github:fixture".into(),
+            login: "fixture".into(),
+            display_name: "Fixture".into(),
+            avatar_url: None,
+            token_key: "fixture-account-token".into(),
+            status: "verified".into(),
+            scopes: "repo".into(),
+            last_verified: Some("2026-09-01T00:00:00Z".into()),
+            is_default: true,
+        },
+        GithubAuthSource::DefaultAccount,
+    );
+    assert_eq!(auth.label(), "keychain_unavailable");
+    assert_eq!(auth.token(), None);
+    let auth_error = auth.usable().unwrap_err();
+    assert_eq!(auth_error.code, "github_token_keychain_unavailable");
+    let auth_details = auth_error.details.unwrap();
+    assert_eq!(auth_details, "auth=keychain_unavailable");
+    assert!(!auth_details.contains("fixture-token"));
+}
+
+#[test]
+fn absent_github_account_uses_explicit_anonymous_auth() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let state = AppState::new_with_adapters(
+        data_dir.path().to_path_buf(),
+        AppAdapters {
+            credentials: Arc::new(MemoryCredentials::default()),
+            github: Arc::new(ScriptedGithub::new([])),
+            filesystem: Arc::new(SystemFilesystem),
+        },
+    )
+    .unwrap();
+
+    let auth = state.default_github_auth();
+
+    assert_eq!(auth.label(), "none");
+    assert_eq!(auth.token(), None);
+    assert_eq!(auth.account_id, None);
+    auth.usable().unwrap();
+}
+
+#[test]
+fn startup_legacy_keychain_delete_failure_keeps_sqlite_metadata_visible() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let db_path = data_dir.path().join("skill-repo-tracker.sqlite");
+    let conn = Connection::open(&db_path).unwrap();
+    migrate(&conn).unwrap();
+    seed_legacy_github_metadata(&conn);
+    drop(conn);
+
+    let credentials = Arc::new(MemoryCredentials::default());
+    credentials.insert(TOKEN_USER, "legacy-token");
+    credentials.fail_delete(TOKEN_USER);
+    let error = AppState::new_with_adapters(
+        data_dir.path().to_path_buf(),
+        AppAdapters {
+            credentials: credentials.clone(),
+            github: Arc::new(ScriptedGithub::new([])),
+            filesystem: Arc::new(SystemFilesystem),
+        },
+    )
+    .err()
+    .expect("legacy keychain deletion failure must fail closed");
+
+    assert_eq!(error.code, "token_delete_failed");
+    assert_eq!(error.details.as_deref(), Some("credential_store=delete"));
+    assert_eq!(
+        credentials
+            .get(TOKEN_SERVICE, TOKEN_USER)
+            .unwrap()
+            .as_deref(),
+        Some("legacy-token")
+    );
+    let conn = Connection::open(&db_path).unwrap();
+    assert!(github_account_by_id(&conn, LEGACY_GITHUB_ACCOUNT_ID)
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        get_setting(&conn, "github_token_configured")
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        get_setting(&conn, "github_token_status")
+            .unwrap()
+            .as_deref(),
+        Some("verified")
+    );
+}
+
+#[test]
+fn clear_legacy_keychain_delete_failure_keeps_sqlite_metadata_visible() {
+    let data_dir = tempfile::tempdir().unwrap();
+    let credentials = Arc::new(MemoryCredentials::default());
+    let state = AppState::new_with_adapters(
+        data_dir.path().to_path_buf(),
+        AppAdapters {
+            credentials: credentials.clone(),
+            github: Arc::new(ScriptedGithub::new([])),
+            filesystem: Arc::new(SystemFilesystem),
+        },
+    )
+    .unwrap();
+    {
+        let db = state.db.lock().unwrap();
+        seed_legacy_github_metadata(&db);
+    }
+    credentials.insert(TOKEN_USER, "legacy-token");
+    credentials.fail_delete(TOKEN_USER);
+
+    let error = clear_github_token_inner(&state).unwrap_err();
+
+    assert_eq!(error.code, "token_delete_failed");
+    assert_eq!(error.details.as_deref(), Some("credential_store=delete"));
+    assert_eq!(
+        credentials
+            .get(TOKEN_SERVICE, TOKEN_USER)
+            .unwrap()
+            .as_deref(),
+        Some("legacy-token")
+    );
+    let db = state.db.lock().unwrap();
+    assert!(github_account_by_id(&db, LEGACY_GITHUB_ACCOUNT_ID)
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        get_setting(&db, "github_token_configured")
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
 }
 
 #[test]

@@ -26,8 +26,30 @@ export function createWorkspaceController(options: {
 }): WorkspaceController {
   let current = options.initial;
 
+  const persistedTasksMatch = (snapshot: WorkspaceSnapshot) => {
+    const currentTasks = current.tasks.filter((task) => !task.optimistic);
+    const nextTasks = snapshot.tasks.filter((task) => !task.optimistic);
+    return currentTasks.length === nextTasks.length
+      && currentTasks.every((task, index) => task === nextTasks[index]);
+  };
+
+  const hasChangedSnapshot = (snapshot: WorkspaceSnapshot) => (
+    snapshot.repositories !== current.repositories
+    || snapshot.skills !== current.skills
+    || snapshot.plugins !== current.plugins
+    || !persistedTasksMatch(snapshot)
+  );
+
   return {
     replaceSnapshot(snapshot) {
+      // App reconstructs the snapshot wrapper on every render. Only changed
+      // domain references mean state advanced outside this controller. The
+      // same references are the controller's own publish feeding back through
+      // React. UI-only optimistic task overlays also must not supersede the
+      // persisted operation that will replace them when it settles.
+      if (options.coordinator.isBusy() && hasChangedSnapshot(snapshot)) {
+        options.coordinator.invalidate();
+      }
       current = snapshot;
     },
     snapshot() {

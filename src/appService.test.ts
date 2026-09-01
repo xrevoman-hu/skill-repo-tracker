@@ -58,6 +58,11 @@ describe("AppService adapters", () => {
       listGithubAccounts: vi.fn().mockResolvedValue([]),
       listGithubRepositoryCatalog: vi.fn().mockResolvedValue([]),
       getAppMetadata: vi.fn().mockResolvedValue(metadata),
+      checkAppUpdate: vi.fn().mockResolvedValue({
+        currentVersion: "1.2.2",
+        latestVersion: "1.2.3",
+        updateAvailable: true,
+      }),
       openBackupFolder: vi.fn().mockResolvedValue("/backups/repo-1"),
     };
 
@@ -88,6 +93,11 @@ describe("AppService adapters", () => {
       listGithubAccounts: vi.fn().mockResolvedValue([]),
       listGithubRepositoryCatalog: vi.fn().mockResolvedValue([]),
       getAppMetadata: vi.fn().mockResolvedValue(null),
+      checkAppUpdate: vi.fn().mockResolvedValue({
+        currentVersion: "1.2.2",
+        latestVersion: "1.2.3",
+        updateAvailable: true,
+      }),
       openBackupFolder: vi.fn().mockResolvedValue("/backups/repo-1"),
     };
     const service = new TauriAppService(transport);
@@ -111,10 +121,16 @@ describe("AppService adapters", () => {
       backupRoot: "/backups",
     })).resolves.toEqual({ repositories: [repository], tasks: [] });
     await service.openBackupFolder("repo-1");
+    await expect(service.checkForUpdates("ignored-client-version")).resolves.toEqual({
+      currentVersion: "1.2.2",
+      latestVersion: "1.2.3",
+      updateAvailable: true,
+    });
 
     expect(transport.backupRepositories).toHaveBeenCalledWith("updated");
     expect(transport.backupRepositories).toHaveBeenCalledWith("selected", ["repo-1"]);
     expect(transport.openBackupFolder).toHaveBeenCalledWith("repo-1");
+    expect(transport.checkAppUpdate).toHaveBeenCalledOnce();
   });
 
   it("refreshes the complete workspace after a persisted task retry", async () => {
@@ -140,6 +156,11 @@ describe("AppService adapters", () => {
       listGithubAccounts: vi.fn().mockResolvedValue([]),
       listGithubRepositoryCatalog: vi.fn().mockResolvedValue([]),
       getAppMetadata: vi.fn().mockResolvedValue(null),
+      checkAppUpdate: vi.fn().mockResolvedValue({
+        currentVersion: "1.2.2",
+        latestVersion: "1.2.2",
+        updateAvailable: false,
+      }),
       openBackupFolder: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -188,6 +209,16 @@ describe("AppService adapters", () => {
     expect(first.repositories[0].lastChecked).toBe("2026-06-30T10:00:00.000Z");
     expect(second.repositories[0].lastChecked).toBe(first.repositories[0].lastChecked);
     expect(second.tasks[0].id).toBe(first.tasks[0].id);
+  });
+
+  it("keeps update checks offline and deterministic in demo mode", async () => {
+    const service = new DemoAppService();
+
+    await expect(service.checkForUpdates("9.8.7")).resolves.toEqual({
+      currentVersion: "9.8.7",
+      latestVersion: "9.8.7",
+      updateAvailable: false,
+    });
   });
 
   it("backs up only successful stable ids and preserves failed repositories", async () => {

@@ -12,6 +12,7 @@ import { api, isDesktopRuntime, localizedApiErrorMessage } from "./api";
 import type {
   AppSettings,
   AppMetadata,
+  AppUpdateCheck,
   DirectoryValidation,
   GithubPreview,
   GitHubAccount,
@@ -163,6 +164,7 @@ type PreferencesProps = {
   migrationConflictStrategy: MigrationConflictStrategy;
   setMigrationConflictStrategy: Dispatch<SetStateAction<MigrationConflictStrategy>>;
   appMetadata: AppMetadata;
+  checkForUpdates: () => Promise<AppUpdateCheck>;
   chooseDirectory: (kind: "backupRoot" | "skillsRoot") => void | Promise<void>;
   validateDirectory: (kind: string, path: string) => void | Promise<void>;
   syncInstalledSkills: () => void | Promise<void>;
@@ -2051,6 +2053,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     migrationConflictStrategy,
     setMigrationConflictStrategy,
     appMetadata,
+    checkForUpdates: () => appService.checkForUpdates(appMetadata.version),
     isPending,
     desktopRuntime,
     chooseDirectory,
@@ -5674,6 +5677,7 @@ function PreferencesPanel({
   migrationConflictStrategy,
   setMigrationConflictStrategy,
   appMetadata,
+  checkForUpdates,
   chooseDirectory,
   validateDirectory,
   syncInstalledSkills,
@@ -5979,6 +5983,7 @@ function PreferencesPanel({
 
         <AboutPanel
           appMetadata={appMetadata}
+          onCheckForUpdates={checkForUpdates}
           desktopRuntime={desktopRuntime}
           language={language}
           showToast={showToast}
@@ -6030,13 +6035,21 @@ function SettingRow({ label, description, controlId, stacked = false, children }
 
 type AboutPanelProps = {
   appMetadata?: AppMetadata;
+  onCheckForUpdates: () => Promise<AppUpdateCheck>;
   desktopRuntime: boolean;
   language: Language;
   showToast: (message: string) => void;
   t: Translate;
 };
 
-function AboutPanel({ appMetadata = APP_METADATA, desktopRuntime, language, showToast, t }: AboutPanelProps) {
+function AboutPanel({
+  appMetadata = APP_METADATA,
+  onCheckForUpdates,
+  desktopRuntime,
+  language,
+  showToast,
+  t,
+}: AboutPanelProps) {
   const [checking, setChecking] = useState(false);
   const [updateStatus, setUpdateStatus] = useState("");
   const defaultUpdateStatus = appMetadata.openSource && appMetadata.projectGithubUrl
@@ -6050,28 +6063,12 @@ function AboutPanel({ appMetadata = APP_METADATA, desktopRuntime, language, show
       return;
     }
 
-    const match = appMetadata.projectGithubUrl.match(/github\.com\/([^/]+)\/([^/#?]+)/i);
-    if (!match) {
-      setUpdateStatus(t("updateCheckFailed"));
-      showToast(t("updateCheckFailed"));
-      return;
-    }
-
     setChecking(true);
     setUpdateStatus(t("checkingForUpdates"));
     try {
-      const response = await fetch(`https://api.github.com/repos/${match[1]}/${match[2]}/releases/latest`);
-      if (!response.ok) {
-        throw new Error(`GitHub release check failed: ${response.status}`);
-      }
-      const release: unknown = await response.json();
-      const latestTag = release && typeof release === "object" && "tag_name" in release
-        ? (release as Record<string, unknown>).tag_name
-        : "";
-      const latest = (typeof latestTag === "string" ? latestTag : "").replace(/^v/i, "");
-      const current = appMetadata.version.replace(/^v/i, "");
-      const message = latest && latest !== current
-        ? `${language === "zh" ? "发现新版本" : "New version"} v${latest}`
+      const result = await onCheckForUpdates();
+      const message = result.updateAvailable
+        ? `${language === "zh" ? "发现新版本" : "New version"} v${result.latestVersion}`
         : t("updateUpToDate");
       setUpdateStatus(message);
       showToast(message);

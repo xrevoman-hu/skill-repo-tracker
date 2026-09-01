@@ -9,4 +9,8 @@
 | macOS entitlement | `src-tauri/entitlements.plist` 的现有最小集合 | 新 ADR、人工安全审查 |
 | Tauri capability/plugin | 有实际消费者的最小集合 | 无消费者即删除，不保留“以后也许用” |
 
+前端生产模块禁止直接使用 `fetch`、XHR、EventSource、WebSocket 或 `sendBeacon`；网络只能经
+`AppService` 和 Rust adapter。`@tauri-apps/api/core` 及 raw `invoke` 只允许出现在
+`src/api.ts`，View 不得绕过受治理的 command wrapper。
+
 禁止默认引入遥测、后台 daemon、额外系统权限或扩大自动清理范围。

@@ -561,6 +561,12 @@ export type AppMetadata = {
   openSource: boolean;
 };
 
+export type AppUpdateCheck = {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+};
+
 export type SyncTarget = {
   id: string;
   label: string;
@@ -662,6 +668,7 @@ export const api = {
   getGithubPreview: (url: string) => command<GithubPreview>("get_github_preview", { request: { url } }),
   listTasks: () => command<UiTask[]>("list_tasks"),
   getAppMetadata: () => command<AppMetadata>("get_app_metadata"),
+  checkAppUpdate: () => command<AppUpdateCheck>("check_app_update"),
   getSettings: () => command<AppSettings>("get_settings"),
   pickDirectory: (defaultPath?: string) => command<string | null>("pick_directory", { defaultPath }),
   validateDirectory: (kind: string, path: string) =>

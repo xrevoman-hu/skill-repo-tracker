@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
 import { TauriAppService } from "./appService";
@@ -19,6 +19,10 @@ describe("application bootstrap", () => {
     window.history.replaceState(null, "", "/?tab=repositories&lang=zh");
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("fails closed when one persisted desktop domain cannot be loaded", async () => {
     const listPlugins = vi.fn().mockRejectedValue(new Error("plugin bootstrap failed"));
     const service = new TauriAppService({
@@ -33,6 +37,11 @@ describe("application bootstrap", () => {
       listGithubAccounts: vi.fn().mockResolvedValue([]),
       listGithubRepositoryCatalog: vi.fn().mockResolvedValue([]),
       getAppMetadata: vi.fn().mockResolvedValue(null),
+      checkAppUpdate: vi.fn().mockResolvedValue({
+        currentVersion: "1.2.3",
+        latestVersion: "1.2.3",
+        updateAvailable: false,
+      }),
       openBackupFolder: vi.fn().mockResolvedValue(undefined),
     });
 
@@ -92,6 +101,11 @@ describe("application bootstrap", () => {
       backupRepositories: vi.fn(),
       retryTask,
       openBackupFolder: vi.fn(),
+      checkForUpdates: vi.fn().mockResolvedValue({
+        currentVersion: "1.2.3",
+        latestVersion: "1.2.3",
+        updateAvailable: false,
+      }),
     };
     window.history.replaceState(null, "", "/?tab=tasks&lang=zh");
 
@@ -101,5 +115,44 @@ describe("application bootstrap", () => {
     await waitFor(() => expect(retryTask).toHaveBeenCalledWith("failed-1", initial));
     await user.click(screen.getByRole("button", { name: "仓库" }));
     expect(await screen.findByText("example/fresh-repo")).toBeInTheDocument();
+  });
+
+  it("checks releases through AppService without browser network access", async () => {
+    const user = userEvent.setup();
+    const browserFetch = vi.fn();
+    vi.stubGlobal("fetch", browserFetch);
+    const checkForUpdates = vi.fn().mockResolvedValue({
+      currentVersion: "1.2.2",
+      latestVersion: "1.2.3",
+      updateAvailable: true,
+    });
+    const service: AppService = {
+      runtime: "demo",
+      bootstrap: vi.fn().mockResolvedValue({
+        workspace: { repositories: [], skills: [], plugins: [], tasks: [] },
+        settings: null,
+        githubAccounts: [],
+        githubRepositories: [],
+        appMetadata: {
+          name: "Skill Repo Tracker",
+          version: "1.2.2",
+          projectGithubUrl: "https://github.com/example/project",
+          openSource: true,
+        },
+      }),
+      checkRepositories: vi.fn(),
+      backupRepositories: vi.fn(),
+      retryTask: vi.fn(),
+      openBackupFolder: vi.fn(),
+      checkForUpdates,
+    };
+    window.history.replaceState(null, "", "/?tab=settings&lang=zh");
+
+    render(<App appService={service} />);
+    await user.click(await screen.findByRole("button", { name: "检查更新" }));
+
+    await waitFor(() => expect(checkForUpdates).toHaveBeenCalledWith("1.2.2"));
+    expect(browserFetch).not.toHaveBeenCalled();
+    expect((await screen.findAllByText("发现新版本 v1.2.3")).length).toBeGreaterThan(0);
   });
 });

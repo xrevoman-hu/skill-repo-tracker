@@ -10,3 +10,5 @@
   跨存储残留按 ADR 0003 处理，禁止用递归扫描自动删除未知目录。
 - Keychain 与 SQLite 的联合更新必须记录调用前凭据状态；数据库 statement/commit 失败时
   执行补偿并用回归测试覆盖，补偿错误不得泄露 token。
+- Keychain 读取失败不能降级成“未配置”；删除失败时不得先清理 SQLite 元数据。底层
+  Keychain 错误只映射为稳定错误码和脱敏标签，不把 adapter 原文返回给 UI。

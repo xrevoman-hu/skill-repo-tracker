@@ -1,6 +1,7 @@
 use crate::{
-    adapters::CredentialStore, github_account_by_id, load_ui_github_accounts, set_setting,
-    upsert_github_account, utc_now, AppError, GithubAccountRecord, UiGithubAccount,
+    adapters::CredentialStore, cleanup_legacy_github_account_metadata, github_account_by_id,
+    load_ui_github_accounts, set_setting, upsert_github_account, utc_now, AppError,
+    GithubAccountRecord, UiGithubAccount,
 };
 use rusqlite::{params, Connection};
 #[cfg(unix)]
@@ -85,14 +86,22 @@ pub(super) fn save_validated_account(
     mut account: GithubAccountRecord,
 ) -> Result<Vec<UiGithubAccount>, AppError> {
     let _guard = acquire_mutation_guard(mutation_lock)?;
-    let previous_secret = credentials
-        .get(service, &account.token_key)
-        .map_err(|error| {
-            AppError::with_details("token_store_read_failed", "Token 读取失败。", error)
-        })?;
+    let previous_secret = credentials.get(service, &account.token_key).map_err(|_| {
+        AppError::with_details(
+            "token_store_read_failed",
+            "Token 读取失败。",
+            "credential_store=get",
+        )
+    })?;
     credentials
         .set(service, &account.token_key, token)
-        .map_err(|error| AppError::with_details("token_store_failed", "Token 存储失败。", error))?;
+        .map_err(|_| {
+            AppError::with_details(
+                "token_store_failed",
+                "Token 存储失败。",
+                "credential_store=set",
+            )
+        })?;
 
     account.is_default = false;
     let database_result = (|| {
@@ -108,17 +117,23 @@ pub(super) fn save_validated_account(
     match database_result {
         Ok(accounts) => Ok(accounts),
         Err(database_error) => {
-            let compensation = match previous_secret.as_deref() {
-                Some(secret) => credentials.set(service, &account.token_key, secret),
-                None => credentials.delete(service, &account.token_key),
+            let (compensation, compensation_label) = match previous_secret.as_deref() {
+                Some(secret) => (
+                    credentials.set(service, &account.token_key, secret),
+                    "credential_store_set_failed",
+                ),
+                None => (
+                    credentials.delete(service, &account.token_key),
+                    "credential_store_delete_failed",
+                ),
             };
             match compensation {
                 Ok(()) => Err(database_error),
-                Err(compensation_error) => Err(AppError::with_details(
+                Err(_) => Err(AppError::with_details(
                     "token_store_compensation_failed",
                     "账号保存失败，且 Token 恢复失败。",
                     format!(
-                        "database_code={}; database={}; compensation={compensation_error}",
+                        "database_code={}; database={}; compensation={compensation_label}",
                         database_error.code,
                         database_error
                             .details
@@ -181,15 +196,21 @@ pub(super) fn delete_account(
     let _guard = acquire_mutation_guard(mutation_lock)?;
     let account = github_account_by_id(conn, account_id)?
         .ok_or_else(|| AppError::new("github_account_missing", "GitHub 账号不存在。"))?;
-    let previous_secret = credentials
-        .get(service, &account.token_key)
-        .map_err(|error| {
-            AppError::with_details("token_delete_failed", "Token 读取失败，账号未删除。", error)
-        })?;
+    let previous_secret = credentials.get(service, &account.token_key).map_err(|_| {
+        AppError::with_details(
+            "token_delete_failed",
+            "Token 读取失败，账号未删除。",
+            "credential_store=get",
+        )
+    })?;
     credentials
         .delete(service, &account.token_key)
-        .map_err(|error| {
-            AppError::with_details("token_delete_failed", "Token 删除失败，账号未删除。", error)
+        .map_err(|_| {
+            AppError::with_details(
+                "token_delete_failed",
+                "Token 删除失败，账号未删除。",
+                "credential_store=delete",
+            )
         })?;
 
     let database_result = (|| {
@@ -218,11 +239,65 @@ pub(super) fn delete_account(
             });
             match compensation {
                 Ok(()) => Err(database_error),
-                Err(compensation_error) => Err(AppError::with_details(
+                Err(_) => Err(AppError::with_details(
                     "token_delete_compensation_failed",
                     "账号删除失败，且 Token 恢复失败。",
                     format!(
-                        "database_code={}; database={}; compensation={compensation_error}",
+                        "database_code={}; database={}; compensation=credential_store_set_failed",
+                        database_error.code,
+                        database_error
+                            .details
+                            .as_deref()
+                            .unwrap_or(&database_error.message)
+                    ),
+                )),
+            }
+        }
+    }
+}
+
+pub(super) fn delete_legacy_account(
+    conn: &Connection,
+    mutation_lock: &CredentialMutationLock,
+    credentials: &dyn CredentialStore,
+    service: &str,
+    token_key: &str,
+) -> Result<(), AppError> {
+    let _guard = acquire_mutation_guard(mutation_lock)?;
+    let previous_secret = credentials.get(service, token_key).map_err(|_| {
+        AppError::with_details(
+            "token_delete_failed",
+            "旧版 Token 读取失败，账号元数据未清理。",
+            "credential_store=get",
+        )
+    })?;
+    credentials.delete(service, token_key).map_err(|_| {
+        AppError::with_details(
+            "token_delete_failed",
+            "旧版 Token 删除失败，账号元数据未清理。",
+            "credential_store=delete",
+        )
+    })?;
+
+    let database_result = (|| {
+        let transaction = conn.unchecked_transaction()?;
+        cleanup_legacy_github_account_metadata(&transaction)?;
+        transaction.commit()?;
+        Ok(())
+    })();
+    match database_result {
+        Ok(()) => Ok(()),
+        Err(database_error) => {
+            let compensation = previous_secret
+                .as_deref()
+                .map_or(Ok(()), |secret| credentials.set(service, token_key, secret));
+            match compensation {
+                Ok(()) => Err(database_error),
+                Err(_) => Err(AppError::with_details(
+                    "token_delete_compensation_failed",
+                    "旧版账号元数据清理失败，且 Token 恢复失败。",
+                    format!(
+                        "database_code={}; database={}; compensation=credential_store_set_failed",
                         database_error.code,
                         database_error
                             .details
