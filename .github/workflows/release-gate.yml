@@ -47,10 +47,24 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
-      - name: Prepare and mask release manifest
+      - name: Set up pinned Rust
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component clippy,rustfmt
+          rustup toolchain install 1.88.0 --profile minimal
+          rustup toolchain install nightly-2026-08-01 --profile minimal --component llvm-tools-preview
+          rustup default 1.95.0
+      - name: Install npm dependencies
+        run: npm ci --registry=https://registry.npmjs.org
+      - name: Install local-phase coverage and browser tools
+        if: inputs.phase == 'local'
+        run: |
+          cargo install cargo-llvm-cov --locked --version 0.9.0
+          npx playwright install chromium
+      - name: Run the explicit release verification lane
         run: |
           set -euo pipefail
           manifest_file="$RUNNER_TEMP/srt-release-manifest.token"
+          trap 'rm -f "$manifest_file"' EXIT
           manifest_token="$(
             node -e '
               const { readFileSync } = require("node:fs");
@@ -75,23 +89,5 @@ jobs:
           umask 077
           printf '%s\n' "$manifest_token" > "$manifest_file"
           chmod 600 "$manifest_file"
-          echo "RELEASE_MANIFEST_FILE=$manifest_file" >> "$GITHUB_ENV"
-      - name: Set up pinned Rust
-        run: |
-          rustup toolchain install 1.95.0 --profile minimal --component clippy,rustfmt
-          rustup toolchain install 1.88.0 --profile minimal
-          rustup toolchain install nightly-2026-08-01 --profile minimal --component llvm-tools-preview
-          rustup default 1.95.0
-      - name: Install npm dependencies
-        run: npm ci --registry=https://registry.npmjs.org
-      - name: Install local-phase coverage and browser tools
-        if: inputs.phase == 'local'
-        run: |
-          cargo install cargo-llvm-cov --locked --version 0.9.0
-          npx playwright install chromium
-      - name: Run the explicit release verification lane
-        run: |
-          set -euo pipefail
-          manifest_token="$(<"$RELEASE_MANIFEST_FILE")"
-          trap 'rm -f "$RELEASE_MANIFEST_FILE"' EXIT
+          manifest_token="$(<"$manifest_file")"
           npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"

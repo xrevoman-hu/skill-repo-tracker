@@ -60,17 +60,19 @@ Release notes 必须中英文说明 ad-hoc 边界与首次打开方法。公开�
 
 发布动作返回明确结果后，从 local phase 输出的 `0600` `.release.token` 文件读取单一
 manifest token，作为不可省略的字段载体传给 remote phase；不要拆开复制 commit/SHA，
-以免混用不同构建。关闭 shell xtrace，使用 `--silent` 避免 npm 把调用命令写入日志，并在
-命令结束后清除变量。这个 unsigned artifact-field carrier 不是凭据，也不构成 local gate
-provenance：
+以免混用不同构建。把读取和验证隔离在 fail-closed 子 shell 中，关闭 shell xtrace，并使用
+`--silent` 避免 npm 把调用命令写入日志；子 shell 退出时变量自动消失，同时保留 verifier
+的失败状态。这个 unsigned artifact-field carrier 不是凭据，也不构成 local gate provenance：
 
 ```bash
-set +x
-RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_X.Y.Z_aarch64.release.token")"
-npm run --silent release:verify -- \
-  --lane adhoc --version X.Y.Z --phase remote \
-  --manifest-token "$RELEASE_MANIFEST_TOKEN"
-unset RELEASE_MANIFEST_TOKEN
+(
+  set -euo pipefail
+  set +x
+  RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_X.Y.Z_aarch64.release.token")"
+  npm run --silent release:verify -- \
+    --lane adhoc --version X.Y.Z --phase remote \
+    --manifest-token "$RELEASE_MANIFEST_TOKEN"
+)
 ```
 
 remote phase 从 token 还原并验证 manifest，再只读核对

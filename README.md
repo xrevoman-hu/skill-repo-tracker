@@ -162,12 +162,14 @@ local gate 已执行或是谁生成。不得把它上传为 Release 资产、写
 manifest 中的 commit，下载文件和 GitHub digest/size 也必须与 manifest 一致：
 
 ```bash
-set +x
-RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_1.2.3_aarch64.release.token")"
-npm run --silent release:verify -- \
-  --lane adhoc --version 1.2.3 --phase remote \
-  --manifest-token "$RELEASE_MANIFEST_TOKEN"
-unset RELEASE_MANIFEST_TOKEN
+(
+  set -euo pipefail
+  set +x
+  RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_1.2.3_aarch64.release.token")"
+  npm run --silent release:verify -- \
+    --lane adhoc --version 1.2.3 --phase remote \
+    --manifest-token "$RELEASE_MANIFEST_TOKEN"
+)
 ```
 
 GitHub 的 local gate 只在临时 runner 内验证构建，不导出 token artifact；正式发布交接使用
@@ -275,12 +277,14 @@ read it from the token file for the remote phase, which verifies the release ref
 asset, and GitHub digest/size against those manifest fields:
 
 ```bash
-set +x
-RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_1.2.3_aarch64.release.token")"
-npm run --silent release:verify -- \
-  --lane adhoc --version 1.2.3 --phase remote \
-  --manifest-token "$RELEASE_MANIFEST_TOKEN"
-unset RELEASE_MANIFEST_TOKEN
+(
+  set -euo pipefail
+  set +x
+  RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_1.2.3_aarch64.release.token")"
+  npm run --silent release:verify -- \
+    --lane adhoc --version 1.2.3 --phase remote \
+    --manifest-token "$RELEASE_MANIFEST_TOKEN"
+)
 ```
 
 The GitHub local gate validates its build only on the ephemeral runner and does not export a

@@ -1365,8 +1365,9 @@ export function validateWeeklyResilienceWorkflowPolicy(contents) {
 }
 
 export function validateReleaseWorkflowPolicy(contents) {
-  const prepareManifestCommand = `set -euo pipefail
+  const exactVerifierCommand = `set -euo pipefail
 manifest_file="$RUNNER_TEMP/srt-release-manifest.token"
+trap 'rm -f "$manifest_file"' EXIT
 manifest_token="$(
   node -e '
     const { readFileSync } = require("node:fs");
@@ -1391,11 +1392,7 @@ fi
 umask 077
 printf '%s\\n' "$manifest_token" > "$manifest_file"
 chmod 600 "$manifest_file"
-echo "RELEASE_MANIFEST_FILE=$manifest_file" >> "$GITHUB_ENV"
-`;
-  const exactVerifierCommand = `set -euo pipefail
-manifest_token="$(<"$RELEASE_MANIFEST_FILE")"
-trap 'rm -f "$RELEASE_MANIFEST_FILE"' EXIT
+manifest_token="$(<"$manifest_file")"
 npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"
 `;
   let workflow;
@@ -1458,10 +1455,6 @@ npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --p
             name: "Set up Node.js",
             uses: "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
             with: { "node-version-file": ".node-version", cache: "npm" },
-          },
-          {
-            name: "Prepare and mask release manifest",
-            run: prepareManifestCommand,
           },
           {
             name: "Set up pinned Rust",

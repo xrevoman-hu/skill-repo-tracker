@@ -134,7 +134,9 @@ test("release workflow is manual, read-only, approved, and runs on Apple Silicon
   assert.match(valid, /::add-mask::/);
   assert.match(valid, /umask 077/);
   assert.match(valid, /chmod 600/);
-  assert.match(valid, /RELEASE_MANIFEST_FILE/);
+  assert.doesNotMatch(valid, /name: Prepare and mask release manifest/);
+  assert.doesNotMatch(valid, /RELEASE_MANIFEST_FILE|GITHUB_ENV/);
+  assert.match(valid, /trap 'rm -f "\$manifest_file"' EXIT/);
   assert.match(valid, /npm run --silent release:verify/);
   assert.deepEqual(validateReleaseWorkflowPolicy(valid), []);
 
@@ -194,6 +196,7 @@ test("release workflow is manual, read-only, approved, and runs on Apple Silicon
       "      - name: Rewrite the verifier command\n        run: npm pkg set scripts.release:verify=true\n      - name: Run the explicit release verification lane",
     ),
     valid.replace("          printf '::add-mask::%s\\n' \"$manifest_token\"\n", ""),
+    valid.replace("          trap 'rm -f \"$manifest_file\"' EXIT\n", ""),
     valid.replace("          umask 077\n", ""),
     valid.replace("          chmod 600 \"$manifest_file\"", "          chmod 644 \"$manifest_file\""),
     valid.replace(
@@ -206,6 +209,21 @@ test("release workflow is manual, read-only, approved, and runs on Apple Silicon
         error.includes("release workflow must match the complete fail-closed template"),
       ),
     );
+  }
+});
+
+test("documented remote release commands preserve verifier failures and scope the token", () => {
+  for (const path of [
+    "../../README.md",
+    "../../docs/macos-release-checklist.md",
+    "../../docs/rules/testing-release.md",
+  ]) {
+    const contents = readFileSync(new URL(path, import.meta.url), "utf8");
+    const remoteCommands = contents.match(
+      /\(\n\s+set -euo pipefail\n\s+set \+x\n\s+RELEASE_MANIFEST_TOKEN=.*?\n\s+npm run --silent release:verify -- \\\n(?:.*\n){1,3}?\s+--manifest-token "\$RELEASE_MANIFEST_TOKEN"\n\)/g,
+    );
+    assert.ok(remoteCommands?.length, `${path} must use a fail-closed token subshell`);
+    assert.doesNotMatch(contents, /unset RELEASE_MANIFEST_TOKEN/);
   }
 });
 

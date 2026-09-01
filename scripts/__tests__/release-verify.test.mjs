@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
+  existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   statSync,
@@ -197,6 +201,110 @@ test("local release handoff stores both manifest representations as 0600 files",
     assert.deepEqual(
       decodeReleaseManifestToken(readFileSync(handoff.tokenPath, "utf8").trim(), "1.2.2"),
       manifest,
+    );
+  });
+});
+
+test("local release handoff atomically replaces existing 0644 sidecars with 0600 files", () => {
+  withTemporaryDirectory((directory) => {
+    const manifest = buildReleaseManifest({
+      version: "1.2.2",
+      commit: "a".repeat(40),
+      artifact: "Skill Repo Tracker_1.2.2_aarch64.dmg",
+      bytes: 42,
+      sha256: "b".repeat(64),
+    });
+    const manifestPath = join(
+      directory,
+      "Skill Repo Tracker_1.2.2_aarch64.release.json",
+    );
+    const tokenPath = join(
+      directory,
+      "Skill Repo Tracker_1.2.2_aarch64.release.token",
+    );
+    writeFileSync(manifestPath, "stale manifest\n");
+    writeFileSync(tokenPath, "stale token\n");
+    chmodSync(manifestPath, 0o644);
+    chmodSync(tokenPath, 0o644);
+    const manifestBefore = statSync(manifestPath);
+    const tokenBefore = statSync(tokenPath);
+
+    const handoff = writeReleaseHandoffFiles({ directory, manifest });
+
+    const manifestAfter = statSync(handoff.manifestPath);
+    const tokenAfter = statSync(handoff.tokenPath);
+    assert.notDeepEqual(
+      [manifestAfter.dev, manifestAfter.ino],
+      [manifestBefore.dev, manifestBefore.ino],
+    );
+    assert.notDeepEqual([tokenAfter.dev, tokenAfter.ino], [tokenBefore.dev, tokenBefore.ino]);
+    assert.equal(manifestAfter.mode & 0o777, 0o600);
+    assert.equal(tokenAfter.mode & 0o777, 0o600);
+  });
+});
+
+test("local release handoff replaces final symlinks without modifying their targets", () => {
+  withTemporaryDirectory((directory) => {
+    const manifest = buildReleaseManifest({
+      version: "1.2.2",
+      commit: "a".repeat(40),
+      artifact: "Skill Repo Tracker_1.2.2_aarch64.dmg",
+      bytes: 42,
+      sha256: "b".repeat(64),
+    });
+    const manifestPath = join(
+      directory,
+      "Skill Repo Tracker_1.2.2_aarch64.release.json",
+    );
+    const tokenPath = join(
+      directory,
+      "Skill Repo Tracker_1.2.2_aarch64.release.token",
+    );
+    const manifestTarget = join(directory, "manifest-target.txt");
+    const tokenTarget = join(directory, "token-target.txt");
+    writeFileSync(manifestTarget, "manifest target must remain unchanged\n");
+    writeFileSync(tokenTarget, "token target must remain unchanged\n");
+    symlinkSync(manifestTarget, manifestPath);
+    symlinkSync(tokenTarget, tokenPath);
+
+    const handoff = writeReleaseHandoffFiles({ directory, manifest });
+
+    assert.equal(readFileSync(manifestTarget, "utf8"), "manifest target must remain unchanged\n");
+    assert.equal(readFileSync(tokenTarget, "utf8"), "token target must remain unchanged\n");
+    assert.equal(lstatSync(handoff.manifestPath).isSymbolicLink(), false);
+    assert.equal(lstatSync(handoff.manifestPath).isFile(), true);
+    assert.equal(lstatSync(handoff.tokenPath).isSymbolicLink(), false);
+    assert.equal(lstatSync(handoff.tokenPath).isFile(), true);
+  });
+});
+
+test("local release handoff removes its new token and private staging directory if manifest commit fails", () => {
+  withTemporaryDirectory((directory) => {
+    const manifest = buildReleaseManifest({
+      version: "1.2.2",
+      commit: "a".repeat(40),
+      artifact: "Skill Repo Tracker_1.2.2_aarch64.dmg",
+      bytes: 42,
+      sha256: "b".repeat(64),
+    });
+    const manifestPath = join(
+      directory,
+      "Skill Repo Tracker_1.2.2_aarch64.release.json",
+    );
+    const tokenPath = join(
+      directory,
+      "Skill Repo Tracker_1.2.2_aarch64.release.token",
+    );
+    mkdirSync(manifestPath);
+    writeFileSync(tokenPath, "stale token\n");
+
+    assert.throws(() => writeReleaseHandoffFiles({ directory, manifest }));
+
+    assert.equal(existsSync(tokenPath), false);
+    assert.equal(lstatSync(manifestPath).isDirectory(), true);
+    assert.deepEqual(
+      readdirSync(directory).filter((entry) => entry.startsWith(".srt-release-handoff-")),
+      [],
     );
   });
 });

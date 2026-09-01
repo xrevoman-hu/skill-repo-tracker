@@ -4,14 +4,23 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fchmodSync,
+  fstatSync,
   lstatSync,
   mkdtempSync,
+  openSync,
+  readSync,
   readdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
+  rmdirSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -120,18 +129,177 @@ export function encodeReleaseManifest(manifest) {
   return Buffer.from(JSON.stringify(validated), "utf8").toString("base64url");
 }
 
+function readPrivateFileDescriptor(fd) {
+  const { size } = fstatSync(fd);
+  const contents = Buffer.alloc(size);
+  let offset = 0;
+  while (offset < size) {
+    const bytesRead = readSync(fd, contents, offset, size - offset, offset);
+    if (bytesRead === 0) throw new Error("release handoff staging file ended unexpectedly");
+    offset += bytesRead;
+  }
+  return contents.toString("utf8");
+}
+
+function createPrivateHandoffFile(path, contents) {
+  if (!Number.isInteger(constants.O_NOFOLLOW)) {
+    throw new Error("release handoff requires O_NOFOLLOW support");
+  }
+  let fd;
+  try {
+    fd = openSync(
+      path,
+      constants.O_RDWR |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_NOFOLLOW,
+      0o600,
+    );
+    fchmodSync(fd, 0o600);
+    writeFileSync(fd, contents, { encoding: "utf8" });
+    const stats = fstatSync(fd);
+    if (!stats.isFile() || (stats.mode & 0o777) !== 0o600) {
+      throw new Error("release handoff staging file must be a private regular file");
+    }
+    const rereadContents = readPrivateFileDescriptor(fd);
+    if (rereadContents !== contents) {
+      throw new Error("release handoff staging file did not round-trip exactly");
+    }
+    return { dev: stats.dev, ino: stats.ino, path, contents: rereadContents };
+  } finally {
+    if (fd !== undefined) {
+      closeSync(fd);
+    }
+  }
+}
+
+function sameFileIdentity(stats, stagedFile) {
+  return stats.dev === stagedFile.dev && stats.ino === stagedFile.ino;
+}
+
+function assertCommittedPrivateFile(path, stagedFile) {
+  const committedStats = lstatSync(path);
+  if (
+    !committedStats.isFile() ||
+    committedStats.isSymbolicLink() ||
+    !sameFileIdentity(committedStats, stagedFile) ||
+    (committedStats.mode & 0o777) !== 0o600
+  ) {
+    throw new Error("release handoff final path must be the committed private regular file");
+  }
+}
+
+function unlinkCommittedFile(path, stagedFile) {
+  try {
+    const committedStats = lstatSync(path);
+    if (committedStats.isFile() && sameFileIdentity(committedStats, stagedFile)) {
+      unlinkSync(path);
+    }
+  } catch (error) {
+    if (error?.code !== "ENOENT") return error;
+  }
+  return undefined;
+}
+
+function unlinkIfPresent(path) {
+  try {
+    unlinkSync(path);
+  } catch (error) {
+    if (error?.code !== "ENOENT") return error;
+  }
+  return undefined;
+}
+
 export function writeReleaseHandoffFiles({ directory, manifest }) {
   const validated = validateReleaseManifest(manifest, manifest?.version);
   const prefix = `${PRODUCT_NAME}_${validated.version}_aarch64.release`;
   const manifestPath = join(directory, `${prefix}.json`);
   const tokenPath = join(directory, `${prefix}.token`);
   const token = encodeReleaseManifest(validated);
+  const manifestContents = `${JSON.stringify(validated, null, 2)}\n`;
+  const tokenContents = `${token}\n`;
+  const stagingDirectory = mkdtempSync(join(directory, ".srt-release-handoff-"));
+  const stagedManifestPath = join(stagingDirectory, "manifest.json");
+  const stagedTokenPath = join(stagingDirectory, "manifest.token");
+  let manifestFile;
+  let tokenFile;
+  let manifestCommitted = false;
+  let tokenCommitted = false;
+  let operationError;
 
-  writeFileSync(manifestPath, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(manifestPath, 0o600);
-  writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
-  chmodSync(tokenPath, 0o600);
+  try {
+    chmodSync(stagingDirectory, 0o700);
+    const stagingStats = lstatSync(stagingDirectory);
+    if (
+      !stagingStats.isDirectory() ||
+      stagingStats.isSymbolicLink() ||
+      (stagingStats.mode & 0o777) !== 0o700
+    ) {
+      throw new Error("release handoff staging path must be a private directory");
+    }
+    manifestFile = createPrivateHandoffFile(stagedManifestPath, manifestContents);
+    tokenFile = createPrivateHandoffFile(stagedTokenPath, tokenContents);
 
+    let rereadManifest;
+    try {
+      rereadManifest = validateReleaseManifest(
+        JSON.parse(manifestFile.contents),
+        validated.version,
+      );
+    } catch (error) {
+      throw new Error("release handoff staged manifest failed validation", { cause: error });
+    }
+    if (JSON.stringify(rereadManifest) !== JSON.stringify(validated)) {
+      throw new Error("release handoff staged manifest changed during validation");
+    }
+    const rereadToken = tokenFile.contents;
+    if (rereadToken !== tokenContents) {
+      throw new Error("release handoff staged token did not round-trip exactly");
+    }
+    const decodedToken = decodeReleaseManifestToken(rereadToken.trim(), validated.version);
+    if (
+      JSON.stringify(decodedToken) !== JSON.stringify(validated) ||
+      encodeReleaseManifest(decodedToken) !== token
+    ) {
+      throw new Error("release handoff staged token is not canonical");
+    }
+
+    renameSync(tokenFile.path, tokenPath);
+    tokenCommitted = true;
+    assertCommittedPrivateFile(tokenPath, tokenFile);
+
+    renameSync(manifestFile.path, manifestPath);
+    manifestCommitted = true;
+    assertCommittedPrivateFile(manifestPath, manifestFile);
+  } catch (error) {
+    operationError = error;
+    const rollbackErrors = [];
+    if (manifestCommitted) {
+      const rollbackError = unlinkCommittedFile(manifestPath, manifestFile);
+      if (rollbackError) rollbackErrors.push(rollbackError);
+    }
+    if (tokenCommitted) {
+      const rollbackError = unlinkCommittedFile(tokenPath, tokenFile);
+      if (rollbackError) rollbackErrors.push(rollbackError);
+    }
+    if (rollbackErrors.length > 0) {
+      operationError = new AggregateError(
+        [error, ...rollbackErrors],
+        "release handoff commit failed and rollback was incomplete",
+      );
+    }
+  }
+
+  let cleanupError = unlinkIfPresent(stagedManifestPath);
+  const tokenCleanupError = unlinkIfPresent(stagedTokenPath);
+  cleanupError ??= tokenCleanupError;
+  try {
+    rmdirSync(stagingDirectory);
+  } catch (error) {
+    cleanupError ??= error;
+  }
+  if (operationError) throw operationError;
+  if (cleanupError) throw cleanupError;
   return { manifestPath, tokenPath };
 }
 

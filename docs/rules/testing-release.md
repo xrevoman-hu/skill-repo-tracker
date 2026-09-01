@@ -40,12 +40,14 @@
 
 ```bash
 npm run release:verify -- --lane adhoc --version X.Y.Z --phase local
-set +x
-RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_X.Y.Z_aarch64.release.token")"
-npm run --silent release:verify -- \
-  --lane adhoc --version X.Y.Z --phase remote \
-  --manifest-token "$RELEASE_MANIFEST_TOKEN"
-unset RELEASE_MANIFEST_TOKEN
+(
+  set -euo pipefail
+  set +x
+  RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_X.Y.Z_aarch64.release.token")"
+  npm run --silent release:verify -- \
+    --lane adhoc --version X.Y.Z --phase remote \
+    --manifest-token "$RELEASE_MANIFEST_TOKEN"
+)
 ```
 
 本地 phase 会先跑全部门禁和性能测试，再构建 `.app`/DMG。ad-hoc 顺序固定为：完整
