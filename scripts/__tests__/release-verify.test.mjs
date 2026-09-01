@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
-  chmodSync,
-  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -14,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -44,6 +43,10 @@ function withTemporaryDirectory(callback) {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+function releaseGenerationId(manifest) {
+  return createHash("sha256").update(encodeReleaseManifest(manifest)).digest("hex");
 }
 
 test("ad-hoc app signing preserves hardened runtime and the declared entitlements", () => {
@@ -205,7 +208,7 @@ test("local release handoff stores both manifest representations as 0600 files",
   });
 });
 
-test("local release handoff atomically replaces existing 0644 sidecars with 0600 files", () => {
+test("local release handoff publishes both files through one immutable generation directory", () => {
   withTemporaryDirectory((directory) => {
     const manifest = buildReleaseManifest({
       version: "1.2.2",
@@ -214,36 +217,23 @@ test("local release handoff atomically replaces existing 0644 sidecars with 0600
       bytes: 42,
       sha256: "b".repeat(64),
     });
-    const manifestPath = join(
-      directory,
-      "Skill Repo Tracker_1.2.2_aarch64.release.json",
-    );
-    const tokenPath = join(
-      directory,
-      "Skill Repo Tracker_1.2.2_aarch64.release.token",
-    );
-    writeFileSync(manifestPath, "stale manifest\n");
-    writeFileSync(tokenPath, "stale token\n");
-    chmodSync(manifestPath, 0o644);
-    chmodSync(tokenPath, 0o644);
-    const manifestBefore = statSync(manifestPath);
-    const tokenBefore = statSync(tokenPath);
-
     const handoff = writeReleaseHandoffFiles({ directory, manifest });
 
-    const manifestAfter = statSync(handoff.manifestPath);
-    const tokenAfter = statSync(handoff.tokenPath);
-    assert.notDeepEqual(
-      [manifestAfter.dev, manifestAfter.ino],
-      [manifestBefore.dev, manifestBefore.ino],
+    const generationDirectory = dirname(handoff.manifestPath);
+    assert.equal(dirname(handoff.tokenPath), generationDirectory);
+    assert.notEqual(generationDirectory, directory);
+    assert.equal(
+      basename(generationDirectory),
+      `Skill Repo Tracker_1.2.2_aarch64.release-${releaseGenerationId(manifest)}`,
     );
-    assert.notDeepEqual([tokenAfter.dev, tokenAfter.ino], [tokenBefore.dev, tokenBefore.ino]);
-    assert.equal(manifestAfter.mode & 0o777, 0o600);
-    assert.equal(tokenAfter.mode & 0o777, 0o600);
+    assert.equal(basename(handoff.manifestPath), "manifest.json");
+    assert.equal(basename(handoff.tokenPath), "manifest.token");
+    assert.equal(lstatSync(generationDirectory).mode & 0o777, 0o700);
+    assert.deepEqual(readdirSync(generationDirectory).sort(), ["manifest.json", "manifest.token"]);
   });
 });
 
-test("local release handoff replaces final symlinks without modifying their targets", () => {
+test("local release handoff reuses only an exact immutable generation", () => {
   withTemporaryDirectory((directory) => {
     const manifest = buildReleaseManifest({
       version: "1.2.2",
@@ -252,33 +242,24 @@ test("local release handoff replaces final symlinks without modifying their targ
       bytes: 42,
       sha256: "b".repeat(64),
     });
-    const manifestPath = join(
-      directory,
-      "Skill Repo Tracker_1.2.2_aarch64.release.json",
-    );
-    const tokenPath = join(
-      directory,
-      "Skill Repo Tracker_1.2.2_aarch64.release.token",
-    );
-    const manifestTarget = join(directory, "manifest-target.txt");
-    const tokenTarget = join(directory, "token-target.txt");
-    writeFileSync(manifestTarget, "manifest target must remain unchanged\n");
-    writeFileSync(tokenTarget, "token target must remain unchanged\n");
-    symlinkSync(manifestTarget, manifestPath);
-    symlinkSync(tokenTarget, tokenPath);
+    const first = writeReleaseHandoffFiles({ directory, manifest });
+    const firstManifest = statSync(first.manifestPath);
+    const firstToken = statSync(first.tokenPath);
+    const second = writeReleaseHandoffFiles({ directory, manifest });
 
-    const handoff = writeReleaseHandoffFiles({ directory, manifest });
-
-    assert.equal(readFileSync(manifestTarget, "utf8"), "manifest target must remain unchanged\n");
-    assert.equal(readFileSync(tokenTarget, "utf8"), "token target must remain unchanged\n");
-    assert.equal(lstatSync(handoff.manifestPath).isSymbolicLink(), false);
-    assert.equal(lstatSync(handoff.manifestPath).isFile(), true);
-    assert.equal(lstatSync(handoff.tokenPath).isSymbolicLink(), false);
-    assert.equal(lstatSync(handoff.tokenPath).isFile(), true);
+    assert.deepEqual(second, first);
+    assert.deepEqual(
+      [statSync(second.manifestPath).dev, statSync(second.manifestPath).ino],
+      [firstManifest.dev, firstManifest.ino],
+    );
+    assert.deepEqual(
+      [statSync(second.tokenPath).dev, statSync(second.tokenPath).ino],
+      [firstToken.dev, firstToken.ino],
+    );
   });
 });
 
-test("local release handoff removes its new token and private staging directory if manifest commit fails", () => {
+test("local release handoff rejects a non-private pre-existing generation without mutation", () => {
   withTemporaryDirectory((directory) => {
     const manifest = buildReleaseManifest({
       version: "1.2.2",
@@ -287,21 +268,51 @@ test("local release handoff removes its new token and private staging directory 
       bytes: 42,
       sha256: "b".repeat(64),
     });
-    const manifestPath = join(
+    const generationDirectory = join(
       directory,
-      "Skill Repo Tracker_1.2.2_aarch64.release.json",
+      `Skill Repo Tracker_1.2.2_aarch64.release-${releaseGenerationId(manifest)}`,
     );
-    const tokenPath = join(
-      directory,
-      "Skill Repo Tracker_1.2.2_aarch64.release.token",
-    );
-    mkdirSync(manifestPath);
-    writeFileSync(tokenPath, "stale token\n");
+    mkdirSync(generationDirectory, { mode: 0o700 });
+    const manifestPath = join(generationDirectory, "manifest.json");
+    const tokenPath = join(generationDirectory, "manifest.token");
+    writeFileSync(manifestPath, "stale manifest\n", { mode: 0o644 });
+    writeFileSync(tokenPath, "stale token\n", { mode: 0o644 });
 
     assert.throws(() => writeReleaseHandoffFiles({ directory, manifest }));
 
-    assert.equal(existsSync(tokenPath), false);
-    assert.equal(lstatSync(manifestPath).isDirectory(), true);
+    assert.equal(readFileSync(manifestPath, "utf8"), "stale manifest\n");
+    assert.equal(readFileSync(tokenPath, "utf8"), "stale token\n");
+    assert.deepEqual(
+      readdirSync(directory).filter((entry) => entry.startsWith(".srt-release-handoff-")),
+      [],
+    );
+  });
+});
+
+test("local release handoff rejects a symlink generation without touching its target", () => {
+  withTemporaryDirectory((directory) => {
+    const manifest = buildReleaseManifest({
+      version: "1.2.2",
+      commit: "a".repeat(40),
+      artifact: "Skill Repo Tracker_1.2.2_aarch64.dmg",
+      bytes: 42,
+      sha256: "b".repeat(64),
+    });
+    const targetDirectory = join(directory, "untrusted-target");
+    mkdirSync(targetDirectory, { mode: 0o700 });
+    const generationDirectory = join(
+      directory,
+      `Skill Repo Tracker_1.2.2_aarch64.release-${releaseGenerationId(manifest)}`,
+    );
+    symlinkSync(targetDirectory, generationDirectory);
+
+    assert.throws(
+      () => writeReleaseHandoffFiles({ directory, manifest }),
+      /private directory/,
+    );
+
+    assert.deepEqual(readdirSync(targetDirectory), []);
+    assert.ok(lstatSync(generationDirectory).isSymbolicLink());
     assert.deepEqual(
       readdirSync(directory).filter((entry) => entry.startsWith(".srt-release-handoff-")),
       [],
@@ -312,8 +323,8 @@ test("local release handoff removes its new token and private staging directory 
 test("local release summary exposes only the private token file path", () => {
   const lines = buildLocalReleaseSummary({
     dmgPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.dmg",
-    manifestPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.release.json",
-    tokenPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.release.token",
+    manifestPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.release-id/manifest.json",
+    tokenPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.release-id/manifest.token",
     bytes: 42,
     sha256: "b".repeat(64),
     commit: "a".repeat(40),
@@ -322,8 +333,8 @@ test("local release summary exposes only the private token file path", () => {
   assert.deepEqual(lines, [
     "PASS release local artifact",
     "path=/tmp/Skill Repo Tracker_1.2.2_aarch64.dmg",
-    "manifest=/tmp/Skill Repo Tracker_1.2.2_aarch64.release.json",
-    "manifestTokenFile=/tmp/Skill Repo Tracker_1.2.2_aarch64.release.token",
+    "manifest=/tmp/Skill Repo Tracker_1.2.2_aarch64.release-id/manifest.json",
+    "manifestTokenFile=/tmp/Skill Repo Tracker_1.2.2_aarch64.release-id/manifest.token",
     "bytes=42",
     `sha256=${"b".repeat(64)}`,
     `commit=${"a".repeat(40)}`,

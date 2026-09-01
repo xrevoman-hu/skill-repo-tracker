@@ -30,16 +30,19 @@ npm run release:verify -- --lane adhoc --version X.Y.Z --phase local
 6. 删除签名前的旧 DMG，并从已签名 App 重新封装；
 7. 签名并校验最终 DMG；
 8. `hdiutil verify`、只读挂载、挂载内 App 签名/版本/arm64 校验；
-9. 输出 bytes、SHA-256、当前 commit，以及 DMG 旁两个权限均为 `0600` 的交接文件路径：
-   `Skill Repo Tracker_X.Y.Z_aarch64.release.json` 和
-   `Skill Repo Tracker_X.Y.Z_aarch64.release.token`。终端只显示 token 文件路径，不显示
-   token 内容。token 是承载 version/commit/name/bytes/SHA 字段的 unsigned artifact-field
-   carrier，只防止逐字段混用；它不是凭据，也不能作为 local gate provenance 或生成者
-   身份证明。
+9. 输出 bytes、SHA-256、当前 commit，并在 DMG 旁通过单次目录 rename 原子发布不可变的
+   `Skill Repo Tracker_X.Y.Z_aarch64.release-<MANIFEST-ID>/` generation 目录。该目录权限为
+   `0700`，只包含权限均为 `0600` 的 `manifest.json` 与 `manifest.token`。终端只显示
+   文件路径，不显示 token 内容。token 是承载 version/commit/name/bytes/SHA 字段的
+   unsigned artifact-field carrier，只防止逐字段混用；它不是凭据，也不能作为 local gate
+   provenance 或生成者身份证明。若同名 generation 已存在但内容或权限不完全一致，必须
+   fail closed，不得原地改写。
 
-`.release.token` 不得上传为 Release 资产、写入 Release notes 或复制到终端/CI 日志。
+generation 目录、`manifest.json` 和 `manifest.token` 均不得上传为 Release 资产、写入
+Release notes 或复制到终端/CI 日志。
 GitHub 上的 local gate 只在临时 runner 内验证本次构建，不导出 token artifact；正式发布与
-remote phase 仍使用操作者在最终干净 `main` 上本地生成的 `0600` 交接文件。
+remote phase 仍使用操作者在最终干净 `main` 上本地生成的不可变 `0700` generation 目录
+及其中的 `0600` 交接文件。
 
 “签名 loose App 后直接签旧 DMG”不是有效流程，因为旧 DMG 内仍是签名前的 App。
 
@@ -58,7 +61,8 @@ Release notes 必须中英文说明 ad-hoc 边界与首次打开方法。公开�
 
 ## 3. 远端实物门
 
-发布动作返回明确结果后，从 local phase 输出的 `0600` `.release.token` 文件读取单一
+发布动作返回明确结果后，从 local phase 输出的不可变 generation 目录内 `0600`
+`manifest.token` 文件读取单一
 manifest token，作为不可省略的字段载体传给 remote phase；不要拆开复制 commit/SHA，
 以免混用不同构建。把读取和验证隔离在 fail-closed 子 shell 中，关闭 shell xtrace，并使用
 `--silent` 避免 npm 把调用命令写入日志；子 shell 退出时变量自动消失，同时保留 verifier
@@ -68,7 +72,7 @@ manifest token，作为不可省略的字段载体传给 remote phase；不要�
 (
   set -euo pipefail
   set +x
-  RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_X.Y.Z_aarch64.release.token")"
+  RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_X.Y.Z_aarch64.release-<MANIFEST-ID>/manifest.token")"
   npm run --silent release:verify -- \
     --lane adhoc --version X.Y.Z --phase remote \
     --manifest-token "$RELEASE_MANIFEST_TOKEN"
