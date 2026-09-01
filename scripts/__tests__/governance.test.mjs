@@ -129,6 +129,15 @@ test("release workflow is manual, read-only, approved, and runs on Apple Silicon
     new URL("../../.github/workflows/release-gate.yml", import.meta.url),
     "utf8",
   );
+  assert.doesNotMatch(valid, /RELEASE_MANIFEST:\s*\$\{\{\s*inputs\.releaseManifest\s*\}\}/);
+  assert.match(valid, /GITHUB_EVENT_PATH/);
+  assert.match(valid, /::add-mask::/);
+  assert.match(valid, /umask 077/);
+  assert.match(valid, /chmod 600/);
+  assert.doesNotMatch(valid, /name: Prepare and mask release manifest/);
+  assert.doesNotMatch(valid, /RELEASE_MANIFEST_FILE|GITHUB_ENV/);
+  assert.match(valid, /trap 'rm -f "\$manifest_file"' EXIT/);
+  assert.match(valid, /npm run --silent release:verify/);
   assert.deepEqual(validateReleaseWorkflowPolicy(valid), []);
 
   const unsafe = valid
@@ -144,24 +153,31 @@ test("release workflow is manual, read-only, approved, and runs on Apple Silicon
 
   for (const mutation of [
     valid.replace(
-      "        run: npm run release:verify",
-      "        continue-on-error: true\n        run: npm run release:verify",
+      "      - name: Run the explicit release verification lane\n        run: |",
+      "      - name: Run the explicit release verification lane\n        continue-on-error: true\n        run: |",
     ),
     valid.replace(
-      "        run: npm run release:verify",
-      "        if: always()\n        run: npm run release:verify",
+      "      - name: Run the explicit release verification lane\n        run: |",
+      "      - name: Run the explicit release verification lane\n        if: always()\n        run: |",
     ),
     valid.replace(
-      "        run: npm run release:verify",
-      "        shell: bash\n        run: npm run release:verify",
+      "      - name: Run the explicit release verification lane\n        run: |",
+      "      - name: Run the explicit release verification lane\n        shell: bash\n        run: |",
     ),
     valid.replace("    runs-on: macos-15", "    if: always()\n    runs-on: macos-15"),
     valid.replace(
       "    runs-on: macos-15",
       "    continue-on-error: true\n    runs-on: macos-15",
     ),
-    `${valid}\n      - run: npm run release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$RELEASE_MANIFEST"\n`,
-    valid.replace('"$RELEASE_MANIFEST"', '"$RELEASE_MANIFEST" || true'),
+    valid.replace(
+      '          npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"',
+      '          npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"\n      - run: npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"',
+    ),
+    valid.replace(
+      '          npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"',
+      '          npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token" || true',
+    ),
+    valid.replace("npm run --silent release:verify", "npm run release:verify"),
   ]) {
     assert.ok(
       validateReleaseWorkflowPolicy(mutation).some((error) =>
@@ -179,12 +195,35 @@ test("release workflow is manual, read-only, approved, and runs on Apple Silicon
       "      - name: Run the explicit release verification lane",
       "      - name: Rewrite the verifier command\n        run: npm pkg set scripts.release:verify=true\n      - name: Run the explicit release verification lane",
     ),
+    valid.replace("          printf '::add-mask::%s\\n' \"$manifest_token\"\n", ""),
+    valid.replace("          trap 'rm -f \"$manifest_file\"' EXIT\n", ""),
+    valid.replace("          umask 077\n", ""),
+    valid.replace("          chmod 600 \"$manifest_file\"", "          chmod 644 \"$manifest_file\""),
+    valid.replace(
+      "      RELEASE_PHASE: ${{ inputs.phase }}",
+      "      RELEASE_PHASE: ${{ inputs.phase }}\n      RELEASE_MANIFEST: ${{ inputs.releaseManifest }}",
+    ),
   ]) {
     assert.ok(
       validateReleaseWorkflowPolicy(mutation).some((error) =>
         error.includes("release workflow must match the complete fail-closed template"),
       ),
     );
+  }
+});
+
+test("documented remote release commands preserve verifier failures and scope the token", () => {
+  for (const path of [
+    "../../README.md",
+    "../../docs/macos-release-checklist.md",
+    "../../docs/rules/testing-release.md",
+  ]) {
+    const contents = readFileSync(new URL(path, import.meta.url), "utf8");
+    const remoteCommands = contents.match(
+      /\(\n\s+set -euo pipefail\n\s+set \+x\n\s+RELEASE_MANIFEST_TOKEN=.*?\n\s+npm run --silent release:verify -- \\\n(?:.*\n){1,3}?\s+--manifest-token "\$RELEASE_MANIFEST_TOKEN"\n\)/g,
+    );
+    assert.ok(remoteCommands?.length, `${path} must use a fail-closed token subshell`);
+    assert.doesNotMatch(contents, /unset RELEASE_MANIFEST_TOKEN/);
   }
 });
 

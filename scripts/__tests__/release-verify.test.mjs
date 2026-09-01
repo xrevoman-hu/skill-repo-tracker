@@ -1,12 +1,26 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
   assertDmgSourceLayout,
   buildAppCodesignArguments,
+  buildLocalReleaseSummary,
   buildReleaseManifest,
   buildRemoteFetchArguments,
   decodeReleaseManifestToken,
@@ -19,6 +33,7 @@ import {
   validateReleaseHost,
   validateMountedDmgLayout,
   withCleanWorktreeBoundary,
+  writeReleaseHandoffFiles,
 } from "../release-verify.mjs";
 
 function withTemporaryDirectory(callback) {
@@ -28,6 +43,10 @@ function withTemporaryDirectory(callback) {
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+}
+
+function releaseGenerationId(manifest) {
+  return createHash("sha256").update(encodeReleaseManifest(manifest)).digest("hex");
 }
 
 test("ad-hoc app signing preserves hardened runtime and the declared entitlements", () => {
@@ -165,6 +184,184 @@ test("operator-carried manifest and remote digest form one artifact identity cha
     () => validateRemoteBytes({ expectedBytes: 42, serverBytes: 42, downloadedBytes: 43 }),
     /downloaded asset bytes 43 do not match the operator-provided manifest bytes 42/,
   );
+});
+
+test("local release handoff stores both manifest representations as 0600 files", () => {
+  withTemporaryDirectory((directory) => {
+    const manifest = buildReleaseManifest({
+      version: "1.2.2",
+      commit: "a".repeat(40),
+      artifact: "Skill Repo Tracker_1.2.2_aarch64.dmg",
+      bytes: 42,
+      sha256: "b".repeat(64),
+    });
+
+    const handoff = writeReleaseHandoffFiles({ directory, manifest });
+
+    assert.equal(statSync(handoff.manifestPath).mode & 0o777, 0o600);
+    assert.equal(statSync(handoff.tokenPath).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(readFileSync(handoff.manifestPath, "utf8")), manifest);
+    assert.deepEqual(
+      decodeReleaseManifestToken(readFileSync(handoff.tokenPath, "utf8").trim(), "1.2.2"),
+      manifest,
+    );
+  });
+});
+
+test("local release handoff publishes both files through one immutable generation directory", () => {
+  withTemporaryDirectory((directory) => {
+    const manifest = buildReleaseManifest({
+      version: "1.2.2",
+      commit: "a".repeat(40),
+      artifact: "Skill Repo Tracker_1.2.2_aarch64.dmg",
+      bytes: 42,
+      sha256: "b".repeat(64),
+    });
+    const handoff = writeReleaseHandoffFiles({ directory, manifest });
+
+    const generationDirectory = dirname(handoff.manifestPath);
+    assert.equal(dirname(handoff.tokenPath), generationDirectory);
+    assert.notEqual(generationDirectory, directory);
+    assert.equal(
+      basename(generationDirectory),
+      `Skill Repo Tracker_1.2.2_aarch64.release-${releaseGenerationId(manifest)}`,
+    );
+    assert.equal(basename(handoff.manifestPath), "manifest.json");
+    assert.equal(basename(handoff.tokenPath), "manifest.token");
+    assert.equal(lstatSync(generationDirectory).mode & 0o777, 0o700);
+    assert.deepEqual(readdirSync(generationDirectory).sort(), ["manifest.json", "manifest.token"]);
+  });
+});
+
+test("local release handoff reuses only an exact immutable generation", () => {
+  withTemporaryDirectory((directory) => {
+    const manifest = buildReleaseManifest({
+      version: "1.2.2",
+      commit: "a".repeat(40),
+      artifact: "Skill Repo Tracker_1.2.2_aarch64.dmg",
+      bytes: 42,
+      sha256: "b".repeat(64),
+    });
+    const first = writeReleaseHandoffFiles({ directory, manifest });
+    const firstManifest = statSync(first.manifestPath);
+    const firstToken = statSync(first.tokenPath);
+    const second = writeReleaseHandoffFiles({ directory, manifest });
+
+    assert.deepEqual(second, first);
+    assert.deepEqual(
+      [statSync(second.manifestPath).dev, statSync(second.manifestPath).ino],
+      [firstManifest.dev, firstManifest.ino],
+    );
+    assert.deepEqual(
+      [statSync(second.tokenPath).dev, statSync(second.tokenPath).ino],
+      [firstToken.dev, firstToken.ino],
+    );
+  });
+});
+
+test("local release handoff rejects a non-private pre-existing generation without mutation", () => {
+  withTemporaryDirectory((directory) => {
+    const manifest = buildReleaseManifest({
+      version: "1.2.2",
+      commit: "a".repeat(40),
+      artifact: "Skill Repo Tracker_1.2.2_aarch64.dmg",
+      bytes: 42,
+      sha256: "b".repeat(64),
+    });
+    const generationDirectory = join(
+      directory,
+      `Skill Repo Tracker_1.2.2_aarch64.release-${releaseGenerationId(manifest)}`,
+    );
+    mkdirSync(generationDirectory, { mode: 0o700 });
+    const manifestPath = join(generationDirectory, "manifest.json");
+    const tokenPath = join(generationDirectory, "manifest.token");
+    writeFileSync(manifestPath, "stale manifest\n", { mode: 0o644 });
+    writeFileSync(tokenPath, "stale token\n", { mode: 0o644 });
+
+    assert.throws(() => writeReleaseHandoffFiles({ directory, manifest }));
+
+    assert.equal(readFileSync(manifestPath, "utf8"), "stale manifest\n");
+    assert.equal(readFileSync(tokenPath, "utf8"), "stale token\n");
+    assert.deepEqual(
+      readdirSync(directory).filter((entry) => entry.startsWith(".srt-release-handoff-")),
+      [],
+    );
+  });
+});
+
+test("local release handoff rejects a symlink generation without touching its target", () => {
+  withTemporaryDirectory((directory) => {
+    const manifest = buildReleaseManifest({
+      version: "1.2.2",
+      commit: "a".repeat(40),
+      artifact: "Skill Repo Tracker_1.2.2_aarch64.dmg",
+      bytes: 42,
+      sha256: "b".repeat(64),
+    });
+    const targetDirectory = join(directory, "untrusted-target");
+    mkdirSync(targetDirectory, { mode: 0o700 });
+    const generationDirectory = join(
+      directory,
+      `Skill Repo Tracker_1.2.2_aarch64.release-${releaseGenerationId(manifest)}`,
+    );
+    symlinkSync(targetDirectory, generationDirectory);
+
+    assert.throws(
+      () => writeReleaseHandoffFiles({ directory, manifest }),
+      /private directory/,
+    );
+
+    assert.deepEqual(readdirSync(targetDirectory), []);
+    assert.ok(lstatSync(generationDirectory).isSymbolicLink());
+    assert.deepEqual(
+      readdirSync(directory).filter((entry) => entry.startsWith(".srt-release-handoff-")),
+      [],
+    );
+  });
+});
+
+test("local release summary exposes only the private token file path", () => {
+  const lines = buildLocalReleaseSummary({
+    dmgPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.dmg",
+    manifestPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.release-id/manifest.json",
+    tokenPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.release-id/manifest.token",
+    bytes: 42,
+    sha256: "b".repeat(64),
+    commit: "a".repeat(40),
+  });
+
+  assert.deepEqual(lines, [
+    "PASS release local artifact",
+    "path=/tmp/Skill Repo Tracker_1.2.2_aarch64.dmg",
+    "manifest=/tmp/Skill Repo Tracker_1.2.2_aarch64.release-id/manifest.json",
+    "manifestTokenFile=/tmp/Skill Repo Tracker_1.2.2_aarch64.release-id/manifest.token",
+    "bytes=42",
+    `sha256=${"b".repeat(64)}`,
+    `commit=${"a".repeat(40)}`,
+  ]);
+  assert.ok(lines.every((line) => !line.startsWith("manifestToken=")));
+});
+
+test("top-level release errors never echo an operator-carried manifest token", () => {
+  const token = Buffer.from("SRT_RELEASE_TOKEN_SENTINEL", "utf8").toString("base64url");
+  const result = spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("../release-verify.mjs", import.meta.url)),
+      "--lane",
+      "adhoc",
+      "--version",
+      "1.2.2",
+      "--phase",
+      "remote",
+      "--manifest-token",
+      token,
+    ],
+    { encoding: "utf8" },
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(token));
 });
 
 test("remote verification accepts exactly one public DMG asset", () => {

@@ -1365,8 +1365,36 @@ export function validateWeeklyResilienceWorkflowPolicy(contents) {
 }
 
 export function validateReleaseWorkflowPolicy(contents) {
-  const exactVerifierCommand =
-    'npm run release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$RELEASE_MANIFEST"';
+  const exactVerifierCommand = `set -euo pipefail
+manifest_file="$RUNNER_TEMP/srt-release-manifest.token"
+trap 'rm -f "$manifest_file"' EXIT
+manifest_token="$(
+  node -e '
+    const { readFileSync } = require("node:fs");
+    const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, "utf8"));
+    const token = event.inputs?.releaseManifest;
+    if (token != null && typeof token !== "string") process.exit(2);
+    process.stdout.write(token ?? "");
+  '
+)"
+if [[ "$RELEASE_PHASE" == "local" ]]; then
+  if [[ -n "$manifest_token" ]]; then
+    echo "releaseManifest must be empty for local verification" >&2
+    exit 1
+  fi
+elif [[ ! "$manifest_token" =~ ^[A-Za-z0-9_-]+$ ]]; then
+  echo "releaseManifest is required and must be base64url for remote verification" >&2
+  exit 1
+fi
+if [[ -n "$manifest_token" ]]; then
+  printf '::add-mask::%s\\n' "$manifest_token"
+fi
+umask 077
+printf '%s\\n' "$manifest_token" > "$manifest_file"
+chmod 600 "$manifest_file"
+manifest_token="$(<"$manifest_file")"
+npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"
+`;
   let workflow;
   try {
     workflow = parseYaml(contents, { maxAliasCount: 100, uniqueKeys: true });
@@ -1416,7 +1444,6 @@ export function validateReleaseWorkflowPolicy(contents) {
           GH_TOKEN: "${{ github.token }}",
           RELEASE_VERSION: "${{ inputs.version }}",
           RELEASE_PHASE: "${{ inputs.phase }}",
-          RELEASE_MANIFEST: "${{ inputs.releaseManifest }}",
         },
         steps: [
           {
@@ -1511,7 +1538,9 @@ export function validateReleaseWorkflowPolicy(contents) {
       }
     }
     if (typeof step?.run === "string") {
-      if (/\bnpm\s+run\s+release:verify\b/.test(step.run)) verifierSteps.push(step);
+      if (/\bnpm\s+run(?:\s+--silent)?\s+release:verify\b/.test(step.run)) {
+        verifierSteps.push(step);
+      }
       if (
         /\bgit\s+push\b|\bgh\s+release\b|\b(?:npm|cargo)\s+publish\b|\bgh\s+api\b[^\n]*(?:--method|-X)\s+(?:POST|PUT|PATCH|DELETE)\b/i.test(
           step.run,
@@ -1529,7 +1558,7 @@ export function validateReleaseWorkflowPolicy(contents) {
     );
   if (
     verifierSteps.length !== 1 ||
-    verifierStep.run.trim() !== exactVerifierCommand ||
+    verifierStep.run.trim() !== exactVerifierCommand.trim() ||
     verifierStepCanAlterFailure ||
     jobCanAlterVerifierFailure
   ) {

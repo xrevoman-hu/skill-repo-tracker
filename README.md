@@ -154,15 +154,29 @@ Cargo fmt、Clippy `-D warnings`、Rust tests 和 Git diff 检查。`CI / verify
 npm run release:verify -- --lane adhoc --version 1.2.3 --phase local
 ```
 
-local phase 会在 DMG 旁生成受限权限交接清单，并输出一个单一、无签名的
-`manifestToken`（把操作者交接的 version、完整 commit、文件名、bytes 与 SHA-256 放在
-同一载体中）。发布后执行 remote phase 时必须传入这个 token；远端 main/tag commit
-必须等于 manifest 中的 commit，下载文件和 GitHub digest/size 也必须与 manifest 一致。
-该 token 用来避免逐字段混用，不证明 local gate 已执行，也不证明是谁生成了 token：
+local phase 会在 DMG 旁原子发布一个不可变、权限为 `0700` 的 generation 目录
+`Skill Repo Tracker_1.2.3_aarch64.release-<MANIFEST-ID>/`，其中只包含权限均为 `0600`
+的 `manifest.json` 与 `manifest.token`。命令只输出文件路径，不显示 token 内容。这个
+unsigned artifact-field carrier 把操作者交接的 version、完整 commit、文件名、bytes 与
+SHA-256 放在同一载体中；它不是凭据，也不证明 local gate 已执行或是谁生成。整个 generation
+目录及其文件都不得上传为 Release 资产、写入 Release notes 或复制到日志。发布后从该目录的
+token 文件读取并执行 remote phase；远端 main/tag commit 必须等于 manifest 中的 commit，
+下载文件和 GitHub digest/size 也必须与 manifest 一致：
 
 ```bash
-npm run release:verify -- --lane adhoc --version 1.2.3 --phase remote --manifest-token <LOCAL_MANIFEST_TOKEN>
+(
+  set -euo pipefail
+  set +x
+  RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_1.2.3_aarch64.release-<MANIFEST-ID>/manifest.token")"
+  npm run --silent release:verify -- \
+    --lane adhoc --version 1.2.3 --phase remote \
+    --manifest-token "$RELEASE_MANIFEST_TOKEN"
+)
 ```
+
+GitHub 的 local gate 只在临时 runner 内验证构建，不导出 token artifact；正式发布交接使用
+最终干净 `main` 上本地 local phase 生成的不可变 `0700` generation 目录及其中的 `0600`
+文件。
 
 这种包可以挂载、复制到 `/Applications` 并本机验证，但不是 Apple notarized 公开安装包。首次打开时，macOS 可能提示无法验证开发者；测试用户需要右键打开，或在“系统设置 -> 隐私与安全性”里选择“仍要打开”。安装测试包时请注意：
 
@@ -257,15 +271,31 @@ Never reuse a DMG created before the app was re-signed.
 npm run release:verify -- --lane adhoc --version 1.2.3 --phase local
 ```
 
-The local phase writes a sidecar release manifest and prints one unsigned `manifestToken`
-that carries the operator-provided version, full commit, file name, bytes, and SHA-256 in
-one field. The remote phase requires that token and verifies the release refs, downloaded
-asset, and GitHub digest/size against those manifest fields. The token prevents accidental
-field mixing; it does not prove that the local gate ran or who generated the token:
+The local phase atomically publishes an immutable generation directory beside the DMG,
+`Skill Repo Tracker_1.2.3_aarch64.release-<MANIFEST-ID>/`, with mode `0700`. Its only entries
+are `manifest.json` and `manifest.token`, both with mode `0600`. The command prints only their
+paths, never the token contents. This unsigned artifact-field carrier keeps the
+operator-provided version, full commit, file name, bytes, and SHA-256 together. It is neither
+a credential nor proof that the local gate ran or who generated it. Do not upload the
+generation directory or its files as Release assets, put them in release notes, or copy them
+into logs. After publishing, read the token from that directory for the remote phase, which
+verifies the release refs, downloaded asset, and GitHub digest/size against those manifest
+fields:
 
 ```bash
-npm run release:verify -- --lane adhoc --version 1.2.3 --phase remote --manifest-token <LOCAL_MANIFEST_TOKEN>
+(
+  set -euo pipefail
+  set +x
+  RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_1.2.3_aarch64.release-<MANIFEST-ID>/manifest.token")"
+  npm run --silent release:verify -- \
+    --lane adhoc --version 1.2.3 --phase remote \
+    --manifest-token "$RELEASE_MANIFEST_TOKEN"
+)
 ```
+
+The GitHub local gate validates its build only on the ephemeral runner and does not export a
+token artifact. The operator handoff uses the immutable `0700` generation directory and its
+`0600` files created by the local phase on the final clean `main` commit.
 
 This is suitable for GitHub Release test assets that users manually allow through Gatekeeper. It is not an Apple-notarized public installer. A no-warning public DMG still requires Developer ID signing and notarization.
 
