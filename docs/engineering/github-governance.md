@@ -11,6 +11,8 @@
    default branch。
 2. 启用 Require a pull request before merging；单维护者阶段 required approvals 设为 0。
 3. 启用 Require status checks，并选择 `CI / verify`、`CI / coverage`、`CI / msrv`。
+   GitHub Rulesets REST payload 中对应的 Check Run context 分别是 `verify`、`coverage`、
+   `msrv`；`CI / ...` 是界面显示标签，不能写进 API 的 `context` 字段。
 4. 启用 Require branches to be up to date before merging。
 5. 阻止 force push 和 branch deletion；确认 ruleset API 中 `bypass_actors` 字段存在且为
    空数组，不允许任何 bypass actor。

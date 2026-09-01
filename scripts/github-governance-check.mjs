@@ -5,7 +5,11 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const REQUIRED_CHECKS = ["CI / verify", "CI / coverage", "CI / msrv"];
+const REQUIRED_CHECKS = [
+  { context: "verify", label: "CI / verify" },
+  { context: "coverage", label: "CI / coverage" },
+  { context: "msrv", label: "CI / msrv" },
+];
 const REQUIRED_WORKFLOWS = [
   ["CI", ".github/workflows/ci.yml"],
   ["Release gate", ".github/workflows/release-gate.yml"],
@@ -51,7 +55,9 @@ export function evaluateGitHubGovernance({
       statusRule?.parameters?.required_status_checks?.map((check) => check.context) ?? [],
     );
     for (const check of REQUIRED_CHECKS) {
-      if (!contexts.has(check)) errors.push(`main ruleset is missing required check: ${check}`);
+      if (!contexts.has(check.context)) {
+        errors.push(`main ruleset is missing required check: ${check.label}`);
+      }
     }
     if (!statusRule?.parameters?.strict_required_status_checks_policy) {
       errors.push("main ruleset does not require branches to be up to date");

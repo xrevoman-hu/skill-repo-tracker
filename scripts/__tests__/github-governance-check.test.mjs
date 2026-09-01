@@ -21,9 +21,9 @@ test("accepts an active main ruleset with every required protection", () => {
               parameters: {
                 strict_required_status_checks_policy: true,
                 required_status_checks: [
-                  { context: "CI / verify" },
-                  { context: "CI / coverage" },
-                  { context: "CI / msrv" },
+                  { context: "verify" },
+                  { context: "coverage" },
+                  { context: "msrv" },
                 ],
               },
             },
@@ -143,9 +143,9 @@ function passingState(overrides = {}) {
             parameters: {
               strict_required_status_checks_policy: true,
               required_status_checks: [
-                { context: "CI / verify" },
-                { context: "CI / coverage" },
-                { context: "CI / msrv" },
+                { context: "verify" },
+                { context: "coverage" },
+                { context: "msrv" },
               ],
             },
           },
@@ -210,6 +210,24 @@ test("main ruleset bypass actors must be explicitly present and empty", () => {
   configured.rulesets[0].bypass_actors = [{ actor_id: 1 }];
   assert.deepEqual(evaluateGitHubGovernance(configured), [
     "main ruleset has bypass actors; direct main changes are still possible",
+  ]);
+});
+
+test("required checks use Check Run contexts rather than workflow display labels", () => {
+  const state = passingState();
+  const statusRule = state.rulesets[0].rules.find(
+    (rule) => rule.type === "required_status_checks",
+  );
+  statusRule.parameters.required_status_checks = [
+    { context: "CI / verify" },
+    { context: "CI / coverage" },
+    { context: "CI / msrv" },
+  ];
+
+  assert.deepEqual(evaluateGitHubGovernance(state), [
+    "main ruleset is missing required check: CI / verify",
+    "main ruleset is missing required check: CI / coverage",
+    "main ruleset is missing required check: CI / msrv",
   ]);
 });
 
