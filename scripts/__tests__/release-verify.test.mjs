@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -47,6 +48,51 @@ function withTemporaryDirectory(callback) {
 
 function releaseGenerationId(manifest) {
   return createHash("sha256").update(encodeReleaseManifest(manifest)).digest("hex");
+}
+
+function isolatedGitEnvironment() {
+  const environment = {
+    ...process.env,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+  delete environment.GIT_CONFIG;
+  delete environment.GIT_CONFIG_COUNT;
+  delete environment.GIT_CONFIG_PARAMETERS;
+  for (const name of Object.keys(environment)) {
+    if (/^GIT_CONFIG_(?:KEY|VALUE)_\d+$/.test(name)) delete environment[name];
+  }
+  return environment;
+}
+
+function spawnGit(directory, args) {
+  return spawnSync(
+    "git",
+    [
+      "-c",
+      "commit.gpgSign=false",
+      "-c",
+      "tag.gpgSign=false",
+      "-c",
+      "core.hooksPath=/dev/null",
+      ...args,
+    ],
+    {
+      cwd: directory,
+      encoding: "utf8",
+      env: isolatedGitEnvironment(),
+    },
+  );
+}
+
+function runGit(directory, args) {
+  const result = spawnGit(directory, args);
+  assert.equal(
+    result.status,
+    0,
+    `git ${args.join(" ")} failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  );
+  return result.stdout.trim();
 }
 
 test("ad-hoc app signing preserves hardened runtime and the declared entitlements", () => {
@@ -435,11 +481,87 @@ test("release verifier requires a stable semver and phase", () => {
 test("remote verification fetches fresh main and tag into explicit destinations", () => {
   assert.deepEqual(buildRemoteFetchArguments("1.2.2"), [
     "fetch",
+    "--no-tags",
     "--prune",
     "origin",
     "+refs/heads/main:refs/remotes/origin/main",
-    "refs/tags/v1.2.2:refs/tags/v1.2.2",
+    "refs/tags/v1.2.2:refs/tags/_srt-release-remote/v1.2.2",
   ]);
+});
+
+test("remote verification isolates the authoritative annotated tag and rejects rewrites", (t) => {
+  withTemporaryDirectory((directory) => {
+    const remote = join(directory, "remote.git");
+    const publisher = join(directory, "publisher");
+    const verifier = join(directory, "verifier");
+    const hostileHooks = join(directory, "hostile-hooks");
+    const hostileGitConfig = join(directory, "hostile.gitconfig");
+    const version = "1.2.2";
+    const publicTag = `refs/tags/v${version}`;
+    const verifierTag = `refs/tags/_srt-release-remote/v${version}`;
+
+    mkdirSync(hostileHooks);
+    writeFileSync(join(hostileHooks, "pre-commit"), "#!/bin/sh\nexit 1\n");
+    chmodSync(join(hostileHooks, "pre-commit"), 0o755);
+    writeFileSync(
+      hostileGitConfig,
+      `[commit]\n\tgpgSign = true\n[tag]\n\tgpgSign = true\n[core]\n\thooksPath = ${hostileHooks}\n`,
+    );
+    const previousGlobalConfig = process.env.GIT_CONFIG_GLOBAL;
+    process.env.GIT_CONFIG_GLOBAL = hostileGitConfig;
+    t.after(() => {
+      if (previousGlobalConfig === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+      else process.env.GIT_CONFIG_GLOBAL = previousGlobalConfig;
+    });
+
+    runGit(directory, ["init", "--bare", remote]);
+    mkdirSync(publisher);
+    runGit(publisher, ["init"]);
+    runGit(publisher, ["config", "user.name", "Release Test"]);
+    runGit(publisher, ["config", "user.email", "release-test@example.invalid"]);
+    writeFileSync(join(publisher, "release.txt"), "release fixture\n");
+    runGit(publisher, ["add", "release.txt"]);
+    runGit(publisher, ["commit", "-m", "release fixture"]);
+    runGit(publisher, ["branch", "-M", "main"]);
+    const releaseCommit = runGit(publisher, ["rev-parse", "HEAD"]);
+    runGit(publisher, ["tag", "-a", `v${version}`, "-m", "original release tag"]);
+    runGit(publisher, ["remote", "add", "origin", remote]);
+    runGit(publisher, ["push", "origin", "main", publicTag]);
+
+    mkdirSync(verifier);
+    runGit(verifier, ["init"]);
+    runGit(verifier, ["remote", "add", "origin", remote]);
+    runGit(verifier, ["fetch", "--no-tags", "origin", "main"]);
+    runGit(verifier, ["checkout", "-b", "main", "FETCH_HEAD"]);
+    // Simulate actions/checkout replacing the annotated public tag with a
+    // lightweight tag at the checked-out commit.
+    runGit(verifier, ["tag", `v${version}`, releaseCommit]);
+    assert.equal(runGit(verifier, ["cat-file", "-t", publicTag]), "commit");
+
+    runGit(verifier, buildRemoteFetchArguments(version));
+
+    assert.equal(runGit(verifier, ["cat-file", "-t", publicTag]), "commit");
+    assert.equal(runGit(verifier, ["cat-file", "-t", verifierTag]), "tag");
+    assert.equal(runGit(verifier, ["rev-parse", `${verifierTag}^{commit}`]), releaseCommit);
+    const originalVerifierTagObject = runGit(verifier, ["rev-parse", verifierTag]);
+
+    runGit(publisher, [
+      "tag",
+      "-f",
+      "-a",
+      `v${version}`,
+      "-m",
+      "rewritten release tag object",
+      releaseCommit,
+    ]);
+    runGit(publisher, ["push", "--force", "origin", publicTag]);
+
+    const rejected = spawnGit(verifier, buildRemoteFetchArguments(version));
+    assert.notEqual(rejected.status, 0);
+    assert.match(`${rejected.stdout}${rejected.stderr}`, /would clobber existing tag|rejected/);
+    assert.equal(runGit(verifier, ["rev-parse", verifierTag]), originalVerifierTagObject);
+    assert.equal(runGit(verifier, ["cat-file", "-t", publicTag]), "commit");
+  });
 });
 
 test("local release verification accepts only Apple Silicon macOS hosts", () => {

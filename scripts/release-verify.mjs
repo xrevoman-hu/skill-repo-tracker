@@ -414,13 +414,18 @@ export function withCleanWorktreeBoundary(assertClean, buildManifestFields) {
   return buildManifestFields();
 }
 
+function verifierRemoteTagRef(version) {
+  return `refs/tags/_srt-release-remote/v${version}`;
+}
+
 export function buildRemoteFetchArguments(version) {
   return [
     "fetch",
+    "--no-tags",
     "--prune",
     "origin",
     "+refs/heads/main:refs/remotes/origin/main",
-    `refs/tags/v${version}:refs/tags/v${version}`,
+    `refs/tags/v${version}:${verifierRemoteTagRef(version)}`,
   ];
 }
 
@@ -690,18 +695,22 @@ function localPhase(version) {
 
 function remotePhase(version, manifest) {
   assertCleanWorktree();
-  // Refresh exactly the refs validated below. The tag refspec deliberately has
-  // no leading `+`: a moved/conflicting release tag must fail closed.
+  // Refresh exactly the refs validated below. Isolate the authoritative remote
+  // tag from actions/checkout's public local tag, while keeping the destination
+  // under refs/tags so an object rewrite is rejected without a leading `+`.
   run("git", buildRemoteFetchArguments(version));
   const head = run("git", ["rev-parse", "HEAD"], { capture: true }).trim();
   const remote = run("git", ["rev-parse", "origin/main"], { capture: true }).trim();
-  const tag = run("git", ["rev-list", "-n", "1", `v${version}`], { capture: true }).trim();
-  const tagType = run("git", ["cat-file", "-t", `v${version}`], { capture: true }).trim();
+  const remoteTag = verifierRemoteTagRef(version);
+  const tag = run("git", ["rev-parse", "--verify", `${remoteTag}^{commit}`], {
+    capture: true,
+  }).trim();
+  const tagType = run("git", ["cat-file", "-t", remoteTag], { capture: true }).trim();
   if (head !== remote || head !== tag) {
     throw new Error(`commit mismatch: HEAD=${head} origin/main=${remote} tag=${tag}`);
   }
   validateRemoteCommit({ expectedCommit: manifest.commit, releaseCommit: head });
-  if (tagType !== "tag") throw new Error(`v${version} is not an annotated tag`);
+  if (tagType !== "tag") throw new Error(`remote v${version} is not an annotated tag`);
 
   const release = JSON.parse(
     run(
