@@ -33,6 +33,7 @@ mod prompt_search;
 mod prompt_zip;
 mod prompts;
 mod settings_directories;
+mod skill_hash;
 #[cfg(test)]
 #[path = "startup_guard_tests.rs"]
 mod startup_guard_tests;
@@ -49,6 +50,7 @@ use plugins::{scan_plugins_from_directory, scan_plugins_from_zip, sync_plugins, 
 use settings_directories::{
     cleanup_created_settings_directories, create_settings_directory_tree, CreatedSettingsDirectory,
 };
+use skill_hash::{hash_directory, skill_hashes_from_zip};
 use temp_artifacts::{
     classify_sync_destination, cleanup_stale_temp_artifacts, unique_operation_id,
     validate_skill_directory_name, CleanupReport, CleanupRequest, FilesystemMutationLock,
@@ -1242,6 +1244,7 @@ struct SkillScan {
     path: String,
     version: String,
     content_hash: String,
+    legacy_content_hash: Option<String>,
     search_text: String,
 }
 
@@ -3552,13 +3555,14 @@ fn scan_skills_from_zip(bytes: &[u8], repo_name: &str) -> Result<Vec<SkillScan>,
         let description = extract_markdown_field(&contents, "description").unwrap_or_default();
         let version =
             extract_markdown_field(&contents, "version").unwrap_or_else(|| "v0.1.0".into());
-        let content_hash = hash_skill_from_zip(bytes, &skill_path)?;
+        let hashes = skill_hashes_from_zip(bytes, &skill_path)?;
         skills.push(SkillScan {
             name,
             description,
             path: skill_path,
             version,
-            content_hash,
+            content_hash: hashes.canonical,
+            legacy_content_hash: hashes.legacy,
             search_text: truncate_search_index(&contents),
         });
     }
@@ -3617,6 +3621,7 @@ fn scan_skills_from_directory(root: &Path, repo_name: &str) -> Result<Vec<SkillS
             path: skill_path,
             version,
             content_hash: hash_directory(skill_dir)?,
+            legacy_content_hash: None,
             search_text: truncate_search_index(&contents),
         });
     }
@@ -3805,6 +3810,7 @@ fn sync_skills(
     type ExistingSkillState = (
         i64,
         Option<String>,
+        Option<String>,
         String,
         Option<String>,
         Option<String>,
@@ -3815,9 +3821,10 @@ fn sync_skills(
     for scan in scans {
         let id = skill_id(repo_id, &scan.path);
         seen.push(id.clone());
-        let existing: Option<ExistingSkillState> = conn
+        let transaction = conn.unchecked_transaction()?;
+        let existing: Option<ExistingSkillState> = transaction
             .query_row(
-                "SELECT installed, installed_hash, status, local_version,
+                "SELECT installed, installed_hash, remote_hash, status, local_version,
                         handled_remote_sha, handled_remote_hash
                  FROM skills WHERE id = ?1",
                 params![id],
@@ -3829,6 +3836,7 @@ fn sync_skills(
                         row.get(3)?,
                         row.get(4)?,
                         row.get(5)?,
+                        row.get(6)?,
                     ))
                 },
             )
@@ -3836,14 +3844,25 @@ fn sync_skills(
         let (
             installed,
             installed_hash,
+            remote_hash,
             status,
             local_version,
             handled_remote_sha,
             handled_remote_hash,
-        ) = existing.unwrap_or((0, None, "not-installed".into(), None, None, None));
+        ) = existing.unwrap_or((0, None, None, "not-installed".into(), None, None, None));
+        let migrate_handled_hash = scan
+            .legacy_content_hash
+            .as_deref()
+            .is_some_and(|legacy_hash| {
+                remote_hash.as_deref() == Some(legacy_hash)
+                    && handled_remote_sha.as_deref() == Some(repo.sha.as_str())
+                    && handled_remote_hash.as_deref() == remote_hash.as_deref()
+            });
+        let migrated_handled_hash = migrate_handled_hash.then_some(scan.content_hash.as_str());
         let remote_hash_matches = installed_hash.as_deref() == Some(scan.content_hash.as_str());
         let handled_current_remote = handled_remote_sha.as_deref() == Some(repo.sha.as_str())
-            && handled_remote_hash.as_deref() == Some(scan.content_hash.as_str());
+            && migrated_handled_hash.or(handled_remote_hash.as_deref())
+                == Some(scan.content_hash.as_str());
         let next_status = if installed == 0 {
             "not-installed".to_string()
         } else if remote_hash_matches {
@@ -3867,7 +3886,7 @@ fn sync_skills(
         } else {
             local_version.as_deref()
         };
-        conn.execute(
+        transaction.execute(
             "INSERT INTO skills
              (id, repo_id, name, description, repo_name, path, ref_name, local_version,
               remote_version, status, installed, created_at, updated_at, installed_hash, remote_hash,
@@ -3881,6 +3900,7 @@ fn sync_skills(
               local_version = excluded.local_version,
               remote_version = excluded.remote_version,
               remote_hash = excluded.remote_hash,
+              handled_remote_hash = COALESCE(?17, handled_remote_hash),
               status = excluded.status,
               source_type = excluded.source_type,
               search_text = excluded.search_text,
@@ -3902,9 +3922,23 @@ fn sync_skills(
                 if installed == 1 { Some(now.as_str()) } else { None },
                 installed_hash,
                 scan.content_hash,
-                scan.search_text
+                scan.search_text,
+                migrated_handled_hash
             ],
         )?;
+        if let Some(legacy_hash) = scan.legacy_content_hash.as_deref() {
+            transaction.execute(
+                "UPDATE skill_update_conflicts
+                 SET remote_hash = ?4,
+                     updated_at = ?5
+                 WHERE skill_id = ?1
+                   AND status = 'pending'
+                   AND remote_sha = ?2
+                   AND remote_hash = ?3",
+                params![id, repo.sha, legacy_hash, scan.content_hash, now],
+            )?;
+        }
+        transaction.commit()?;
     }
 
     let mut stmt = conn.prepare("SELECT id FROM skills WHERE repo_id = ?1")?;
@@ -4225,98 +4259,6 @@ fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     hex::encode(hasher.finalize())
-}
-
-fn hash_directory(path: &Path) -> Result<String, AppError> {
-    match fs::symlink_metadata(path) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok("missing".into()),
-        Err(error) => return Err(error.into()),
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(AppError::with_details(
-                "skill_hash_symlink_unsupported",
-                "Skill 内容包含符号链接，无法安全计算哈希。",
-                path_string(path),
-            ))
-        }
-        Ok(metadata) if !metadata.is_dir() => {
-            return Err(AppError::with_details(
-                "skill_hash_not_directory",
-                "Skill 哈希目标不是目录。",
-                path_string(path),
-            ))
-        }
-        Ok(_) => {}
-    }
-    let mut entries = Vec::new();
-    for entry in WalkDir::new(path) {
-        let entry = entry.map_err(|error| {
-            AppError::with_details(
-                "skill_hash_walk_failed",
-                "Skill 目录遍历失败，未使用不完整内容计算哈希。",
-                error.to_string(),
-            )
-        })?;
-        if entry.file_type().is_symlink() {
-            return Err(AppError::with_details(
-                "skill_hash_symlink_unsupported",
-                "Skill 内容包含符号链接，无法安全计算哈希。",
-                path_string(entry.path()),
-            ));
-        }
-        if entry.file_type().is_file() {
-            entries.push(entry.path().to_path_buf());
-        }
-    }
-    entries.sort();
-    let mut hasher = Sha256::new();
-    for entry in entries {
-        if let Ok(relative) = entry.strip_prefix(path) {
-            hasher.update(relative.to_string_lossy().as_bytes());
-        }
-        hasher.update(fs::read(entry)?);
-    }
-    Ok(hex::encode(hasher.finalize()))
-}
-
-fn hash_skill_from_zip(bytes: &[u8], skill_path: &str) -> Result<String, AppError> {
-    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
-    let normalized_skill_path = if skill_path == "." {
-        String::new()
-    } else {
-        format!("{}/", skill_path.trim_matches('/'))
-    };
-    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
-    for index in 0..archive.len() {
-        let mut file = archive.by_index(index)?;
-        if !file.is_file() {
-            continue;
-        }
-        let relative = strip_zip_root(file.name());
-        if !normalized_skill_path.is_empty() && !relative.starts_with(&normalized_skill_path) {
-            continue;
-        }
-        let output_relative = if normalized_skill_path.is_empty() {
-            relative
-        } else {
-            relative
-                .strip_prefix(&normalized_skill_path)
-                .unwrap_or("")
-                .to_string()
-        };
-        if output_relative.is_empty() {
-            continue;
-        }
-        let mut contents = Vec::new();
-        file.read_to_end(&mut contents)?;
-        entries.push((output_relative, contents));
-    }
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
-    let mut hasher = Sha256::new();
-    for (relative, contents) in entries {
-        hasher.update(relative.as_bytes());
-        hasher.update(contents);
-    }
-    Ok(hex::encode(hasher.finalize()))
 }
 
 fn normalized_skill_zip_path(skill_path: &str) -> Result<PathBuf, AppError> {
@@ -6695,11 +6637,12 @@ async fn update_skill_inner(
         Ok(zip) => zip,
         Err(error) => return Ok(api_err(error)),
     };
-    let downloaded_hash = match hash_skill_from_zip(&zip, &skill.path) {
-        Ok(hash) => hash,
+    let downloaded_hashes = match skill_hashes_from_zip(&zip, &skill.path) {
+        Ok(hashes) => hashes,
         Err(error) => return Ok(api_err(error)),
     };
-    if skill.remote_hash.as_deref() != Some(downloaded_hash.as_str()) {
+    let downloaded_hash = downloaded_hashes.canonical.as_str();
+    if !downloaded_hashes.matches_stored_digest(skill.remote_hash.as_deref()) {
         return Ok(api_err(AppError::with_details(
             "skill_remote_hash_mismatch",
             "下载的 Skill 内容与检测记录不一致，未修改本地文件。",
@@ -6722,7 +6665,7 @@ async fn update_skill_inner(
         let current_repo = load_repository(&db, &current_skill.repo_id)?
             .ok_or_else(|| AppError::new("github_not_found", "来源仓库不存在。"))?;
         if current_repo.remote_sha != repo.remote_sha
-            || current_skill.remote_hash.as_deref() != Some(downloaded_hash.as_str())
+            || !downloaded_hashes.matches_stored_digest(current_skill.remote_hash.as_deref())
         {
             return Err(AppError::new(
                 "skill_update_target_changed",
@@ -6766,7 +6709,7 @@ async fn update_skill_inner(
             &state.temp_registry,
         )?;
         let replacement =
-            begin_registered_temp_replacement(prepared, &current_dest, &downloaded_hash)?;
+            begin_registered_temp_replacement(prepared, &current_dest, downloaded_hash)?;
         let now = utc_now();
         commit_replacement_after_database(replacement, || {
             let transaction = db.unchecked_transaction()?;
@@ -6776,6 +6719,7 @@ async fn update_skill_inner(
                          status = 'installed-latest',
                          local_version = remote_version,
                          installed_hash = ?2,
+                         remote_hash = ?2,
                          updated_at = ?3,
                          install_path = ?4,
                          handled_remote_sha = ?5,

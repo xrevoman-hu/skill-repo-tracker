@@ -152,7 +152,9 @@ fn registered_zip_extract_replaces_atomically_and_rejects_archive_escape() {
         ("example-demo/skills/demo/assets/prompt.md", b"prompt"),
     ]);
 
-    let expected_hash = hash_skill_from_zip(&zip, "skills/demo").unwrap();
+    let expected_hash = skill_hashes_from_zip(&zip, "skills/demo")
+        .unwrap()
+        .canonical;
     let prepared = extract_skill_to_registered_temp(
         &zip,
         "skills/demo",
@@ -210,7 +212,9 @@ fn pending_replacement_rolls_back_files_when_main_database_commit_fails() {
     fs::create_dir_all(&destination).unwrap();
     fs::write(destination.join("SKILL.md"), "old").unwrap();
     let zip = zip_with_file("repo/skills/demo/SKILL.md", b"new");
-    let expected_hash = hash_skill_from_zip(&zip, "skills/demo").unwrap();
+    let expected_hash = skill_hashes_from_zip(&zip, "skills/demo")
+        .unwrap()
+        .canonical;
     let prepared = extract_skill_to_registered_temp(
         &zip,
         "skills/demo",
@@ -254,7 +258,9 @@ fn dropped_pending_replacement_preserves_registry_and_recovery_materials() {
     fs::create_dir_all(&destination).unwrap();
     fs::write(destination.join("SKILL.md"), "old").unwrap();
     let zip = zip_with_file("repo/skills/demo/SKILL.md", b"new");
-    let expected_hash = hash_skill_from_zip(&zip, "skills/demo").unwrap();
+    let expected_hash = skill_hashes_from_zip(&zip, "skills/demo")
+        .unwrap()
+        .canonical;
     let prepared = extract_skill_to_registered_temp(
         &zip,
         "skills/demo",
@@ -567,6 +573,7 @@ fn detects_baoyu_style_plugin_entries_from_readme() {
             path: "skills/baoyu-image-gen".into(),
             version: "v1.0.0".into(),
             content_hash: "hash-baoyu-image-gen".into(),
+            legacy_content_hash: None,
             search_text: "image".into(),
         },
         SkillScan {
@@ -575,6 +582,7 @@ fn detects_baoyu_style_plugin_entries_from_readme() {
             path: "skills/baoyu-research".into(),
             version: "v1.0.0".into(),
             content_hash: "hash-baoyu-research".into(),
+            legacy_content_hash: None,
             search_text: "research".into(),
         },
     ];
@@ -640,6 +648,7 @@ fn invalid_zip_does_not_become_empty_plugin_scan() {
         path: "skills/demo-skill".into(),
         version: "v1.0.0".into(),
         content_hash: "hash-demo-skill".into(),
+        legacy_content_hash: None,
         search_text: "demo".into(),
     }];
     assert!(scan_plugins_from_zip(b"not a zip", "example/demo", &scans).is_err());
@@ -685,6 +694,7 @@ fn saves_plugin_entries_and_skill_links() {
         path: "skills/baoyu-image-gen".into(),
         version: "v1.0.0".into(),
         content_hash: "hash-baoyu-image-gen".into(),
+        legacy_content_hash: None,
         search_text: "image".into(),
     }];
     let plugins = vec![PluginScan {
@@ -761,6 +771,7 @@ fn recognized_skills_excludes_stale_skills_after_rescan() {
             path: "skills/stale-example-skill".into(),
             version: "0.2.0".into(),
             content_hash: "hash-stale-example-skill".into(),
+            legacy_content_hash: None,
             search_text: "stale duplicate from previous scan".into(),
         },
         SkillScan {
@@ -769,6 +780,7 @@ fn recognized_skills_excludes_stale_skills_after_rescan() {
             path: ".".into(),
             version: "v0.1.0".into(),
             content_hash: "hash-icon-generator".into(),
+            legacy_content_hash: None,
             search_text: "current skill".into(),
         },
     ];
@@ -778,6 +790,7 @@ fn recognized_skills_excludes_stale_skills_after_rescan() {
         path: ".".into(),
         version: "v0.1.0".into(),
         content_hash: "hash-icon-generator".into(),
+        legacy_content_hash: None,
         search_text: "current skill".into(),
     }];
 
@@ -818,6 +831,7 @@ fn sync_status_scan(version: &str, content_hash: &str) -> Vec<SkillScan> {
         path: "skills/demo-skill".into(),
         version: version.into(),
         content_hash: content_hash.into(),
+        legacy_content_hash: None,
         search_text: "current skill".into(),
     }]
 }
@@ -3822,5 +3836,594 @@ fn tauri_state_commands_use_injected_resources_without_external_side_effects() {
     assert_eq!(
         opened.error.as_ref().map(|error| error.code.as_str()),
         Some("backup_root_unavailable")
+    );
+}
+
+const LEGACY_HASH_REMOTE: &str = "4923e9ac315d7e1a2718eb2a26884bd732c130038e8123dc94161dedc6153dc8";
+const CANONICAL_HASH_REMOTE: &str =
+    "3689e2cb8dbfd9d04e566417a0aefc4a8a7466729325d146752fbafcd7d93598";
+const UNRELATED_HASH_REMOTE: &str =
+    "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+const LEGACY_HASH_CURRENT_SHA: &str = "2222222222222222222222222222222222222222";
+const LEGACY_HASH_PREVIOUS_SHA: &str = "1111111111111111111111111111111111111111";
+const LEGACY_HASH_INSTALLED_SKILL_MD: &[u8] =
+    b"---\nname: legacy-compatible\ndescription: Installed v1 fixture\nversion: v1.0.0\n---\n";
+const LEGACY_HASH_REMOTE_SKILL_MD: &[u8] = b"---\nname: legacy-compatible\ndescription: Legacy hash compatibility fixture\nversion: v2.0.0\n---\n";
+const LEGACY_HASH_REMOTE_TOPIC_MD: &[u8] = b"updated sibling markdown\n";
+const LEGACY_HASH_REMOTE_TOPIC_ITEM: &[u8] = b"updated nested item\n";
+const LEGACY_HASH_CUSTOM_SKILL_MD: &[u8] = b"---\nname: legacy-compatible\ndescription: User customized fixture\nversion: v2.0.0\n---\n\nKeep this local customization.\n";
+const LEGACY_HASH_CONFLICT_SKILL_MD: &[u8] = b"---\nname: legacy-compatible\ndescription: Pending conflict customization\nversion: v2.0.0\n---\n\nKeep this pending local customization.\n";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LegacyHashScenario {
+    CompatibleUpdate,
+    UnrelatedUpdate,
+    HandledCustomization,
+    PendingConflict,
+}
+
+#[derive(Clone, Copy)]
+enum LegacyHashGithubStep {
+    Metadata,
+    Commit,
+    Zip,
+}
+
+const LEGACY_HASH_UPDATE_STEPS: &[LegacyHashGithubStep] = &[LegacyHashGithubStep::Zip];
+const LEGACY_HASH_CHECK_STEPS: &[LegacyHashGithubStep] = &[
+    LegacyHashGithubStep::Metadata,
+    LegacyHashGithubStep::Commit,
+    LegacyHashGithubStep::Zip,
+];
+const LEGACY_HASH_CONFLICT_STEPS: &[LegacyHashGithubStep] = &[
+    LegacyHashGithubStep::Metadata,
+    LegacyHashGithubStep::Commit,
+    LegacyHashGithubStep::Zip,
+    LegacyHashGithubStep::Metadata,
+    LegacyHashGithubStep::Commit,
+];
+
+#[derive(Clone, Copy)]
+enum LegacyHashSeed {
+    Local,
+    LegacyRemote,
+}
+
+impl LegacyHashSeed {
+    fn resolve(self, local_hash: &str) -> String {
+        match self {
+            Self::Local => local_hash.to_string(),
+            Self::LegacyRemote => LEGACY_HASH_REMOTE.to_string(),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LegacyHashScenarioConfig {
+    github_steps: &'static [LegacyHashGithubStep],
+    local_skill_md: &'static [u8],
+    stored_remote_hash: &'static str,
+    status: &'static str,
+    local_version: &'static str,
+    installed_hash: LegacyHashSeed,
+    handled_remote_sha: Option<&'static str>,
+    handled_remote_hash: Option<LegacyHashSeed>,
+    create_conflict: bool,
+}
+
+impl LegacyHashScenario {
+    fn config(self) -> LegacyHashScenarioConfig {
+        match self {
+            Self::CompatibleUpdate => LegacyHashScenarioConfig {
+                github_steps: LEGACY_HASH_UPDATE_STEPS,
+                local_skill_md: LEGACY_HASH_INSTALLED_SKILL_MD,
+                stored_remote_hash: LEGACY_HASH_REMOTE,
+                status: "update-available",
+                local_version: "v1.0.0",
+                installed_hash: LegacyHashSeed::Local,
+                handled_remote_sha: Some(LEGACY_HASH_PREVIOUS_SHA),
+                handled_remote_hash: Some(LegacyHashSeed::Local),
+                create_conflict: false,
+            },
+            Self::UnrelatedUpdate => LegacyHashScenarioConfig {
+                github_steps: LEGACY_HASH_UPDATE_STEPS,
+                local_skill_md: LEGACY_HASH_INSTALLED_SKILL_MD,
+                stored_remote_hash: UNRELATED_HASH_REMOTE,
+                status: "update-available",
+                local_version: "v1.0.0",
+                installed_hash: LegacyHashSeed::Local,
+                handled_remote_sha: None,
+                handled_remote_hash: None,
+                create_conflict: false,
+            },
+            Self::HandledCustomization => LegacyHashScenarioConfig {
+                github_steps: LEGACY_HASH_CHECK_STEPS,
+                local_skill_md: LEGACY_HASH_CUSTOM_SKILL_MD,
+                stored_remote_hash: LEGACY_HASH_REMOTE,
+                status: "installed-customized",
+                local_version: "v2.0.0",
+                installed_hash: LegacyHashSeed::Local,
+                handled_remote_sha: Some(LEGACY_HASH_CURRENT_SHA),
+                handled_remote_hash: Some(LegacyHashSeed::LegacyRemote),
+                create_conflict: false,
+            },
+            Self::PendingConflict => LegacyHashScenarioConfig {
+                github_steps: LEGACY_HASH_CONFLICT_STEPS,
+                local_skill_md: LEGACY_HASH_CONFLICT_SKILL_MD,
+                stored_remote_hash: LEGACY_HASH_REMOTE,
+                status: "update-available",
+                local_version: "v2.0.0",
+                installed_hash: LegacyHashSeed::LegacyRemote,
+                handled_remote_sha: None,
+                handled_remote_hash: None,
+                create_conflict: true,
+            },
+        }
+    }
+}
+
+struct LegacyHashCredentials;
+
+impl adapters::CredentialStore for LegacyHashCredentials {
+    fn get(&self, _service: &str, _key: &str) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+
+    fn set(&self, _service: &str, _key: &str, _secret: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn delete(&self, _service: &str, _key: &str) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+struct LegacyHashGithub {
+    responses: std::sync::Mutex<std::collections::VecDeque<adapters::GithubHttpResponse>>,
+}
+
+impl LegacyHashGithub {
+    fn new(config: LegacyHashScenarioConfig, zip: Vec<u8>) -> Self {
+        let responses = config
+            .github_steps
+            .iter()
+            .map(|step| {
+                let body = match step {
+                    LegacyHashGithubStep::Metadata => {
+                        br#"{"full_name":"example-org/legacy-compatible-skill","default_branch":"main"}"#.to_vec()
+                    }
+                    LegacyHashGithubStep::Commit => {
+                        format!(r#"{{"sha":"{LEGACY_HASH_CURRENT_SHA}"}}"#).into_bytes()
+                    }
+                    LegacyHashGithubStep::Zip => zip.clone(),
+                };
+                adapters::GithubHttpResponse {
+                    status: 200,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: Ok(body),
+                }
+            })
+            .collect::<Vec<_>>();
+        Self {
+            responses: std::sync::Mutex::new(std::collections::VecDeque::from(responses)),
+        }
+    }
+}
+
+impl adapters::GithubHttpAdapter for LegacyHashGithub {
+    fn execute(&self, _request: reqwest::Request) -> adapters::GithubHttpFuture<'_> {
+        let response = self
+            .responses
+            .lock()
+            .unwrap()
+            .pop_front()
+            .expect("unexpected GitHub request");
+        Box::pin(async move { Ok(response) })
+    }
+}
+
+struct LegacyHashFixture {
+    _sandbox: tempfile::TempDir,
+    state: Option<AppState>,
+    repository_id: String,
+    skill_id: String,
+    destination: PathBuf,
+    original_conflict: Option<(String, String)>,
+}
+
+impl LegacyHashFixture {
+    fn new(scenario: LegacyHashScenario) -> Self {
+        let config = scenario.config();
+        let zip = zip_with_files(&[
+            (
+                "fixture-repository/skills/legacy-compatible/SKILL.md",
+                LEGACY_HASH_REMOTE_SKILL_MD,
+            ),
+            (
+                "fixture-repository/skills/legacy-compatible/references/topic.md",
+                LEGACY_HASH_REMOTE_TOPIC_MD,
+            ),
+            (
+                "fixture-repository/skills/legacy-compatible/references/topic/item.txt",
+                LEGACY_HASH_REMOTE_TOPIC_ITEM,
+            ),
+        ]);
+        let sandbox = tempfile::tempdir().unwrap();
+        let library = sandbox.path().join("skill-library");
+        let destination = library.join("legacy-compatible");
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(destination.join("SKILL.md"), config.local_skill_md).unwrap();
+        let local_hash = hash_directory(&destination).unwrap();
+        let state = AppState::new_with_adapters(
+            sandbox.path().join("data"),
+            AppAdapters {
+                credentials: Arc::new(LegacyHashCredentials),
+                github: Arc::new(LegacyHashGithub::new(config, zip)),
+                filesystem: Arc::new(adapters::SystemFilesystem),
+            },
+        )
+        .unwrap();
+        let remote = RemoteInfo {
+            owner: "example-org".into(),
+            repo: "legacy-compatible-skill".into(),
+            full_name: "example-org/legacy-compatible-skill".into(),
+            default_branch: "main".into(),
+            resolved_ref: "main".into(),
+            sha: LEGACY_HASH_CURRENT_SHA.into(),
+        };
+        let scan = SkillScan {
+            name: "legacy-compatible".into(),
+            description: "Legacy hash compatibility fixture".into(),
+            path: "skills/legacy-compatible".into(),
+            version: "v2.0.0".into(),
+            content_hash: config.stored_remote_hash.into(),
+            legacy_content_hash: None,
+            search_text: "legacy hash compatibility fixture".into(),
+        };
+        let installed_hash = config.installed_hash.resolve(&local_hash);
+        let handled_remote_sha = config.handled_remote_sha.map(str::to_string);
+        let handled_remote_hash = config
+            .handled_remote_hash
+            .map(|seed| seed.resolve(&local_hash));
+        let (repository_id, skill_id, original_conflict) = {
+            let db = state.db.lock().unwrap();
+            set_setting(&db, "skill_library_root", path_string(&library)).unwrap();
+            set_setting(&db, "skills_root", path_string(&library)).unwrap();
+            let repository_id =
+                save_repository_with_account(&db, &remote, &[scan], None, "").unwrap();
+            let skill_id = skill_id(&repository_id, "skills/legacy-compatible");
+            db.execute(
+                "UPDATE skills
+                 SET installed = 1,
+                     status = ?2,
+                     local_version = ?3,
+                     installed_hash = ?4,
+                     install_path = ?5,
+                     sync_targets_mode = 'custom',
+                     sync_targets = '[]',
+                     handled_remote_sha = ?6,
+                     handled_remote_hash = ?7
+                 WHERE id = ?1",
+                params![
+                    skill_id,
+                    config.status,
+                    config.local_version,
+                    installed_hash,
+                    path_string(&destination),
+                    handled_remote_sha,
+                    handled_remote_hash,
+                ],
+            )
+            .unwrap();
+            let original_conflict = if config.create_conflict {
+                let skill = load_skill_record(&db, &skill_id).unwrap().unwrap();
+                let repository = load_repository(&db, &repository_id).unwrap().unwrap();
+                let conflict =
+                    persist_skill_update_conflict(&db, &skill, &repository, &local_hash).unwrap();
+                Some((conflict.id, conflict.task_id))
+            } else {
+                None
+            };
+            (repository_id, skill_id, original_conflict)
+        };
+        Self {
+            _sandbox: sandbox,
+            state: Some(state),
+            repository_id,
+            skill_id,
+            destination,
+            original_conflict,
+        }
+    }
+
+    fn take_state(&mut self) -> AppState {
+        self.state.take().expect("fixture state already consumed")
+    }
+}
+
+#[test]
+fn user_can_update_an_existing_skill_when_a_remote_file_and_directory_share_a_stem() {
+    let mut fixture = LegacyHashFixture::new(LegacyHashScenario::CompatibleUpdate);
+    let skill_id_value = fixture.skill_id.clone();
+    let destination = fixture.destination.clone();
+    let app = tauri::test::mock_builder()
+        .manage(fixture.take_state())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+
+    let update_response = tauri::async_runtime::block_on(update_skill(
+        SkillActionRequest {
+            skill_id: skill_id_value.clone(),
+        },
+        app.state(),
+    ))
+    .unwrap();
+
+    assert!(
+        update_response.ok,
+        "legacy v1.2.3 metadata must remain updateable: {:?}",
+        update_response.error
+    );
+    assert!(matches!(
+        update_response.data,
+        Some(SkillActionOutcome::Updated { .. })
+    ));
+
+    let skills_response = list_skills(app.state());
+    assert!(skills_response.ok);
+    let updated_skill = skills_response
+        .data
+        .unwrap()
+        .into_iter()
+        .find(|skill| skill.id == skill_id_value)
+        .unwrap();
+    assert!(updated_skill.installed);
+    assert_eq!(updated_skill.status, "installed-latest");
+    assert_eq!(updated_skill.local_version, "v2.0.0");
+    assert_eq!(
+        updated_skill.remote_hash.as_deref(),
+        Some(CANONICAL_HASH_REMOTE)
+    );
+    assert_eq!(
+        updated_skill.handled_remote_sha.as_deref(),
+        Some(LEGACY_HASH_CURRENT_SHA)
+    );
+    assert_eq!(
+        updated_skill.handled_remote_hash.as_deref(),
+        Some(CANONICAL_HASH_REMOTE)
+    );
+
+    let tasks_response = list_tasks(app.state());
+    assert!(tasks_response.ok);
+    let update_task = tasks_response
+        .data
+        .unwrap()
+        .into_iter()
+        .find(|task| task.kind == "Update Skill" && task.target == "legacy-compatible")
+        .unwrap();
+    assert_eq!(update_task.status, "success");
+
+    assert_eq!(
+        fs::read(destination.join("SKILL.md")).unwrap(),
+        LEGACY_HASH_REMOTE_SKILL_MD
+    );
+    assert_eq!(
+        fs::read(destination.join("references/topic.md")).unwrap(),
+        LEGACY_HASH_REMOTE_TOPIC_MD
+    );
+    assert_eq!(
+        fs::read(destination.join("references/topic/item.txt")).unwrap(),
+        LEGACY_HASH_REMOTE_TOPIC_ITEM
+    );
+}
+
+#[test]
+fn update_skill_rejects_an_unrelated_stored_hash_without_changing_metadata_or_files() {
+    assert_ne!(UNRELATED_HASH_REMOTE, LEGACY_HASH_REMOTE);
+    assert_ne!(UNRELATED_HASH_REMOTE, CANONICAL_HASH_REMOTE);
+    let mut fixture = LegacyHashFixture::new(LegacyHashScenario::UnrelatedUpdate);
+    let skill_id_value = fixture.skill_id.clone();
+    let destination = fixture.destination.clone();
+    let app = tauri::test::mock_builder()
+        .manage(fixture.take_state())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+
+    let before_response = list_skills(app.state());
+    assert!(before_response.ok);
+    let before_skill = before_response
+        .data
+        .unwrap()
+        .into_iter()
+        .find(|skill| skill.id == skill_id_value)
+        .unwrap();
+    assert_eq!(
+        before_skill.remote_hash.as_deref(),
+        Some(UNRELATED_HASH_REMOTE)
+    );
+
+    let update_response = tauri::async_runtime::block_on(update_skill(
+        SkillActionRequest {
+            skill_id: skill_id_value.clone(),
+        },
+        app.state(),
+    ))
+    .unwrap();
+
+    assert!(!update_response.ok);
+    assert!(update_response.data.is_none());
+    assert_eq!(
+        update_response
+            .error
+            .as_ref()
+            .map(|error| error.code.as_str()),
+        Some("skill_remote_hash_mismatch")
+    );
+
+    let after_response = list_skills(app.state());
+    assert!(after_response.ok);
+    let after_skill = after_response
+        .data
+        .unwrap()
+        .into_iter()
+        .find(|skill| skill.id == skill_id_value)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&after_skill).unwrap(),
+        serde_json::to_value(&before_skill).unwrap()
+    );
+    assert_eq!(
+        after_skill.remote_hash.as_deref(),
+        Some(UNRELATED_HASH_REMOTE)
+    );
+
+    assert_eq!(
+        fs::read(destination.join("SKILL.md")).unwrap(),
+        LEGACY_HASH_INSTALLED_SKILL_MD
+    );
+    assert!(!destination.join("references").exists());
+
+    let tasks_response = list_tasks(app.state());
+    assert!(tasks_response.ok);
+    assert!(!tasks_response.data.unwrap().into_iter().any(|task| {
+        task.kind == "Update Skill"
+            && task.target == "legacy-compatible"
+            && task.status == "success"
+    }));
+}
+
+#[test]
+fn check_repositories_canonicalizes_same_sha_legacy_metadata_without_reopening_handled_customization(
+) {
+    let mut fixture = LegacyHashFixture::new(LegacyHashScenario::HandledCustomization);
+    let repository_id = fixture.repository_id.clone();
+    let skill_id_value = fixture.skill_id.clone();
+    let destination = fixture.destination.clone();
+    let app = tauri::test::mock_builder()
+        .manage(fixture.take_state())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+
+    let check_response = tauri::async_runtime::block_on(check_repositories(
+        CheckRepositoriesRequest {
+            repo_ids: Some(vec![repository_id]),
+        },
+        app.state(),
+    ))
+    .unwrap();
+    assert!(
+        check_response.ok,
+        "same-SHA repository check must succeed: {:?}",
+        check_response.error
+    );
+
+    let skills_response = list_skills(app.state());
+    assert!(skills_response.ok);
+    let updated_skill = skills_response
+        .data
+        .unwrap()
+        .into_iter()
+        .find(|skill| skill.id == skill_id_value)
+        .unwrap();
+    assert_eq!(updated_skill.status, "installed-customized");
+    assert_eq!(
+        updated_skill.remote_hash.as_deref(),
+        Some(CANONICAL_HASH_REMOTE)
+    );
+    assert_eq!(
+        updated_skill.handled_remote_hash.as_deref(),
+        Some(CANONICAL_HASH_REMOTE)
+    );
+    assert_eq!(
+        updated_skill.handled_remote_sha.as_deref(),
+        Some(LEGACY_HASH_CURRENT_SHA)
+    );
+    assert_eq!(
+        fs::read(destination.join("SKILL.md")).unwrap(),
+        LEGACY_HASH_CUSTOM_SKILL_MD
+    );
+}
+
+#[test]
+fn check_repositories_preserves_a_pending_conflict_when_only_hash_encoding_changes() {
+    let mut fixture = LegacyHashFixture::new(LegacyHashScenario::PendingConflict);
+    let repository_id = fixture.repository_id.clone();
+    let skill_id_value = fixture.skill_id.clone();
+    let destination = fixture.destination.clone();
+    let (original_conflict_id, original_task_id) = fixture.original_conflict.clone().unwrap();
+    let app = tauri::test::mock_builder()
+        .manage(fixture.take_state())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+
+    let check_response = tauri::async_runtime::block_on(check_repositories(
+        CheckRepositoriesRequest {
+            repo_ids: Some(vec![repository_id]),
+        },
+        app.state(),
+    ))
+    .unwrap();
+    assert!(
+        check_response.ok,
+        "same-SHA repository check must succeed: {:?}",
+        check_response.error
+    );
+
+    let conflict_response = get_skill_update_conflict(
+        SkillActionRequest {
+            skill_id: skill_id_value.clone(),
+        },
+        app.state(),
+    );
+    assert!(conflict_response.ok);
+    let active_conflict = conflict_response.data.unwrap();
+    assert_eq!(active_conflict.id, original_conflict_id);
+    assert_eq!(active_conflict.task_id, original_task_id);
+    assert_eq!(active_conflict.status, "pending");
+    assert_eq!(active_conflict.remote_hash, CANONICAL_HASH_REMOTE);
+
+    let verify_response = tauri::async_runtime::block_on(verify_skill_update_conflict(
+        SkillConflictIdRequest {
+            conflict_id: original_conflict_id.clone(),
+        },
+        app.state(),
+    ))
+    .unwrap();
+    assert!(
+        verify_response.ok,
+        "same target verification must succeed: {:?}",
+        verify_response.error
+    );
+    let verified_conflict = verify_response.data.unwrap();
+    assert_eq!(verified_conflict.id, original_conflict_id);
+    assert_eq!(verified_conflict.task_id, original_task_id);
+    assert_eq!(verified_conflict.status, "pending");
+    assert_eq!(verified_conflict.remote_hash, CANONICAL_HASH_REMOTE);
+    assert_eq!(verified_conflict.verification_state, "unchanged");
+
+    let tasks_response = list_tasks(app.state());
+    assert!(tasks_response.ok);
+    let update_tasks = tasks_response
+        .data
+        .unwrap()
+        .into_iter()
+        .filter(|task| task.kind == "Update Skill" && task.target == "legacy-compatible")
+        .collect::<Vec<_>>();
+    assert_eq!(update_tasks.len(), 1);
+    assert_eq!(update_tasks[0].id, original_task_id);
+    assert_eq!(update_tasks[0].status, "waiting-user");
+
+    let skills_response = list_skills(app.state());
+    assert!(skills_response.ok);
+    let updated_skill = skills_response
+        .data
+        .unwrap()
+        .into_iter()
+        .find(|skill| skill.id == skill_id_value)
+        .unwrap();
+    assert_eq!(updated_skill.status, "update-conflict");
+    assert_eq!(
+        fs::read(destination.join("SKILL.md")).unwrap(),
+        LEGACY_HASH_CONFLICT_SKILL_MD
     );
 }
