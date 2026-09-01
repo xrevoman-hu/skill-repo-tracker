@@ -66,6 +66,12 @@ phase 必须从该目录内 `0600` 的 `manifest.token` 读取并显式接收 to
 main/tag/Release/digest 并下载复验，且 release refs、下载实物和服务端元数据必须与
 manifest 字段一致；
 上传结果不明时先查询，禁止盲目重试。
+远端 phase 获取 refs 时必须使用 `git fetch --no-tags`，并把正式远端 tag 非强制地拉到
+verifier 自有的 `refs/tags/_srt-release-remote/vX.Y.Z`；后续 annotated type 与 peel
+检查只读取该隔离 ref，不读取 `actions/checkout` 可能在正式本地 `vX.Y.Z` 上创建的
+lightweight tag。隔离 ref 必须仍在 `refs/tags/` 下且 refspec 不得加 `+`：不能改放
+`refs/remotes/` 或任意自定义 namespace，因为 Git 对 `refs/{tags,heads}/*` 之外的 fetch
+更新不提供同等的 tag 不可改写拒绝语义，远端 tag object 被改写时验证器必须 fail closed。
 GitHub `Release gate` workflow 在 GitHub 当前明确为 Apple Silicon 的 `macos-15` hosted runner 上运行 local/remote
 phase，并绑定 `release` Environment 人工批准；开发机也必须是 Apple Silicon 才能运行
 local phase 的 arm64 实物校验。云端 local gate 不上传或导出 token artifact；供正式发布
