@@ -1,101 +1,73 @@
 # macOS Release Checklist
 
-This checklist has two lanes:
+当前唯一支持的发布产物是 Apple Silicon ad-hoc 测试分发包。它不是 Developer ID signed，
+也不是 Apple notarized；首次启动可能需要 Control-click Open、Privacy & Security ->
+Open Anyway 或 `xattr -cr`。本清单不引入 Developer ID、notarization 或新的系统权限。
 
-- Zero-cost test distribution: ad-hoc signed `.app` and `.dmg`, published with
-  clear manual Gatekeeper instructions.
-- Public no-warning distribution: Developer ID signed and Apple notarized DMG.
+## 0. 授权边界
 
-Do not describe an ad-hoc package as notarized or no-warning.
+- 只有用户明确要求“发布/发版/GitHub Release”才进入正式发布。
+- 普通 push 不发布；GitHub `Release gate` 只允许 `workflow_dispatch`，且绑定
+  `release` Environment 人工批准。
+- 本地验证包不等于正式发布；不得顺手改版本、tag、push 或创建 Release。
+- 上传结果不明时先查询远端，禁止盲目重试。
 
-## Zero-Cost Test Distribution
+## 1. 本地实物门
 
-Use this lane when no Apple Developer ID signing identity is available.
-
-```bash
-APP="src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-DMG="src-tauri/target/release/bundle/dmg/Skill Repo Tracker_<version>_aarch64.dmg"
-
-codesign --force --deep --sign - "$APP"
-codesign --force --sign - "$DMG"
-codesign --verify --deep --strict --verbose=4 "$APP"
-codesign --verify --verbose=4 "$DMG"
-hdiutil verify "$DMG"
-```
-
-Release notes must tell users that first launch may require Control-click/Open,
-Privacy & Security -> Open Anyway, or `xattr -cr` after download.
-
-## Public No-Warning Distribution
-
-## Required Signing Inputs
-
-- A valid `Developer ID Application` certificate must appear in:
+在 Apple Silicon macOS 上运行唯一接口：
 
 ```bash
-security find-identity -v -p codesigning
+npm run release:verify -- --lane adhoc --version X.Y.Z --phase local
 ```
 
-- Notarization credentials must be available through Apple ID environment variables, App Store Connect API key variables, or a stored `notarytool` keychain profile.
-- Secrets must stay outside the repository. Prefer environment variables such as `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, and `APPLE_TEAM_ID`, or an Apple API key profile.
+该命令不可拆分替代，固定执行：
 
-## Build
+1. `npm run verify` 的全部确定性门禁；
+2. frontend/Rust coverage 与 Rust 1.88.0 MSRV lane，以及 Playwright E2E 浏览器验收；
+3. 10,000 prompts / 100 MiB 性能门；
+4. 构建 Apple Silicon `.app` 和 DMG；
+5. 完整 ad-hoc 签名 `.app`；
+6. 删除签名前的旧 DMG，并从已签名 App 重新封装；
+7. 签名并校验最终 DMG；
+8. `hdiutil verify`、只读挂载、挂载内 App 签名/版本/arm64 校验；
+9. 输出 bytes、SHA-256、当前 commit 和承载这些操作者交接字段的单一、无签名
+   `manifestToken`，并在 DMG 旁写入权限为 `0600` 的
+   `Skill Repo Tracker_X.Y.Z_aarch64.release.json` 交接清单。token 只防止逐字段混用，
+   不能证明 local gate 已执行或 token 的生成者身份。
+
+“签名 loose App 后直接签旧 DMG”不是有效流程，因为旧 DMG 内仍是签名前的 App。
+
+## 2. 发布动作
+
+只有用户显式授权后，发布者才可执行以下动作：同步
+`package.json`/`package-lock.json`/`Cargo.toml`/`Cargo.lock`/`tauri.conf.json` 的版本，
+通过受保护 PR squash merge 进入 `main`，在本地以 fast-forward 同步该最终提交，创建并只推送
+annotated `vX.Y.Z` tag，再用 `gh release create` 创建非 draft、非 prerelease Release。发布阶段
+不得直接推送 `main`。本仓库中的 gate 只验证，不自动执行这些动作，也不会在未知上传结果下
+重试。创建 tag 前必须确认本地 `HEAD == origin/main`；完成后必须由 remote phase 证明
+`HEAD == origin/main == tag commit` 和线上资产 digest 一致。
+
+Release notes 必须中英文说明 ad-hoc 边界与首次打开方法。公开资产名固定为
+`Skill.Repo.Tracker_X.Y.Z_aarch64.dmg`；本地产物名保留空格形式。
+
+## 3. 远端实物门
+
+发布动作返回明确结果后，把操作者从 local phase 取得的单一 `manifestToken` 作为不可
+省略的字段载体传给 remote phase；不要拆开复制 commit/SHA，以免混用不同构建。这个
+未签名 token 本身不构成 local gate provenance：
 
 ```bash
-npm run build
-npm run typecheck
-PATH=/Users/zhiwei/.cargo/bin:$PATH cargo fmt --check --manifest-path src-tauri/Cargo.toml
-PATH=/Users/zhiwei/.cargo/bin:$PATH cargo test --manifest-path src-tauri/Cargo.toml
-PATH=/Users/zhiwei/.cargo/bin:$PATH npm run tauri build -- --bundles app,dmg
+npm run release:verify -- --lane adhoc --version X.Y.Z --phase remote --manifest-token <LOCAL_MANIFEST_TOKEN>
 ```
 
-The Tauri config enables hardened runtime and uses `src-tauri/entitlements.plist`. Provide the signing identity through the build environment instead of committing a personal certificate name.
+remote phase 从 token 还原并验证 manifest，再只读核对
+`manifest.commit == HEAD == origin/main == tag commit`、Release 非 draft/non-prerelease、
+资产名和 GitHub digest；随后下载 DMG，重新执行 `hdiutil verify`、只读挂载、签名、版本和
+arm64 检查，并要求下载文件的 bytes/SHA-256、GitHub size/digest 与 manifest 完全一致。
+只有 remote phase 也通过，才可以说“用户实际收到的线上文件已验证”。
 
-## Artifact Validation
+## 4. 停止条件
 
-```bash
-APP="src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-DMG="src-tauri/target/release/bundle/dmg/Skill Repo Tracker_<version>_aarch64.dmg"
-
-hdiutil verify "$DMG"
-hdiutil imageinfo "$DMG"
-codesign --display --verbose=4 "$APP"
-codesign --verify --deep --strict --verbose=4 "$APP"
-spctl --assess --type execute --verbose=4 "$APP"
-spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
-xcrun stapler validate "$DMG"
-```
-
-Expected release state:
-
-- `codesign` reports a real Developer ID identity, not `Signature=adhoc`.
-- `TeamIdentifier` is present.
-- `codesign --verify --deep --strict` succeeds.
-- `spctl` accepts both the app and the DMG.
-- `stapler validate` succeeds for the DMG.
-
-## Install-Path Acceptance
-
-Run this on a clean test user or machine before creating the GitHub Release.
-
-```bash
-MOUNT_DIR="$(mktemp -d /tmp/srt-dmg.XXXXXX)"
-hdiutil attach "$DMG" -readonly -nobrowse -noautoopen -mountpoint "$MOUNT_DIR"
-ditto "$MOUNT_DIR/Skill Repo Tracker.app" "/Applications/Skill Repo Tracker.app"
-codesign --verify --deep --strict --verbose=4 "/Applications/Skill Repo Tracker.app"
-spctl --assess --type execute --verbose=4 "/Applications/Skill Repo Tracker.app"
-open "/Applications/Skill Repo Tracker.app"
-hdiutil detach "$MOUNT_DIR"
-```
-
-The app must launch without the macOS "damaged" warning.
-
-## Public No-Warning Publish Gate
-
-Stop before publishing a no-warning public DMG when any of these are true:
-
-- No valid Developer ID identity is installed.
-- Notarization credentials are unavailable.
-- The built app is unsigned or only ad-hoc signed.
-- `codesign`, `spctl`, or `stapler` validation fails.
-- The app has not been launched from the copied `/Applications` path.
+任一门禁、性能、签名、重封装、挂载、版本、架构、digest 或远端 ref 不一致都必须停止。
+若未来需要普通用户无警告分发，应另立 ADR、凭据管理和 notarization 流程，不能把
+ad-hoc lane 改名冒充。

@@ -1,0 +1,43 @@
+name: Weekly resilience
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "43 3 * * 0"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: weekly-resilience
+  cancel-in-progress: true
+
+jobs:
+  repeat-and-performance:
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Set up pinned Rust
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup default 1.95.0
+      - name: Install npm dependencies
+        run: npm ci --registry=https://registry.npmjs.org
+      - name: Repeat race and filesystem suites
+        run: |
+          for attempt in 1 2 3; do
+            echo "repeat attempt ${attempt}/3"
+            npm test
+            cargo test --locked --all-features --manifest-path src-tauri/Cargo.toml
+          done
+      - name: Run the 10,000 prompts / 100 MiB release performance gate
+        run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml prompt_library_release_performance_gate -- --ignored --nocapture --test-threads=1

@@ -1,0 +1,13 @@
+{
+  "measuredAtCommit": "working tree on 26904260edd632b100bc3c2d913ad605982c6562 (2026-09-01)",
+  "frontend": {
+    "lines": 73.68,
+    "branches": 74.98,
+    "functions": 54.48
+  },
+  "rust": {
+    "lines": 67.31,
+    "branches": 57.98,
+    "functions": 30.9
+  }
+}

@@ -199,7 +199,7 @@ describe("App repository pagination integration", () => {
     const user = userEvent.setup();
     const { container } = render(<App />);
 
-    await user.click(screen.getAllByRole("button", { name: /^详情:/ })[0]);
+    await user.click((await screen.findAllByRole("button", { name: /^详情:/ }))[0]);
     const inspectorTitle = container.querySelector(".inspector-title h2")?.textContent;
     expect(inspectorTitle).toBeTruthy();
 

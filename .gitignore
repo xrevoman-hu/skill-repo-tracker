@@ -9,6 +9,9 @@ assets/brand/
 assets/skill-repo-tracker-v1-1-6-illustrations/
 node_modules/
 dist/
+coverage/
+playwright-report/
+test-results/
 src-tauri/target/
 src-tauri/gen/
 .env

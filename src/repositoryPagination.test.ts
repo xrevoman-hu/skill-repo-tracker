@@ -55,6 +55,12 @@ describe("repository pagination state", () => {
       ),
     ).toEqual({ page: 3, pageSize: 15 });
   });
+
+  it("preserves object identity when navigation already targets the current page", () => {
+    const state = { page: 3, pageSize: 15 } as const;
+
+    expect(repositoryPaginationReducer(state, { type: "go-to-page", page: 3 })).toBe(state);
+  });
 });
 
 describe("repository page bounds", () => {

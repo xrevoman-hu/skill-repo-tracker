@@ -52,7 +52,7 @@ Skill Repo Tracker 是一个给 AI Skill 使用者准备的本地桌面工具。
 
 Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再按你的选择发布到工具目录。主库默认在 `~/SkillRepoTracker/skills`，当前默认发布到 Claude Code 和 Codex。Gemini、OpenCode、OpenClaw、Hermes 可以手动勾选，但不会默认打开。
 
-当前版本：`v1.2.2`
+当前版本：`v1.2.3`
 
 ### 它帮你完成什么
 
@@ -107,14 +107,14 @@ Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再
 环境要求：
 
 - macOS 12+
-- Node.js 20+
-- npm 10+
-- Rust / Cargo 1.77+
+- Node.js 22.23.1（Node 22）
+- npm 10.9.8
+- Rust / Cargo 1.95.0（声明并由 CI 验证的 MSRV 为 1.88.0）
 
 安装依赖：
 
 ```bash
-npm install
+npm ci
 ```
 
 启动 Web 预览：
@@ -133,33 +133,40 @@ Web 预览使用 mock state；Tauri 桌面版会调用真实 Rust commands、SQL
 
 ### 构建和验证
 
-生成 macOS `.app` 和 `.dmg`：
+本地与 CI 的确定性检查只有一个入口：
 
 ```bash
-npm run tauri build -- --bundles app,dmg
+npm run verify
 ```
 
-常见产物位置：
-
-- `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
-- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.2.2_aarch64.dmg`
+它固定执行版本/仓库/架构预算、TypeScript strict、Vitest、Vite build、包体预算、
+Cargo fmt、Clippy `-D warnings`、Rust tests 和 Git diff 检查。`CI / verify` 会在该入口后
+追加 Playwright E2E；Coverage、MSRV、网络安全审计、性能和 Release 实物是独立 lane，详见
+[`docs/rules/testing-release.md`](docs/rules/testing-release.md)。
 
 #### 免费分发测试包
 
-没有 Apple Developer ID 时，可以对 `.app` 和 `.dmg` 做 ad-hoc 自签名，用作零成本 GitHub Release 测试包。顺序不能颠倒：先完整重签 `.app`，再用构建生成的 `bundle_dmg.sh` 从这份已签名 App 重新封装 DMG，最后签名并校验新 DMG。不能直接复用重签 App 之前生成的 DMG。
+没有 Apple Developer ID 时，可以使用 ad-hoc 测试分发 lane。唯一入口会先执行全部门禁和
+性能测试，再构建、完整签名 `.app`、从该 App 重新封装 DMG、签名并只读挂载复验。
+不能直接复用重签 App 之前生成的 DMG。
 
 ```bash
-codesign --force --deep --sign - "src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-# 使用 src-tauri/target/release/bundle/dmg/bundle_dmg.sh
-# 从上述 macos 目录重新生成最终 DMG 后，再签名最终文件：
-codesign --force --sign - "src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.2.2_aarch64.dmg"
-codesign --verify --deep --strict --verbose=4 "src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-hdiutil verify "src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.2.2_aarch64.dmg"
+npm run release:verify -- --lane adhoc --version 1.2.3 --phase local
+```
+
+local phase 会在 DMG 旁生成受限权限交接清单，并输出一个单一、无签名的
+`manifestToken`（把操作者交接的 version、完整 commit、文件名、bytes 与 SHA-256 放在
+同一载体中）。发布后执行 remote phase 时必须传入这个 token；远端 main/tag commit
+必须等于 manifest 中的 commit，下载文件和 GitHub digest/size 也必须与 manifest 一致。
+该 token 用来避免逐字段混用，不证明 local gate 已执行，也不证明是谁生成了 token：
+
+```bash
+npm run release:verify -- --lane adhoc --version 1.2.3 --phase remote --manifest-token <LOCAL_MANIFEST_TOKEN>
 ```
 
 这种包可以挂载、复制到 `/Applications` 并本机验证，但不是 Apple notarized 公开安装包。首次打开时，macOS 可能提示无法验证开发者；测试用户需要右键打开，或在“系统设置 -> 隐私与安全性”里选择“仍要打开”。安装测试包时请注意：
 
-1. 从 GitHub Release 下载 `Skill.Repo.Tracker_1.2.2_aarch64.dmg`。
+1. 从 GitHub Release 下载 `Skill.Repo.Tracker_1.2.3_aarch64.dmg`。
 2. 双击打开 DMG，把 `Skill Repo Tracker.app` 拖入 `/Applications`。
 3. 首次启动如果提示“无法验证开发者”或类似安全提示，请在 Finder 里右键这个 App，选择“打开”，再在弹窗中确认“打开”。
 4. 如果右键打开仍被拦截，请进入“系统设置 -> 隐私与安全性”，在底部找到被拦截的 Skill Repo Tracker，点击“仍要打开”。
@@ -171,20 +178,14 @@ xattr -cr "/Applications/Skill Repo Tracker.app"
 
 如果要做到普通用户双击下载后无安全提示，仍然需要 Developer ID 签名并完成 Apple notarization。
 
-发布前建议运行：
+发布前必须运行唯一门禁：
 
 ```bash
-npm run build
-./node_modules/.bin/tsc --noEmit
-cargo fmt --check --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml
+npm run verify
 ```
 
-如果系统找不到 `cargo`，macOS 上通常可以临时使用：
-
-```bash
-export PATH="$HOME/.cargo/bin:$PATH"
-```
+工具链版本由 `.node-version` 和 `rust-toolchain.toml` 固定；不要在发布说明中复制另一套
+子命令。
 
 ### 手动验收建议
 
@@ -212,7 +213,7 @@ Skill Repo Tracker is a local-first macOS app for people who install, update, an
 
 Instead of treating Claude Code, Codex, Gemini, OpenCode, OpenClaw, or Hermes folders as the source of truth, the app keeps one independent Skill library at `~/SkillRepoTracker/skills`. Skills are installed there first, then copied to selected tool directories.
 
-Current version: `v1.2.2`
+Current version: `v1.2.3`
 
 ### What It Helps With
 
@@ -238,42 +239,39 @@ Unchecking a default target and saving changes future installs, updates, and res
 ### Development
 
 ```bash
-npm install
+npm ci
 npm run dev
 npm run tauri dev
 ```
 
-Build and verify:
+The deterministic local and CI gate has one entry point: `npm run verify`. `CI / verify`
+then adds Playwright E2E; coverage, MSRV, network audit, performance, and release
+artifacts remain separate lanes.
+
+Free test distribution without an Apple Developer ID uses the explicit ad-hoc release
+verification lane. It runs all gates and the performance corpus, signs the complete app,
+rebuilds the DMG from that signed app, signs the DMG, and validates a read-only mount.
+Never reuse a DMG created before the app was re-signed.
 
 ```bash
-npm run build
-./node_modules/.bin/tsc --noEmit
-cargo fmt --check --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml
-npm run tauri build -- --bundles app,dmg
+npm run release:verify -- --lane adhoc --version 1.2.3 --phase local
 ```
 
-Generated artifacts:
-
-- `src-tauri/target/release/bundle/macos/Skill Repo Tracker.app`
-- `src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.2.2_aarch64.dmg`
-
-Free test distribution without an Apple Developer ID can use ad-hoc signing for both the `.app` and the `.dmg`. The order matters: fully re-sign the `.app`, rebuild the DMG from that signed app with the generated `bundle_dmg.sh`, then sign and verify the rebuilt DMG. Never reuse the DMG created before the app was re-signed.
+The local phase writes a sidecar release manifest and prints one unsigned `manifestToken`
+that carries the operator-provided version, full commit, file name, bytes, and SHA-256 in
+one field. The remote phase requires that token and verifies the release refs, downloaded
+asset, and GitHub digest/size against those manifest fields. The token prevents accidental
+field mixing; it does not prove that the local gate ran or who generated the token:
 
 ```bash
-codesign --force --deep --sign - "src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-# Rebuild the final DMG from the macos directory with
-# src-tauri/target/release/bundle/dmg/bundle_dmg.sh, then sign the final file:
-codesign --force --sign - "src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.2.2_aarch64.dmg"
-codesign --verify --deep --strict --verbose=4 "src-tauri/target/release/bundle/macos/Skill Repo Tracker.app"
-hdiutil verify "src-tauri/target/release/bundle/dmg/Skill Repo Tracker_1.2.2_aarch64.dmg"
+npm run release:verify -- --lane adhoc --version 1.2.3 --phase remote --manifest-token <LOCAL_MANIFEST_TOKEN>
 ```
 
 This is suitable for GitHub Release test assets that users manually allow through Gatekeeper. It is not an Apple-notarized public installer. A no-warning public DMG still requires Developer ID signing and notarization.
 
 Install notes for the downloaded DMG:
 
-1. Download `Skill.Repo.Tracker_1.2.2_aarch64.dmg` from GitHub Releases.
+1. Download `Skill.Repo.Tracker_1.2.3_aarch64.dmg` from GitHub Releases.
 2. Open the DMG and drag `Skill Repo Tracker.app` into `/Applications`.
 3. On first launch, macOS may block the app because it is ad-hoc signed. Control-click the app in Finder, choose Open, then confirm Open.
 4. If it is still blocked, open System Settings -> Privacy & Security and choose Open Anyway for Skill Repo Tracker.

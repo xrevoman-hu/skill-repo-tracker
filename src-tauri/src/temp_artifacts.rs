@@ -143,7 +143,16 @@ struct TempArtifactRecord {
     quarantined_at_unix: Option<i64>,
     last_error: Option<String>,
 }
-
+struct NewTempArtifactRecord<'a> {
+    id: &'a str,
+    kind: TempArtifactKind,
+    root: &'a Path,
+    temp_path: &'a Path,
+    original_path: &'a Path,
+    destination: &'a Path,
+    state: TempArtifactState,
+    now_unix: i64,
+}
 #[derive(Clone)]
 pub(crate) struct TempArtifactRegistry {
     connection: Arc<Mutex<Connection>>,
@@ -219,17 +228,7 @@ impl TempArtifactRegistry {
         })
     }
 
-    fn insert_record(
-        &self,
-        id: &str,
-        kind: TempArtifactKind,
-        root: &Path,
-        temp_path: &Path,
-        original_path: &Path,
-        destination: &Path,
-        state: TempArtifactState,
-        now_unix: i64,
-    ) -> TempResult<()> {
+    fn insert_record(&self, record: NewTempArtifactRecord<'_>) -> TempResult<()> {
         self.with_connection(|connection| {
             connection.execute(
                 "INSERT INTO temp_artifacts
@@ -238,14 +237,14 @@ impl TempArtifactRegistry {
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8,
                          CASE WHEN ?7 = 'quarantined' THEN ?8 ELSE NULL END)",
                 params![
-                    id,
-                    kind.as_str(),
-                    root.to_string_lossy(),
-                    temp_path.to_string_lossy(),
-                    original_path.to_string_lossy(),
-                    destination.to_string_lossy(),
-                    state.as_str(),
-                    now_unix,
+                    record.id,
+                    record.kind.as_str(),
+                    record.root.to_string_lossy(),
+                    record.temp_path.to_string_lossy(),
+                    record.original_path.to_string_lossy(),
+                    record.destination.to_string_lossy(),
+                    record.state.as_str(),
+                    record.now_unix,
                 ],
             )?;
             Ok(())
@@ -330,16 +329,16 @@ impl TempArtifactRegistry {
             });
         }
         let id = unique_operation_id("legacy-temp");
-        self.insert_record(
-            &id,
-            legacy_kind,
+        self.insert_record(NewTempArtifactRecord {
+            id: &id,
+            kind: legacy_kind,
             root,
-            &quarantine_path,
+            temp_path: &quarantine_path,
             original_path,
-            Path::new(""),
-            TempArtifactState::Quarantined,
+            destination: Path::new(""),
+            state: TempArtifactState::Quarantined,
             now_unix,
-        )
+        })
     }
 
     fn quarantined_records(&self) -> TempResult<Vec<TempArtifactRecord>> {
@@ -453,16 +452,16 @@ impl TempArtifactGuard {
             match fs::create_dir(&path) {
                 Ok(()) => {
                     let now = system_time_seconds(SystemTime::now());
-                    if let Err(error) = registry.insert_record(
-                        &id,
+                    if let Err(error) = registry.insert_record(NewTempArtifactRecord {
+                        id: &id,
                         kind,
-                        &canonical_root,
-                        &path,
-                        &path,
-                        &destination,
-                        TempArtifactState::Building,
-                        now,
-                    ) {
+                        root: &canonical_root,
+                        temp_path: &path,
+                        original_path: &path,
+                        destination: &destination,
+                        state: TempArtifactState::Building,
+                        now_unix: now,
+                    }) {
                         let _ = fs::remove_dir(&path);
                         return Err(error);
                     }
@@ -691,6 +690,7 @@ impl FilesystemMutationLock {
     fn open_file(&self) -> io::Result<File> {
         OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&self.path)
@@ -1345,7 +1345,7 @@ mod tests {
         let registry = TempArtifactRegistry::open(&sandbox.path().join("registry.sqlite")).unwrap();
         let report = cleanup_stale_temp_artifacts(CleanupRequest {
             registry: &registry,
-            roots: &[root.clone()],
+            roots: std::slice::from_ref(&root),
             quarantine_root: &quarantine,
             now: UNIX_EPOCH + Duration::from_secs(now_seconds as u64),
             stale_after: Duration::from_secs(24 * 60 * 60),
@@ -1415,7 +1415,7 @@ mod tests {
         let registry = TempArtifactRegistry::open(&sandbox.path().join("registry.sqlite")).unwrap();
         let report = cleanup_stale_temp_artifacts(CleanupRequest {
             registry: &registry,
-            roots: &[root.clone()],
+            roots: std::slice::from_ref(&root),
             quarantine_root: &quarantine,
             now: UNIX_EPOCH + Duration::from_secs(now_seconds as u64),
             stale_after: Duration::from_secs(24 * 60 * 60),
@@ -1539,7 +1539,7 @@ mod tests {
         let registry = TempArtifactRegistry::open(&sandbox.path().join("registry.sqlite")).unwrap();
         let report = cleanup_stale_temp_artifacts(CleanupRequest {
             registry: &registry,
-            roots: &[configured_root.clone()],
+            roots: std::slice::from_ref(&configured_root),
             quarantine_root: &quarantine,
             now: UNIX_EPOCH + Duration::from_secs(now_seconds as u64),
             stale_after: Duration::from_secs(24 * 60 * 60),
@@ -1654,7 +1654,7 @@ mod tests {
         let quarantine = sandbox.path().join("quarantine");
         let report = cleanup_stale_temp_artifacts(CleanupRequest {
             registry: &registry,
-            roots: &[root.clone()],
+            roots: std::slice::from_ref(&root),
             quarantine_root: &quarantine,
             now: UNIX_EPOCH + Duration::from_secs(now_seconds as u64),
             stale_after: Duration::from_secs(24 * 60 * 60),

@@ -1,20 +1,37 @@
 import { useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type {
+  ButtonHTMLAttributes,
+  Dispatch,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+  SetStateAction,
+} from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { BookOpenText } from "lucide-react";
 import { api, isDesktopRuntime, localizedApiErrorMessage } from "./api";
 import type {
+  AppSettings,
+  AppMetadata,
+  AppUpdateCheck,
+  DirectoryValidation,
+  GithubPreview,
   GitHubAccount,
   GitHubRepository,
+  MigrationPackageSummary,
+  PluginDetail,
   PluginSkillSummary,
+  RepositoryReadme,
   SkillDetail,
   SkillPluginReference,
   SkillUpdateConflict,
+  SystemBrowser,
   UiPlugin,
   UiRepository,
   UiSkill,
   UiTask,
 } from "./api";
+import { DemoAppService, TauriAppService } from "./appService";
+import type { AppService } from "./appService";
 import { GitHubWorkbench } from "./GitHubWorkbench";
 import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
 import { PluginInspector, PluginsView } from "./PluginsView";
@@ -30,14 +47,27 @@ import {
   togglePageSelection,
 } from "./repositoryPagination";
 import { refreshStaleSkillConflict } from "./skillConflictRefresh";
+import { latestRepositoryCheck } from "./repositoryFreshness";
+import {
+  createForegroundSchedule,
+  createTaskCoordinator,
+  settleCoordinatedTask,
+} from "./taskCoordinator";
+import { createWorkspaceController } from "./workspaceController";
 
 type RepositorySort = {
   key: "name" | "addedAt";
   direction: "asc" | "desc";
 };
 
+type Language = "zh" | "en";
+type Theme = "light" | "dark";
+type Density = "comfortable" | "compact";
+type MigrationConflictStrategy = "keep-local" | "overwrite" | "duplicate";
+type Translate = (key: string) => string;
+
 type RepositoryModal = {
-  type: string;
+  type: "backup";
   mode?: string;
   repoIds?: string[];
 };
@@ -70,12 +100,7 @@ type RepositoriesViewProps = {
   t: (key: string) => string;
 };
 
-type SyncTarget = {
-  id: string;
-  label: string;
-  path: string;
-  exists?: boolean;
-};
+type SyncTarget = import("./api").SyncTarget;
 
 type SkillSort = {
   key: "name" | "createdAt";
@@ -83,9 +108,79 @@ type SkillSort = {
 };
 
 type SkillModal = {
-  type: string;
+  type: "delete-skill";
   skillId?: string;
 };
+
+type AppModal =
+  | RepositoryModal
+  | SkillModal
+  | { type: "add" }
+  | { type: "github-account-token" }
+  | { type: "skill-conflict"; skillId: string }
+  | { type: "settings" }
+  | { type: "browser-choice"; url: string; browsers: SystemBrowser[] }
+  | { type: "github-preview"; url: string };
+
+type DirectoryStatus = Record<string, DirectoryValidation>;
+
+type NewRepositoryDraft = {
+  url: string;
+  ref: string;
+  note: string;
+};
+
+type PreferencesProps = {
+  language: Language;
+  setLanguage: Dispatch<SetStateAction<Language>>;
+  theme: Theme;
+  setTheme: Dispatch<SetStateAction<Theme>>;
+  density: Density;
+  setDensity: Dispatch<SetStateAction<Density>>;
+  backupRoot: string;
+  setBackupRoot: Dispatch<SetStateAction<string>>;
+  skillsRoot: string;
+  setSkillsRoot: Dispatch<SetStateAction<string>>;
+  defaultSyncTargets: string[];
+  setDefaultSyncTargets: Dispatch<SetStateAction<string[]>>;
+  availableSyncTargets: SyncTarget[];
+  syncBackupKeep: number;
+  setSyncBackupKeep: Dispatch<SetStateAction<number>>;
+  autoCheckInterval: number;
+  setAutoCheckInterval: Dispatch<SetStateAction<number>>;
+  autoCheckEnabled: boolean;
+  setAutoCheckEnabled: Dispatch<SetStateAction<boolean>>;
+  autoBackupEnabled: boolean;
+  setAutoBackupEnabled: Dispatch<SetStateAction<boolean>>;
+  githubTokenConfigured: boolean;
+  githubTokenStatus: string;
+  githubTokenLastVerified: string | null;
+  nextAutoCheckAt: Date | null;
+  nextAutoBackupAt: Date | null;
+  directoryStatus: DirectoryStatus;
+  migrationStatus: string;
+  migrationIncludePrompts: boolean;
+  setMigrationIncludePrompts: Dispatch<SetStateAction<boolean>>;
+  migrationConflictStrategy: MigrationConflictStrategy;
+  setMigrationConflictStrategy: Dispatch<SetStateAction<MigrationConflictStrategy>>;
+  appMetadata: AppMetadata;
+  checkForUpdates: () => Promise<AppUpdateCheck>;
+  chooseDirectory: (kind: "backupRoot" | "skillsRoot") => void | Promise<void>;
+  validateDirectory: (kind: string, path: string) => void | Promise<void>;
+  syncInstalledSkills: () => void | Promise<void>;
+  persistSettings: () => void | Promise<void>;
+  showToast: (message: string) => void;
+  exportMigrationPackage: () => void | Promise<void>;
+  importMigrationPackage: () => void | Promise<void>;
+  openGitHubWorkbench: () => void;
+  desktopRuntime: boolean;
+  compact?: boolean;
+  isPending: (key: string) => boolean;
+  t: Translate;
+};
+
+type NoteTarget = "repository" | "githubRepository" | "skill" | "plugin";
+type NoteItem = UiRepository | GitHubRepository | UiSkill | UiPlugin;
 
 type SkillsViewProps = {
   skills: UiSkill[];
@@ -164,604 +259,6 @@ type OptimisticTaskInput = Pick<UiTask, "kind" | "target"> &
 
 type DemoTaskInput = Omit<UiTask, "id">;
 
-const initialRepos: UiRepository[] = [
-  {
-    id: "content",
-    name: "example-org/content-skill-kit",
-    type: "skill repo",
-    ref: "main",
-    skills: 3,
-    remoteSha: "a1b2c3d",
-    lastBackupSha: "7f8e9ab",
-    lastChecked: "Jun 14 09:32",
-    backupStatus: "updated-not-backed-up",
-    checkStatus: "success",
-    url: "https://github.com/example-org/content-skill-kit",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/example-org/content-skill-kit",
-    snapshotTime: "2026-06-12 18:03",
-    recognizedSkills: [
-      { name: "content-skill-core", version: "v1.2.0" },
-      { name: "content-skill-plugins", version: "v1.1.1" },
-      { name: "content-skill-utils", version: "v0.9.3" },
-    ],
-    recognizedPlugins: [
-      {
-        id: "plugin-content-marketplace",
-        name: "content-skill-kit",
-        kind: "codex-marketplace",
-        installCommand: "/plugin install content-skill-kit@content-skill-kit",
-        skillCount: 1,
-      },
-      {
-        id: "plugin-content-clawhub",
-        name: "content-skill-core",
-        kind: "clawhub-skill",
-        installCommand: "clawhub install content-skill-core",
-        skillCount: 1,
-      },
-    ],
-  },
-  {
-    id: "cookbook",
-    name: "openai/openai-cookbook",
-    type: "generic repo",
-    ref: "main",
-    skills: 0,
-    remoteSha: "e4f5g6h",
-    lastBackupSha: "e4f5g6h",
-    lastChecked: "Jun 14 09:31",
-    backupStatus: "backed-up-latest",
-    checkStatus: "success",
-    url: "https://github.com/openai/openai-cookbook",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/openai/openai-cookbook",
-    snapshotTime: "2026-06-14 09:05",
-    recognizedSkills: [],
-  },
-  {
-    id: "missing",
-    name: "example-org/missing-skill",
-    type: "unknown",
-    ref: "main",
-    skills: 0,
-    remoteSha: "unknown",
-    lastBackupSha: "none",
-    lastChecked: "Jun 14 09:30",
-    backupStatus: "check-failed",
-    checkStatus: "failed",
-    url: "https://github.com/example-org/missing-skill",
-    branch: "main",
-    backupPath: "Unavailable",
-    snapshotTime: "Never",
-    recognizedSkills: [],
-  },
-  {
-    id: "langchain",
-    name: "langchain-ai/langchain",
-    type: "skill repo",
-    ref: "main",
-    skills: 5,
-    remoteSha: "5aa7bb1",
-    lastBackupSha: "1122abc",
-    lastChecked: "Jun 14 09:28",
-    backupStatus: "updated-not-backed-up",
-    checkStatus: "success",
-    url: "https://github.com/langchain-ai/langchain",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/langchain-ai/langchain",
-    snapshotTime: "2026-06-10 12:22",
-    recognizedSkills: [
-      { name: "prompt-tooling", version: "v0.8.2" },
-      { name: "agent-recipes", version: "v0.4.0" },
-    ],
-  },
-  {
-    id: "vscode",
-    name: "microsoft/vscode",
-    type: "generic repo",
-    ref: "main",
-    skills: 0,
-    remoteSha: "0f1e2d3",
-    lastBackupSha: "0f1e2d3",
-    lastChecked: "Jun 14 09:27",
-    backupStatus: "backed-up-latest",
-    checkStatus: "success",
-    url: "https://github.com/microsoft/vscode",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/microsoft/vscode",
-    snapshotTime: "2026-06-14 08:11",
-    recognizedSkills: [],
-  },
-  {
-    id: "spec",
-    name: "example-org/spec-writer-skill",
-    type: "skill repo",
-    ref: "main",
-    skills: 1,
-    remoteSha: "08ff12a",
-    lastBackupSha: "none",
-    lastChecked: "Jun 14 09:24",
-    backupStatus: "never-backed-up",
-    checkStatus: "success",
-    url: "https://github.com/example-org/spec-writer-skill",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/example-org/spec-writer-skill",
-    snapshotTime: "Never",
-    recognizedSkills: [{ name: "spec-writer-skill", version: "v0.2.1" }],
-  },
-  {
-    id: "linux",
-    name: "torvalds/linux",
-    type: "generic repo",
-    ref: "master",
-    skills: 0,
-    remoteSha: "9abc8de",
-    lastBackupSha: "9abc8de",
-    lastChecked: "Jun 14 09:21",
-    backupStatus: "backed-up-latest",
-    checkStatus: "success",
-    url: "https://github.com/torvalds/linux",
-    branch: "master",
-    backupPath: "~/SkillRepoBackups/torvalds/linux",
-    snapshotTime: "2026-06-14 07:30",
-    recognizedSkills: [],
-  },
-  {
-    id: "anthropic",
-    name: "example-org/research-cookbook",
-    type: "generic repo",
-    ref: "main",
-    skills: 0,
-    remoteSha: "c0ffee1",
-    lastBackupSha: "c0ffee1",
-    lastChecked: "Jun 14 09:20",
-    backupStatus: "backed-up-latest",
-    checkStatus: "success",
-    url: "https://github.com/example-org/research-cookbook",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/example-org/research-cookbook",
-    snapshotTime: "2026-06-13 16:44",
-    recognizedSkills: [],
-  },
-  {
-    id: "flask",
-    name: "pallets/flask",
-    type: "skill repo",
-    ref: "main",
-    skills: 1,
-    remoteSha: "12ab34c",
-    lastBackupSha: "0a9b111",
-    lastChecked: "Jun 14 09:19",
-    backupStatus: "updated-not-backed-up",
-    checkStatus: "success",
-    url: "https://github.com/pallets/flask",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/pallets/flask",
-    snapshotTime: "2026-06-09 12:30",
-    recognizedSkills: [{ name: "flask-helper", version: "v0.3.1" }],
-  },
-  {
-    id: "fastapi",
-    name: "fastapi/fastapi",
-    type: "skill repo",
-    ref: "main",
-    skills: 2,
-    remoteSha: "89de012",
-    lastBackupSha: "89de012",
-    lastChecked: "Jun 14 09:18",
-    backupStatus: "backed-up-latest",
-    checkStatus: "success",
-    url: "https://github.com/fastapi/fastapi",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/fastapi/fastapi",
-    snapshotTime: "2026-06-14 06:18",
-    recognizedSkills: [
-      { name: "api-docs-skill", version: "v1.0.0" },
-      { name: "routing-helper", version: "v0.4.5" },
-    ],
-  },
-  {
-    id: "requests",
-    name: "psf/requests",
-    type: "generic repo",
-    ref: "main",
-    skills: 0,
-    remoteSha: "345f678",
-    lastBackupSha: "345f678",
-    lastChecked: "Jun 14 09:17",
-    backupStatus: "backed-up-latest",
-    checkStatus: "success",
-    url: "https://github.com/psf/requests",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/psf/requests",
-    snapshotTime: "2026-06-13 19:10",
-    recognizedSkills: [],
-  },
-  {
-    id: "django",
-    name: "example-org/cache-maintenance-skill",
-    type: "skill repo",
-    ref: "main",
-    skills: 1,
-    remoteSha: "6b7c8d9",
-    lastBackupSha: "2255aee",
-    lastChecked: "Jun 14 09:16",
-    backupStatus: "updated-not-backed-up",
-    checkStatus: "success",
-    url: "https://github.com/example-org/cache-maintenance-skill",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/example-org/cache-maintenance-skill",
-    snapshotTime: "2026-06-11 10:42",
-    recognizedSkills: [{ name: "redis-maintenance", version: "v0.1.8" }],
-  },
-  {
-    id: "postgresql",
-    name: "example-org/api-stack-skills",
-    type: "skill repo",
-    ref: "main",
-    skills: 4,
-    remoteSha: "abcd123",
-    lastBackupSha: "abcd123",
-    lastChecked: "Jun 14 09:15",
-    backupStatus: "backed-up-latest",
-    checkStatus: "success",
-    url: "https://github.com/example-org/api-stack-skills",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/example-org/api-stack-skills",
-    snapshotTime: "2026-06-14 03:11",
-    recognizedSkills: [{ name: "postgres-stack", version: "v0.7.2" }],
-  },
-  {
-    id: "hello",
-    name: "octocat/Hello-World",
-    type: "generic repo",
-    ref: "master",
-    skills: 0,
-    remoteSha: "1a2b3c4",
-    lastBackupSha: "1a2b3c4",
-    lastChecked: "Jun 14 09:14",
-    backupStatus: "backed-up-latest",
-    checkStatus: "success",
-    url: "https://github.com/octocat/Hello-World",
-    branch: "master",
-    backupPath: "~/SkillRepoBackups/octocat/Hello-World",
-    snapshotTime: "2026-06-10 21:00",
-    recognizedSkills: [],
-  },
-  {
-    id: "awesome",
-    name: "sindresorhus/awesome",
-    type: "generic repo",
-    ref: "main",
-    skills: 0,
-    remoteSha: "7f8e9ab",
-    lastBackupSha: "7f8e9ab",
-    lastChecked: "Jun 14 09:13",
-    backupStatus: "backed-up-latest",
-    checkStatus: "success",
-    url: "https://github.com/sindresorhus/awesome",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/sindresorhus/awesome",
-    snapshotTime: "2026-06-13 14:02",
-    recognizedSkills: [],
-  },
-  {
-    id: "local-example",
-    name: "example-org/local-skill-playground",
-    type: "skill repo",
-    ref: "main",
-    skills: 2,
-    remoteSha: "deaf999",
-    lastBackupSha: "001abba",
-    lastChecked: "Jun 14 09:12",
-    backupStatus: "updated-not-backed-up",
-    checkStatus: "success",
-    url: "https://github.com/example-org/local-skill-playground",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/example-org/local-skill-playground",
-    snapshotTime: "2026-06-07 11:58",
-    recognizedSkills: [{ name: "example-skill", version: "v0.1.0" }],
-  },
-  {
-    id: "archived-example",
-    name: "example-org/archived-skill-repo",
-    type: "unknown",
-    ref: "main",
-    skills: 0,
-    remoteSha: "unknown",
-    lastBackupSha: "none",
-    lastChecked: "Jun 14 09:11",
-    backupStatus: "check-failed",
-    checkStatus: "failed",
-    url: "https://github.com/example-org/archived-skill-repo",
-    branch: "main",
-    backupPath: "Unavailable",
-    snapshotTime: "Never",
-    recognizedSkills: [],
-  },
-  {
-    id: "ml-notes",
-    name: "example-org/ml-notes-skill",
-    type: "skill repo",
-    ref: "main",
-    skills: 3,
-    remoteSha: "b16b00b",
-    lastBackupSha: "b16b00b",
-    lastChecked: "Jun 14 09:10",
-    backupStatus: "backed-up-latest",
-    checkStatus: "success",
-    url: "https://github.com/example-org/ml-notes-skill",
-    branch: "main",
-    backupPath: "~/SkillRepoBackups/example-org/ml-notes-skill",
-    snapshotTime: "2026-06-14 05:46",
-    recognizedSkills: [{ name: "ml-notes-reader", version: "v2.0.0" }],
-  },
-].map((repository) => ({ ...repository, sourceType: "github" }));
-
-const initialSkills: UiSkill[] = [
-  {
-    id: "prd",
-    repoId: "spec",
-    name: "spec-writer-skill",
-    description: "Generate AI-implementable product specification documents.",
-    repo: "example-org/spec-writer-skill",
-    path: "skills/spec-writer-skill",
-    ref: "main",
-    localVersion: "08aa901",
-    remoteVersion: "08ff12a",
-    status: "update-conflict",
-    installed: true,
-    installPath: "~/SkillRepoTracker/skills/spec-writer-skill",
-    updatedAt: "2026-06-10 18:20",
-  },
-  {
-    id: "source",
-    repoId: "source",
-    name: "source-reviewer-skill",
-    description: "Review source credibility and evidence quality.",
-    repo: "example-org/source-reviewer-skill",
-    path: ".",
-    ref: "main",
-    localVersion: "61cc2bd",
-    remoteVersion: "61cc2bd",
-    status: "installed-latest",
-    installed: true,
-    updatedAt: "2026-06-14 08:21",
-  },
-  {
-    id: "content-core",
-    repoId: "content",
-    name: "content-skill-core",
-    description: "Core content studio workflow Skill.",
-    repo: "example-org/content-skill-kit",
-    path: "skills/content-skill-core",
-    ref: "main",
-    localVersion: "7f8e9ab",
-    remoteVersion: "a1b2c3d",
-    status: "update-available",
-    installed: true,
-    updatedAt: "2026-06-12 09:00",
-    plugins: [
-      {
-        id: "plugin-content-marketplace",
-        name: "content-skill-kit",
-        kind: "codex-marketplace",
-        installCommand: "/plugin install content-skill-kit@content-skill-kit",
-      },
-      {
-        id: "plugin-content-clawhub",
-        name: "content-skill-core",
-        kind: "clawhub-skill",
-        installCommand: "clawhub install content-skill-core",
-      },
-    ],
-  },
-  {
-    id: "scene",
-    repoId: "scene",
-    name: "scene-director-skill",
-    description: "Stage scene design prompts and direction notes.",
-    repo: "example-org/scene-director-skill",
-    path: ".",
-    ref: "main",
-    localVersion: "not installed",
-    remoteVersion: "e4f9912",
-    status: "not-installed",
-    installed: false,
-    updatedAt: "Never",
-  },
-  {
-    id: "broken",
-    repoId: "missing",
-    name: "missing-skill",
-    description: "Source repository cannot be reached.",
-    repo: "example-org/missing-skill",
-    path: "skills/missing",
-    ref: "main",
-    localVersion: "2bba019",
-    remoteVersion: "unknown",
-    status: "source-unavailable",
-    installed: true,
-    updatedAt: "2026-06-01 11:34",
-  },
-];
-
-const initialPlugins: UiPlugin[] = [
-  {
-    id: "plugin-content-marketplace",
-    repoId: "content",
-    repoName: "example-org/content-skill-kit",
-    name: "content-skill-kit",
-    description: "Codex plugin marketplace entry for the content skill kit.",
-    kind: "codex-marketplace",
-    installCommand: "/plugin install content-skill-kit@content-skill-kit",
-    updateCommand: null,
-    sourcePath: "README.md",
-    sourceExcerpt: "/plugin marketplace add example-org/content-skill-kit\n/plugin install content-skill-kit@content-skill-kit",
-    status: "detected",
-    skillCount: 1,
-    detectedSha: "a1b2c3d",
-    createdAt: "2026-06-14 10:18",
-    updatedAt: "2026-06-14 10:18",
-    note: "",
-    linkedSkills: [
-      {
-        id: "content-core",
-        name: "content-skill-core",
-        path: "skills/content-skill-core",
-        version: "a1b2c3d",
-        status: "update-available",
-      },
-    ],
-  },
-  {
-    id: "plugin-content-clawhub",
-    repoId: "content",
-    repoName: "example-org/content-skill-kit",
-    name: "content-skill-core",
-    description: "ClawHub single-Skill install entry.",
-    kind: "clawhub-skill",
-    installCommand: "clawhub install content-skill-core",
-    updateCommand: null,
-    sourcePath: "README.md",
-    sourceExcerpt: "clawhub install content-skill-core",
-    status: "detected",
-    skillCount: 1,
-    detectedSha: "a1b2c3d",
-    createdAt: "2026-06-14 10:18",
-    updatedAt: "2026-06-14 10:18",
-    note: "",
-    linkedSkills: [
-      {
-        id: "content-core",
-        name: "content-skill-core",
-        path: "skills/content-skill-core",
-        version: "a1b2c3d",
-        status: "update-available",
-      },
-    ],
-  },
-];
-
-const initialTasks: UiTask[] = [
-  {
-    id: "backup-213012",
-    kind: "Backup repositories",
-    target: "Updated repositories",
-    progress: "7 / 12",
-    status: "partial-success",
-    summary: "7 success, 1 failed, 4 queued",
-    retryable: false,
-    log: [
-      "refresh remote state for 17 repositories",
-      "skip example-org/missing-skill because check failed",
-      "download example-org__content-skill-kit__main__a1b2c3d.zip",
-      "compute sha256: 19a6...4de1",
-      "write manifest.json",
-      "update last_backup_sha for successful items",
-    ],
-  },
-  {
-    id: "check-0932",
-    kind: "Check remote state",
-    target: "All repositories",
-    progress: "17 / 17",
-    status: "success",
-    summary: "15 success, 2 failed",
-    retryable: false,
-    log: [
-      "resolve default refs",
-      "record remote_head_sha for public repositories",
-      "keep previous SHA for failed repositories",
-    ],
-  },
-  {
-    id: "skill-0831",
-    kind: "Update Skill",
-    target: "spec-writer-skill",
-    progress: "0 / 1",
-    status: "waiting-user",
-    summary: "waiting for user to update local Skill",
-    retryable: false,
-    log: [
-      "calculate installed_skill_hash",
-      "local content differs from installation record",
-      "waiting for user-managed update with Agent tools",
-    ],
-  },
-  {
-    id: "interrupted",
-    kind: "Backup repositories",
-    target: "Previous session",
-    progress: "4 / 9",
-    status: "interrupted",
-    summary: "app closed during ZIP download",
-    retryable: false,
-    log: ["task interrupted before manifest write", "last_backup_sha not updated"],
-  },
-];
-
-const initialGithubAccounts: GitHubAccount[] = [
-  {
-    id: "github:demo",
-    login: "demo-user",
-    displayName: "Demo user",
-    avatarUrl: null,
-    status: "verified",
-    scopes: "repo, user, starring",
-    lastVerified: "2026-06-30 10:00",
-  },
-];
-
-const initialGithubRepositories: GitHubRepository[] = [
-  {
-    accountId: "github:demo",
-    accountLogin: "demo-user",
-    owner: "example-org",
-    repo: "private-skill-kit",
-    fullName: "example-org/private-skill-kit",
-    htmlUrl: "https://github.com/example-org/private-skill-kit",
-    description: "Private Skill source repository with installable workflows.",
-    visibility: "private",
-    private: true,
-    fork: false,
-    archived: false,
-    defaultBranch: "main",
-    language: "TypeScript",
-    stargazersCount: 12,
-    starred: true,
-    trackedRepoId: null,
-    pushedAt: "2026-06-29 18:00",
-    updatedAt: "2026-06-29 18:00",
-    lastRefreshed: "2026-06-30 10:00",
-    permissions: "pull, push",
-    note: "",
-  },
-  {
-    accountId: "github:demo",
-    accountLogin: "demo-user",
-    owner: "openai",
-    repo: "openai-cookbook",
-    fullName: "openai/openai-cookbook",
-    htmlUrl: "https://github.com/openai/openai-cookbook",
-    description: "Examples and guides for building with OpenAI.",
-    visibility: "public",
-    private: false,
-    fork: false,
-    archived: false,
-    defaultBranch: "main",
-    language: "MDX",
-    stargazersCount: 72000,
-    starred: true,
-    trackedRepoId: "cookbook",
-    pushedAt: "2026-06-28 11:00",
-    updatedAt: "2026-06-28 11:00",
-    lastRefreshed: "2026-06-30 10:00",
-    permissions: "pull",
-    note: "",
-  },
-];
 
 const navItems = [
   { id: "github", labelKey: "nav.github" },
@@ -1030,12 +527,9 @@ const COPY = {
     skillsRootHelp: "用于安装、扫描和管理本地 Skills；工具目录只是可选发布目标。",
     helpBackupRoot: "源码 ZIP、manifest.json 和 task-log.jsonl 会写入这个目录。",
     helpSkillsRoot: "安装、扫描和管理本地 Skills 的独立主库目录。",
-    helpMetadataConcurrency: "同时检测远端仓库元数据的数量。数值越高越快，也更容易触发限流。",
-    helpRetryCount: "检测、备份或更新失败后自动重试的次数。",
     helpAutoCheckInterval: "应用打开期间自动检测远端 SHA 的间隔。",
     helpScheduleForegroundOnly: "定时任务只在 App 打开时运行，关闭后不会后台常驻。",
     helpAutoBackupUpdatedOnly: "启用后只备份“有更新未备份”的仓库，不会备份所有仓库。",
-    helpCleanupKeep: "保留最近多少份备份历史，后续清理策略会按这个数值执行。",
     helpGithubTokenStorage: "Token 只保存到系统安全存储，不写 SQLite、manifest 或任务日志。",
     help: "说明",
     githubRateLimitHelp: "GitHub 探测会优先使用仓库绑定账号；没有绑定时使用已验证账号兜底。未认证请求通常只有 60 次/小时，认证请求通常 5,000 次/小时。超限后请等到 x-ratelimit-reset 指定时间再请求。如果仍看到 60 次/小时，说明这次请求实际落到了匿名配额，请重新验证 token 或检查系统安全存储。",
@@ -1043,8 +537,6 @@ const COPY = {
     directoryReady: "目录可用",
     directoryInvalid: "目录不可用",
     taskBehavior: "任务行为",
-    metadataConcurrency: "元数据并发",
-    retryCount: "失败重试次数",
     autoCheckInterval: "自动检测间隔",
     githubAuthentication: "GitHub 认证",
     p1Disabled: "P1 未启用",
@@ -1073,7 +565,6 @@ const COPY = {
     scheduleSavedOnly: "应用打开期间按计划执行；关闭 App 后不会后台常驻运行。",
     nextRun: "下次执行",
     autoCheckForeground: "自动检测：应用打开时每",
-    cleanupKeep: "备份历史保留数量",
     aboutTitle: "关于",
     aboutVersion: "版本",
     checkForUpdates: "检查更新",
@@ -1479,12 +970,9 @@ const COPY = {
     skillsRootHelp: "Installs, scans, and manages local Skills; tool directories are optional publish targets.",
     helpBackupRoot: "Source ZIP files, manifest.json, and task-log.jsonl are written here.",
     helpSkillsRoot: "Independent library folder for installing, scanning, and managing local Skills.",
-    helpMetadataConcurrency: "Number of remote repository metadata checks to run at once. Higher is faster but can hit rate limits.",
-    helpRetryCount: "Automatic retry count after detection, backup, or update failures.",
     helpAutoCheckInterval: "Interval for checking remote SHA while the app is open.",
     helpScheduleForegroundOnly: "Schedules run only while the app is open; they do not continue after quitting.",
     helpAutoBackupUpdatedOnly: "When enabled, only repositories with unbacked updates are backed up.",
-    helpCleanupKeep: "Number of recent backup history items to keep for future cleanup.",
     helpGithubTokenStorage: "Tokens are stored only in the secure system store, never in SQLite, manifests, or task logs.",
     help: "Help",
     githubRateLimitHelp: "GitHub checks prefer the repository-bound account and fall back to a verified account when none is bound. Unauthenticated requests are usually limited to 60 per hour; authenticated requests are usually 5,000 per hour. After a limit is exceeded, wait until the x-ratelimit-reset time before trying again. If you still see a 60/hour limit, this request actually used the anonymous quota; re-verify the token or check the secure system store.",
@@ -1492,8 +980,6 @@ const COPY = {
     directoryReady: "Directory ready",
     directoryInvalid: "Directory unavailable",
     taskBehavior: "Task behavior",
-    metadataConcurrency: "Metadata concurrency",
-    retryCount: "Retry count",
     autoCheckInterval: "Auto-check interval",
     githubAuthentication: "GitHub authentication",
     p1Disabled: "P1 disabled",
@@ -1522,7 +1008,6 @@ const COPY = {
     scheduleSavedOnly: "Runs while the app is open. It does not continue after the app is closed.",
     nextRun: "Next run",
     autoCheckForeground: "Auto-check: while open every",
-    cleanupKeep: "Backup history retention",
     aboutTitle: "About",
     aboutVersion: "Version",
     checkForUpdates: "Check for Updates",
@@ -1742,8 +1227,10 @@ const STATUS_LABELS = {
   },
 };
 
-export function getCopy(language, key) {
-  return COPY[language]?.[key] || COPY.en[key] || key;
+export function getCopy(language: string, key: string) {
+  const localized = COPY[language === "zh" ? "zh" : "en"] as Record<string, string>;
+  const english = COPY.en as Record<string, string>;
+  return localized[key] || english[key] || key;
 }
 
 function formatCopy(template: string, values: Record<string, string | number>) {
@@ -1762,8 +1249,9 @@ function errorCode(error: unknown) {
   return typeof error.code === "string" ? error.code : "";
 }
 
-function statusLabel(value, language = "zh") {
-  return STATUS_LABELS[language]?.[value] || value.replaceAll("-", " ");
+function statusLabel(value: string, language = "zh") {
+  const labels = STATUS_LABELS[language === "zh" ? "zh" : "en"] as Record<string, string>;
+  return labels[value] || value.replaceAll("-", " ");
 }
 
 const SKILL_DESCRIPTION_ZH = {
@@ -1839,11 +1327,12 @@ const TASK_TEXT_ZH = {
   "complete without changing unrelated state": "完成且不改变无关状态",
 };
 
-function skillDescription(skill, language) {
-  return language === "zh" ? SKILL_DESCRIPTION_ZH[skill.id] || skill.description : skill.description;
+function skillDescription(skill: Pick<UiSkill, "id" | "description">, language: string) {
+  const descriptions = SKILL_DESCRIPTION_ZH as Record<string, string>;
+  return language === "zh" ? descriptions[skill.id] || skill.description : skill.description;
 }
 
-function taskText(text, language) {
+function taskText(text: string, language: string): string {
   if (language !== "zh" || !text) return text;
   const successSkipped = text.match(/^(\d+) success, (\d+) skipped$/);
   if (successSkipped) return `${successSkipped[1]} 个成功、${successSkipped[2]} 个跳过`;
@@ -1852,11 +1341,11 @@ function taskText(text, language) {
   if (text.endsWith(" retry")) return `${taskText(text.slice(0, -6), language)}重试`;
   if (text.startsWith("create ")) return text.replace(/^create /, "创建 ");
   if (text.startsWith("normalize ")) return text.replace(/^normalize /, "规范化 ");
-  return TASK_TEXT_ZH[text] || text;
+  return (TASK_TEXT_ZH as Record<string, string>)[text] || text;
 }
 
-function displayValue(value, language) {
-  if (typeof value !== "string") return value;
+function displayValue(value: unknown, language: string): string {
+  if (typeof value !== "string") return value == null ? "" : String(value);
   const maps = {
     zh: {
       "Local Skills Library": "本地 Skills 库",
@@ -1882,7 +1371,7 @@ function displayValue(value, language) {
       github_repo: "GitHub",
     },
   };
-  const mapped = maps[language]?.[value];
+  const mapped = (maps[language === "zh" ? "zh" : "en"] as Record<string, string>)[value];
   if (mapped) return mapped;
   if (language === "zh") return value.replace(/^Jun (\d{1,2}) /, "6月$1日 ");
   return value;
@@ -1897,45 +1386,49 @@ const fallbackSyncTargets: SyncTarget[] = [
   { id: "hermes", label: "Hermes", path: "~/.hermes/skills", exists: false },
 ];
 
-function syncTargetLabel(targetId, targets = fallbackSyncTargets) {
+function syncTargetLabel(targetId: string, targets: SyncTarget[] = fallbackSyncTargets) {
   return targets.find((target) => target.id === targetId)?.label || targetId;
 }
 
-function syncTargetSummary(targetIds = [], targets = fallbackSyncTargets, language = "zh") {
+function syncTargetSummary(
+  targetIds: string[] = [],
+  targets: SyncTarget[] = fallbackSyncTargets,
+  language = "zh",
+) {
   if (!targetIds.length) return getCopy(language, "syncTargetsNone");
   return targetIds.map((id) => syncTargetLabel(id, targets)).join(", ");
 }
 
-function displayRepoName(value, language = "zh") {
+function displayRepoName(value: string, language = "zh") {
   if (value === "Local Skills Library" || value === "本地 Skills 库") {
     return language === "zh" ? "本地 Skills 库" : "Local Skills Library";
   }
   return value;
 }
 
-function normalizeSearch(value) {
+function normalizeSearch(value: unknown) {
   return String(value || "").trim().toLowerCase();
 }
 
-function fuzzyMatch(values, query) {
+function fuzzyMatch(values: readonly unknown[], query: string) {
   const term = normalizeSearch(query);
   if (!term) return true;
   return values.some((value) => normalizeSearch(displayValue(value, "zh")).includes(term) || normalizeSearch(value).includes(term));
 }
 
-function compareNames(left, right) {
+function compareNames(left: unknown, right: unknown) {
   return String(left || "").localeCompare(String(right || ""), "en", {
     caseFirst: "upper",
     sensitivity: "variant",
   });
 }
 
-function sortableDate(value) {
+function sortableDate(value: unknown) {
   const normalized = String(value || "").trim();
   return normalized && normalized !== "Never" && normalized !== "-" ? normalized : "";
 }
 
-function compareDates(left, right, direction = "asc") {
+function compareDates(left: unknown, right: unknown, direction: "asc" | "desc" = "asc") {
   const leftDate = sortableDate(left);
   const rightDate = sortableDate(right);
   if (!leftDate && rightDate) return 1;
@@ -1944,28 +1437,28 @@ function compareDates(left, right, direction = "asc") {
   return direction === "asc" ? compared : -compared;
 }
 
-function sortIndicator(active, direction) {
+function sortIndicator(active: boolean, direction: "asc" | "desc") {
   if (!active) return "";
   return direction === "asc" ? " ↑" : " ↓";
 }
 
-function repositoryNameSearchValues(repo, language = "zh") {
+function repositoryNameSearchValues(repo: UiRepository, language = "zh") {
   return [repo.name, displayRepoName(repo.name, language)];
 }
 
-function repositoryContentSearchValues(repo) {
+function repositoryContentSearchValues(repo: UiRepository) {
   return [repo.note, repo.readmeSearchText];
 }
 
-function skillNameSearchValues(skill) {
+function skillNameSearchValues(skill: UiSkill) {
   return [skill.name];
 }
 
-function skillContentSearchValues(skill, sourceRepo) {
+function skillContentSearchValues(skill: UiSkill, sourceRepo?: UiRepository) {
   return [skill.note, skill.searchText, sourceRepo?.readmeSearchText];
 }
 
-function skillSourceRepoSearchValues(skill, sourceRepo, language = "zh") {
+function skillSourceRepoSearchValues(skill: UiSkill, sourceRepo?: UiRepository, language = "zh") {
   return [
     skill.repo,
     displayRepoName(skill.repo, language),
@@ -1974,26 +1467,29 @@ function skillSourceRepoSearchValues(skill, sourceRepo, language = "zh") {
   ];
 }
 
-function pluginNameSearchValues(plugin) {
+function pluginNameSearchValues(plugin: UiPlugin) {
   return [plugin.name];
 }
 
-function pluginContentSearchValues(plugin) {
+function pluginContentSearchValues(plugin: UiPlugin) {
   return [plugin.note, plugin.sourceExcerpt];
 }
 
-function githubRepositoryNoteKey(repo) {
+function githubRepositoryNoteKey(repo: GitHubRepository) {
   return `github:${String(repo.owner || "").toLowerCase()}/${String(repo.repo || "").toLowerCase()}`;
 }
 
-function trackedRepositoryNoteKey(repo) {
+function trackedRepositoryNoteKey(repo?: UiRepository | null) {
   if (repo?.sourceType === "github" && typeof repo.name === "string" && repo.name.includes("/")) {
     return `github:${repo.name.toLowerCase()}`;
   }
   return `local:${repo?.id || ""}`;
 }
 
-function noteActionKey(target, item) {
+function noteActionKey(
+  target: string,
+  item: { id?: string; accountId?: string; fullName?: string },
+) {
   if (target === "githubRepository") return `note:githubRepository:${item.accountId}:${item.fullName}`;
   if (target === "repository") return `note:repository:${item.id}`;
   if (target === "skill") return `note:skill:${item.id}`;
@@ -2001,34 +1497,39 @@ function noteActionKey(target, item) {
   return `note:${target}`;
 }
 
-function skillRepoId(skill) {
+function skillRepoId(skill: UiSkill & { repositoryId?: string }) {
   return skill.repoId || skill.repositoryId || "";
 }
 
-function sourceLabel(skill, language = "zh") {
+function sourceLabel(skill: UiSkill, language = "zh") {
   if (skill.sourceType === "installed_local") return language === "zh" ? "本地" : "Local";
   if (skill.sourceType === "local_repo") return language === "zh" ? "本地仓库" : "Local repo";
   return language === "zh" ? "GitHub" : "GitHub";
 }
 
-function versionSummary(skill, language = "zh") {
+function versionSummary(skill: UiSkill, language = "zh") {
   const localVersion = displayValue(skill.localVersion, language);
   const remoteVersion = displayValue(skill.remoteVersion, language);
   if (localVersion === remoteVersion) return localVersion;
   return `${localVersion} / ${remoteVersion}`;
 }
 
-function tokenStatusLabel(status, configured, language = "zh", t) {
+function tokenStatusLabel(
+  status: string,
+  configured: boolean,
+  language: string,
+  t: Translate,
+) {
   if (!configured || status === "not_configured") return t("tokenNotConfigured");
   const keyByStatus = {
     saved_unverified: "tokenSavedUnverified",
     verified: "tokenVerified",
     invalid: "tokenInvalid",
   };
-  return t(keyByStatus[status] || "tokenConfigured");
+  return t((keyByStatus as Record<string, string>)[status] || "tokenConfigured");
 }
 
-function formatNextRun(value, language = "zh") {
+function formatNextRun(value: Date | null, language = "zh") {
   if (!value) return language === "zh" ? "未启用" : "disabled";
   return new Intl.DateTimeFormat(language === "zh" ? "zh-CN" : "en-US", {
     hour: "2-digit",
@@ -2036,23 +1537,23 @@ function formatNextRun(value, language = "zh") {
   }).format(value);
 }
 
-function manifestShaPreview(seed) {
+function manifestShaPreview(seed?: string | null) {
   if (!seed || seed === "none" || seed === "unknown") return "unknown";
   return `${seed.padEnd(12, "0").slice(0, 12)}...${seed.padStart(8, "0").slice(-8)}`;
 }
 
-function initialParam(name, fallback, allowed) {
+function initialParam<T extends string>(name: string, fallback: T, allowed: readonly T[]): T {
   if (typeof window === "undefined") return fallback;
   const value = new URLSearchParams(window.location.search).get(name);
-  return allowed.includes(value) ? value : fallback;
+  return value && allowed.includes(value as T) ? value as T : fallback;
 }
 
-function initialFreeParam(name, fallback = "") {
+function initialFreeParam(name: string, fallback = "") {
   if (typeof window === "undefined") return fallback;
   return new URLSearchParams(window.location.search).get(name) || fallback;
 }
 
-function parseRepoName(raw) {
+function parseRepoName(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) return "example/new-repository";
   const cleaned = trimmed
@@ -2064,7 +1565,7 @@ function parseRepoName(raw) {
   return cleaned.includes("/") ? cleaned : `example-org/${cleaned}`;
 }
 
-function latestGithubRateLimitResetFromTasks(tasks: any[] = []) {
+function latestGithubRateLimitResetFromTasks(tasks: UiTask[] = []) {
   for (const task of tasks) {
     for (const line of task.log || []) {
       const match = String(line).match(/reset_at=([^;]+)/);
@@ -2079,6 +1580,12 @@ function githubRateLimitHelpText(t: (key: string) => string, resetAt: string) {
   return resetAt ? `${base} ${t("githubRateLimitResetAt")}: ${resetAt}` : base;
 }
 
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: string;
+  pending?: boolean;
+  pendingLabel?: ReactNode;
+};
+
 function Button({
   children,
   variant = "secondary",
@@ -2089,7 +1596,7 @@ function Button({
   pendingLabel,
   type = "button",
   ...buttonProps
-}: any) {
+}: ButtonProps) {
   return (
     <button
       {...buttonProps}
@@ -2111,7 +1618,11 @@ function HelpTip({ text, label = "Help" }: { text: string; label?: string }) {
   );
 }
 
-function Tag({ value, tone, language = "zh" }: any) {
+function Tag({ value, tone, language = "zh" }: {
+  value: string;
+  tone?: string;
+  language?: string;
+}) {
   return <span className={`tag ${tone || value}`}>{statusLabel(value, language)}</span>;
 }
 
@@ -2195,22 +1706,34 @@ function Modal({ title, children, footer, onClose, closeLabel = "Close" }: Modal
   );
 }
 
-export function App() {
+type AppProps = {
+  appService?: AppService;
+};
+
+export function App({ appService: injectedAppService }: AppProps = {}) {
   const demoMode = initialParam("demo", "default", ["default", "empty-plugins"]);
   const demoFocus = initialParam("focus", "none", ["none", "plugin-row"]);
   const initialTab = initialParam("tab", "repositories", navItems.map((item) => item.id));
+  const detectedDesktopRuntime = isDesktopRuntime();
+  const appService = useMemo(
+    () => injectedAppService ?? (detectedDesktopRuntime
+      ? new TauriAppService()
+      : new DemoAppService({ mode: demoMode })),
+    [demoMode, detectedDesktopRuntime, injectedAppService],
+  );
+  const desktopRuntime = appService.runtime === "tauri";
   const [activeTab, setActiveTab] = useState(initialTab);
   const [promptDirty, setPromptDirty] = useState(false);
   const [promptCounts, setPromptCounts] = useState({ prompts: 0, tags: 0, filtered: 0 });
   const promptLeaveGuard = useRef<((context?: PromptLeaveContext) => Promise<boolean>) | null>(null);
-  const [language, setLanguage] = useState(() => initialParam("lang", "zh", ["zh", "en"]));
-  const [theme, setTheme] = useState(() => initialParam("theme", "light", ["light", "dark"]));
-  const [density, setDensity] = useState(() => initialParam("density", "comfortable", ["comfortable", "compact"]));
-  const [repositories, setRepositories] = useState(initialRepos);
-  const [skills, setSkills] = useState(initialSkills);
-  const [plugins, setPlugins] = useState(() => (demoMode === "empty-plugins" ? [] : initialPlugins));
-  const [tasks, setTasks] = useState(initialTasks);
-  const [selectedRepoId, setSelectedRepoId] = useState("content");
+  const [language, setLanguage] = useState<Language>(() => initialParam("lang", "zh", ["zh", "en"] as const));
+  const [theme, setTheme] = useState<Theme>(() => initialParam("theme", "light", ["light", "dark"] as const));
+  const [density, setDensity] = useState<Density>(() => initialParam("density", "comfortable", ["comfortable", "compact"] as const));
+  const [repositories, setRepositories] = useState<UiRepository[]>([]);
+  const [skills, setSkills] = useState<UiSkill[]>([]);
+  const [plugins, setPlugins] = useState<UiPlugin[]>([]);
+  const [tasks, setTasks] = useState<UiTask[]>([]);
+  const [selectedRepoId, setSelectedRepoId] = useState("");
   const [inspectorRepoId, setInspectorRepoId] = useState(() => initialFreeParam("inspectorRepo"));
   const [selectedSkillId, setSelectedSkillId] = useState(() => initialFreeParam("selectedSkill"));
   const [skillDetail, setSkillDetail] = useState<SkillDetail | null>(null);
@@ -2218,11 +1741,11 @@ export function App() {
   const [skillDetailError, setSkillDetailError] = useState("");
   const skillDetailRequestRef = useRef("");
   const [selectedPluginId, setSelectedPluginId] = useState(() => initialFreeParam("selectedPlugin"));
-  const [pluginDetail, setPluginDetail] = useState(null);
+  const [pluginDetail, setPluginDetail] = useState<PluginDetail | null>(null);
   const [pluginDetailLoading, setPluginDetailLoading] = useState(false);
   const [pluginDetailError, setPluginDetailError] = useState("");
   const pluginDetailRequestRef = useRef("");
-  const [selectedRows, setSelectedRows] = useState(["content"]);
+  const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const [repoFilter, setRepoFilter] = useState("all");
   const [repoSort, setRepoSort] = useState<RepositorySort>({ key: "name", direction: "asc" });
   const [repoPagination, dispatchRepoPagination] = useReducer(repositoryPaginationReducer, {
@@ -2243,49 +1766,65 @@ export function App() {
   const [skillContentSearch, setSkillContentSearch] = useState("");
   const [pluginSearch, setPluginSearch] = useState(() => initialFreeParam("pluginSearch"));
   const [pluginContentSearch, setPluginContentSearch] = useState("");
-  const [modal, setModal] = useState(null);
+  const [modal, setModal] = useState<AppModal | null>(null);
   const [activeSkillConflict, setActiveSkillConflict] = useState<SkillUpdateConflict | null>(null);
   const [skillConflictPendingAction, setSkillConflictPendingAction] = useState<
     "" | "open" | "verify" | "confirm"
   >("");
   const [toast, setToast] = useState("");
   const toastTimerRef = useRef<number | undefined>(undefined);
-  const [pendingActions, setPendingActions] = useState({});
+  const [pendingActions, setPendingActions] = useState<Record<string, boolean>>({});
   const [backupRoot, setBackupRoot] = useState("~/SkillRepoBackups");
+  const backupRootRef = useRef(backupRoot);
   const [skillsRoot, setSkillsRoot] = useState("~/SkillRepoTracker/skills");
-  const [defaultSyncTargets, setDefaultSyncTargets] = useState([]);
+  const [defaultSyncTargets, setDefaultSyncTargets] = useState<string[]>([]);
   const [availableSyncTargets, setAvailableSyncTargets] = useState(fallbackSyncTargets);
   const [syncBackupKeep, setSyncBackupKeep] = useState(5);
-  const [directoryStatus, setDirectoryStatus] = useState({});
-  const [concurrency, setConcurrency] = useState(5);
-  const [retryCount, setRetryCount] = useState(2);
+  const [directoryStatus, setDirectoryStatus] = useState<DirectoryStatus>({});
   const [autoCheckInterval, setAutoCheckInterval] = useState(60);
   const [autoCheckEnabled, setAutoCheckEnabled] = useState(false);
   const [autoBackupEnabled, setAutoBackupEnabled] = useState(false);
-  const [cleanupKeep, setCleanupKeep] = useState(20);
   const [githubTokenConfigured, setGithubTokenConfigured] = useState(false);
   const [githubTokenStatus, setGithubTokenStatus] = useState("not_configured");
-  const [githubTokenLastVerified, setGithubTokenLastVerified] = useState(null);
-  const [githubAccounts, setGithubAccounts] = useState<GitHubAccount[]>(initialGithubAccounts);
-  const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>(initialGithubRepositories);
-  const [appMetadata, setAppMetadata] = useState(APP_METADATA);
-  const [activeGithubAccountId, setActiveGithubAccountId] = useState("github:demo");
+  const [githubTokenLastVerified, setGithubTokenLastVerified] = useState<string | null>(null);
+  const [githubAccounts, setGithubAccounts] = useState<GitHubAccount[]>([]);
+  const [githubRepositories, setGithubRepositories] = useState<GitHubRepository[]>([]);
+  const [appMetadata, setAppMetadata] = useState<AppMetadata>(APP_METADATA);
+  const [activeGithubAccountId, setActiveGithubAccountId] = useState("");
   const [isAddingRepo, setIsAddingRepo] = useState(false);
   const addRepoRequestRef = useRef(0);
   const [migrationStatus, setMigrationStatus] = useState("");
   const [migrationIncludePrompts, setMigrationIncludePrompts] = useState(false);
-  const [migrationConflictStrategy, setMigrationConflictStrategy] = useState<
-    "keep-local" | "overwrite" | "duplicate"
-  >("keep-local");
-  const [nextAutoCheckAt, setNextAutoCheckAt] = useState(null);
-  const [nextAutoBackupAt, setNextAutoBackupAt] = useState(null);
-  const [newRepo, setNewRepo] = useState({
+  const [migrationConflictStrategy, setMigrationConflictStrategy] = useState<MigrationConflictStrategy>("keep-local");
+  const [nextAutoCheckAt, setNextAutoCheckAt] = useState<Date | null>(null);
+  const [nextAutoBackupAt, setNextAutoBackupAt] = useState<Date | null>(null);
+  const [newRepo, setNewRepo] = useState<NewRepositoryDraft>({
     url: "",
     ref: "main",
     note: "",
   });
-  const t = (key) => getCopy(language, key);
-  const desktopRuntime = isDesktopRuntime();
+  const t: Translate = (key) => getCopy(language, key);
+  const taskCoordinatorRef = useRef(createTaskCoordinator());
+  const workspaceController = useMemo(
+    () => createWorkspaceController({
+      service: appService,
+      coordinator: taskCoordinatorRef.current,
+      initial: { repositories, skills, plugins, tasks },
+      publish: (next) => {
+        setRepositories(next.repositories);
+        setSkills(next.skills);
+        setPlugins(next.plugins);
+        setTasks(next.tasks);
+      },
+    }),
+    [appService],
+  );
+  backupRootRef.current = backupRoot;
+  workspaceController.replaceSnapshot({ repositories, skills, plugins, tasks });
+  const lastRepositoryCheck = useMemo(
+    () => latestRepositoryCheck(repositories),
+    [repositories],
+  );
   const latestGithubRateLimitReset = useMemo(() => latestGithubRateLimitResetFromTasks(tasks), [tasks]);
   const githubRateLimitHelp = useMemo(
     () => githubRateLimitHelpText(t, latestGithubRateLimitReset),
@@ -2372,11 +1911,11 @@ export function App() {
     };
   }, [desktopRuntime, promptDirty, language]);
 
-  function isPending(key) {
+  function isPending(key: string) {
     return Boolean(pendingActions[key]);
   }
 
-  function setActionPending(key, pending) {
+  function setActionPending(key: string, pending: boolean) {
     setPendingActions((items) => {
       const next = { ...items };
       if (pending) {
@@ -2407,88 +1946,80 @@ export function App() {
     return id;
   }
 
-  function finishOptimisticTask(actionKey, taskId) {
+  function finishOptimisticTask(actionKey: string, taskId?: string) {
     setActionPending(actionKey, false);
     if (taskId) {
       setTasks((items) => items.filter((item) => item.id !== taskId));
     }
   }
 
-  function applySettings(settings) {
+  function applySettings(settings: AppSettings | null | undefined) {
     if (!settings) return;
     setBackupRoot(settings.backupRoot || "~/SkillRepoBackups");
     setSkillsRoot(settings.skillLibraryRoot || settings.skillsRoot || "~/SkillRepoTracker/skills");
     setDefaultSyncTargets(settings.defaultSyncTargets || []);
     setAvailableSyncTargets(settings.availableSyncTargets?.length ? settings.availableSyncTargets : fallbackSyncTargets);
     setSyncBackupKeep(settings.syncBackupKeep || 5);
-    setConcurrency(settings.concurrency || 5);
-    setRetryCount(settings.retryCount ?? 2);
     setAutoCheckInterval(settings.autoCheckInterval || 60);
     setAutoCheckEnabled(Boolean(settings.autoCheckEnabled));
     setAutoBackupEnabled(Boolean(settings.autoBackupEnabled));
-    setCleanupKeep(settings.cleanupKeep || 20);
     setGithubTokenConfigured(Boolean(settings.githubTokenConfigured));
     setGithubTokenStatus(settings.githubTokenStatus || (settings.githubTokenConfigured ? "saved_unverified" : "not_configured"));
     setGithubTokenLastVerified(settings.githubTokenLastVerified || null);
   }
 
-  async function refreshDesktopState() {
-    if (!desktopRuntime) return;
-    try {
-      const [
-        nextRepos,
-        nextSkills,
-        nextPlugins,
-        nextTasks,
-        nextSettings,
-        nextGithubAccounts,
-        nextGithubRepositories,
-        nextAppMetadata,
-      ] = await Promise.all([
-        api.listRepositories(),
-        api.listSkills(),
-        api.listPlugins(),
-        api.listTasks(),
-        api.getSettings(),
-        api.listGithubAccounts(),
-        api.listGithubRepositoryCatalog(),
-        api.getAppMetadata(),
-      ]);
-      setRepositories(nextRepos);
-      setSkills(nextSkills);
-      setPlugins(nextPlugins);
-      setTasks(nextTasks);
-      setGithubAccounts(nextGithubAccounts);
-      setGithubRepositories(nextGithubRepositories);
-      setAppMetadata(nextAppMetadata || APP_METADATA);
-      setActiveGithubAccountId((id) =>
-        id && nextGithubAccounts.some((account) => account.id === id)
-          ? id
-          : nextGithubAccounts[0]?.id || "",
-      );
-      applySettings(nextSettings);
-      if (!nextRepos.length) {
-        setSelectedRepoId("");
-        setInspectorRepoId("");
-        setSelectedRows([]);
-      } else if (!nextRepos.some((repo) => repo.id === selectedRepoId)) {
-        setSelectedRepoId(nextRepos[0].id);
-        setSelectedRows([nextRepos[0].id]);
-        setInspectorRepoId((id) => (nextRepos.some((repo) => repo.id === id) ? id : ""));
-      } else {
-        setSelectedRows((rows) => rows.filter((id) => nextRepos.some((repo) => repo.id === id)));
-        setInspectorRepoId((id) => (nextRepos.some((repo) => repo.id === id) ? id : ""));
-      }
-    } catch (error) {
-      showToast(error.message || "后端状态读取失败。");
-    }
+  function clearBootstrapState() {
+    setRepositories([]);
+    setSkills([]);
+    setPlugins([]);
+    setTasks([]);
+    setGithubAccounts([]);
+    setGithubRepositories([]);
+    setActiveGithubAccountId("");
+    setSelectedRepoId("");
+    setInspectorRepoId("");
+    setSelectedRows([]);
+  }
+
+  async function refreshAppState(shouldApply: () => boolean = () => true) {
+    const next = await appService.bootstrap();
+    if (!shouldApply()) return;
+    const { repositories: nextRepos, skills: nextSkills, plugins: nextPlugins, tasks: nextTasks } = next.workspace;
+    const validRepoIds = new Set(nextRepos.map((repository) => repository.id));
+    setRepositories(nextRepos);
+    setSkills(nextSkills);
+    setPlugins(nextPlugins);
+    setTasks(nextTasks);
+    setGithubAccounts(next.githubAccounts);
+    setGithubRepositories(next.githubRepositories);
+    setAppMetadata(next.appMetadata || APP_METADATA);
+    setActiveGithubAccountId((id) =>
+      id && next.githubAccounts.some((account) => account.id === id)
+        ? id
+        : next.githubAccounts[0]?.id || "",
+    );
+    applySettings(next.settings);
+    setSelectedRepoId((id) => (id && validRepoIds.has(id) ? id : nextRepos[0]?.id || ""));
+    setSelectedRows((rows) => {
+      const validRows = rows.filter((id) => validRepoIds.has(id));
+      return validRows.length ? validRows : nextRepos[0] ? [nextRepos[0].id] : [];
+    });
+    setInspectorRepoId((id) => (validRepoIds.has(id) ? id : ""));
   }
 
   useEffect(() => {
-    refreshDesktopState();
-  }, []);
+    let active = true;
+    void refreshAppState(() => active).catch((error: unknown) => {
+      if (!active) return;
+      clearBootstrapState();
+      showToast(errorMessage(error, "后端状态读取失败。"));
+    });
+    return () => {
+      active = false;
+    };
+  }, [appService]);
 
-  const settingsProps = {
+  const settingsProps: PreferencesProps = {
     language,
     setLanguage,
     theme,
@@ -2504,22 +2035,15 @@ export function App() {
     availableSyncTargets,
     syncBackupKeep,
     setSyncBackupKeep,
-    concurrency,
-    setConcurrency,
-    retryCount,
-    setRetryCount,
     autoCheckInterval,
     setAutoCheckInterval,
     autoCheckEnabled,
     setAutoCheckEnabled,
     autoBackupEnabled,
     setAutoBackupEnabled,
-    cleanupKeep,
-    setCleanupKeep,
     githubTokenConfigured,
     githubTokenStatus,
     githubTokenLastVerified,
-    githubRateLimitHelp,
     nextAutoCheckAt,
     nextAutoBackupAt,
     directoryStatus,
@@ -2529,14 +2053,13 @@ export function App() {
     migrationConflictStrategy,
     setMigrationConflictStrategy,
     appMetadata,
+    checkForUpdates: () => appService.checkForUpdates(appMetadata.version),
     isPending,
     desktopRuntime,
-    refreshDesktopState,
     chooseDirectory,
     validateDirectory,
     syncInstalledSkills,
     persistSettings,
-    updateSkillSyncTargets,
     showToast,
     exportMigrationPackage,
     importMigrationPackage,
@@ -2676,12 +2199,16 @@ export function App() {
     }
   }, [filteredPlugins, selectedPluginId]);
 
-  function backupTargetRepos(mode = "updated", repoIds = []) {
+  function backupTargetRepos(
+    mode = "updated",
+    repoIds: string[] = [],
+    sourceRepositories = repositories,
+  ) {
     if (mode === "selected") {
       const targetIds = repoIds.length ? repoIds : selectedRows;
-      return repositories.filter((repo) => targetIds.includes(repo.id) && isRepositorySelectable(repo));
+      return sourceRepositories.filter((repo) => targetIds.includes(repo.id) && isRepositorySelectable(repo));
     }
-    return repositories.filter((repo) =>
+    return sourceRepositories.filter((repo) =>
       isRepositorySelectable(repo) &&
       ["updated-not-backed-up", "never-backed-up", "check-failed"].includes(repo.backupStatus),
     );
@@ -2719,7 +2246,7 @@ export function App() {
     setPluginDetailLoading(false);
   }
 
-  function toggleRow(repoId) {
+  function toggleRow(repoId: string) {
     const repository = repositories.find((repo) => repo.id === repoId);
     if (!repository || !isRepositorySelectable(repository)) return;
     setSelectedRows((rows) =>
@@ -2727,58 +2254,25 @@ export function App() {
     );
   }
 
-  function selectAllVisible(checked) {
+  function selectAllVisible(checked: boolean) {
     setSelectedRows((rows) => togglePageSelection(filteredRepos, rows, checked));
   }
 
   async function checkAllRepos() {
     const actionKey = "checkAllRepos";
-    if (isPending(actionKey)) return;
+    if (isPending(actionKey) || workspaceController.isBusy()) return;
     const optimisticTaskId = beginOptimisticTask(actionKey, {
       kind: "Check remote state",
       target: "All repositories",
       summary: "remote check started",
       log: ["remote check started"],
     });
-    if (desktopRuntime) {
-      try {
-        const nextRepos = await api.checkRepositories();
-        const [nextSkills, nextPlugins, nextTasks] = await Promise.all([
-          api.listSkills(),
-          api.listPlugins(),
-          api.listTasks(),
-        ]);
-        setRepositories(nextRepos);
-        setSkills(nextSkills);
-        setPlugins(nextPlugins);
-        setTasks(nextTasks);
-        showToast(t("remoteRefreshed"));
-      } catch (error) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(error.message || t("sourceUnavailableToast"));
-        return;
-      }
-      setActionPending(actionKey, false);
-      return;
-    }
-    setRepositories((repos) =>
-      repos.map((repo) => ({
-        ...repo,
-        lastChecked: "Jun 14 10:04",
-        checkStatus: repo.id === "missing" ? "failed" : "success",
-      })),
-    );
-    addTask({
-      kind: "Check remote state",
-      target: "All repositories",
-      progress: `${repositories.length} / ${repositories.length}`,
-      status: "success",
-      summary: `${repositories.length - 1} success, 1 failed`,
-      retryable: false,
-      log: ["refresh all remote refs", "preserve failed repository SHA", "recalculate backup states"],
+    const result = await workspaceController.checkRepositories();
+    settleCoordinatedTask(result, {
+      cleanup: () => finishOptimisticTask(actionKey, optimisticTaskId),
+      onCompleted: () => showToast(t("remoteRefreshed")),
+      onFailed: (error) => showToast(errorMessage(error, t("sourceUnavailableToast"))),
     });
-    showToast(t("remoteRefreshed"));
-    finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
   function addTask(task: DemoTaskInput) {
@@ -2786,13 +2280,13 @@ export function App() {
     setTasks((items) => [{ id, ...task }, ...items]);
   }
 
-  function showToast(message) {
+  function showToast(message: string) {
     setToast(message);
     window.clearTimeout(toastTimerRef.current);
     toastTimerRef.current = window.setTimeout(() => setToast(""), 3200);
   }
 
-  async function validateDirectory(kind, path) {
+  async function validateDirectory(kind: string, path: string) {
     if (!desktopRuntime || !path) return;
     try {
       const validation = await api.validateDirectory(kind, path);
@@ -2800,12 +2294,12 @@ export function App() {
       if (!validation.writable) {
         showToast(validation.message || t("directoryInvalid"));
       }
-    } catch (error) {
-      showToast(error.message || t("directoryInvalid"));
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("directoryInvalid")));
     }
   }
 
-  async function chooseDirectory(kind) {
+  async function chooseDirectory(kind: "backupRoot" | "skillsRoot") {
     if (!desktopRuntime) return;
     try {
       const currentPath = kind === "backupRoot" ? backupRoot : skillsRoot;
@@ -2818,8 +2312,8 @@ export function App() {
         setSkillsRoot(path);
       }
       await validateDirectory(kind, path);
-    } catch (error) {
-      showToast(error.message || t("directoryInvalid"));
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("directoryInvalid")));
     }
   }
 
@@ -2845,9 +2339,9 @@ export function App() {
         setRepositories(nextRepos);
         setTasks(nextTasks);
         showToast(t("localSkillsScanned"));
-      } catch (error) {
+      } catch (error: unknown) {
         finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(error.message || t("directoryInvalid"));
+        showToast(errorMessage(error, t("directoryInvalid")));
         return;
       }
       setActionPending(actionKey, false);
@@ -2873,9 +2367,9 @@ export function App() {
         setSkills(nextSkills);
         setTasks(nextTasks);
         showToast(t("installedSkillsSynced"));
-      } catch (error) {
+      } catch (error: unknown) {
         finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(error.message || t("directoryInvalid"));
+        showToast(errorMessage(error, t("directoryInvalid")));
         return;
       }
       setActionPending(actionKey, false);
@@ -2904,8 +2398,8 @@ export function App() {
           setSkillDetail(detail);
         }
         showToast(t("syncTargetsSaved"));
-      } catch (error) {
-        showToast(error.message || t("directoryInvalid"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("directoryInvalid")));
       } finally {
         setActionPending(actionKey, false);
       }
@@ -2927,7 +2421,12 @@ export function App() {
     setActionPending(actionKey, false);
   }
 
-  function applyNoteUpdate(target, entityKey, note, id) {
+  function applyNoteUpdate(
+    target: NoteTarget,
+    entityKey: string,
+    note: string,
+    id?: string,
+  ) {
     if (target === "repository" || target === "githubRepository") {
       setRepositories((items) =>
         items.map((item) =>
@@ -2952,21 +2451,23 @@ export function App() {
     }
   }
 
-  async function saveItemNote(target, item, note) {
+  async function saveItemNote(target: NoteTarget, item: NoteItem, note: string) {
     const actionKey = noteActionKey(target, item);
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
+    const githubItem = "accountId" in item ? item : null;
+    const itemId = "id" in item ? item.id : undefined;
     const request =
-      target === "githubRepository"
+      target === "githubRepository" && githubItem
         ? {
             target,
-            accountId: item.accountId,
-            fullName: item.fullName,
+            accountId: githubItem.accountId,
+            fullName: githubItem.fullName,
             note,
           }
         : {
             target,
-            id: item.id,
+            id: itemId,
             note,
           };
     try {
@@ -2975,22 +2476,22 @@ export function App() {
         : {
             entityKey:
               target === "githubRepository"
-                ? githubRepositoryNoteKey(item)
+                ? githubItem ? githubRepositoryNoteKey(githubItem) : ""
                 : target === "repository"
-                  ? trackedRepositoryNoteKey(item)
-                  : item.id,
+                  ? trackedRepositoryNoteKey("remoteSha" in item ? item : null)
+                  : itemId || "",
             note,
           };
-      applyNoteUpdate(target, result.entityKey, result.note, item.id);
+      applyNoteUpdate(target, result.entityKey, result.note, itemId);
       showToast(t("noteSaved"));
-    } catch (error) {
-      showToast(error.message || t("noteSaveFailed"));
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("noteSaveFailed")));
     } finally {
       setActionPending(actionKey, false);
     }
   }
 
-  function migrationSummaryText(summary, actionLabel) {
+  function migrationSummaryText(summary: MigrationPackageSummary | null, actionLabel: string) {
     if (!summary || summary.cancelled) return summary?.message || "";
     const base = `${actionLabel}: ${summary.repositories} ${t("repositoriesTitle")}, ${summary.skills} ${t("skillsTitle")}, ${summary.plugins} ${t("pluginsTitle")}, ${summary.userNotes} ${t("notesCount")}`;
     return typeof summary.prompts === "number"
@@ -3013,7 +2514,7 @@ export function App() {
       const message = migrationSummaryText(summary, t("exportData")) || summary.message;
       setMigrationStatus(message);
       showToast(t("migrationExported"));
-    } catch (error) {
+    } catch (error: unknown) {
       showToast(localizedApiErrorMessage(error, language, t("migrationFailed")));
     } finally {
       setActionPending(actionKey, false);
@@ -3062,11 +2563,11 @@ export function App() {
         showToast(t("migrationCancelled"));
         return;
       }
-      await refreshDesktopState();
+      await refreshAppState();
       const message = migrationSummaryText(summary, t("importData")) || summary.message;
       setMigrationStatus(message);
       showToast(t("migrationImported"));
-    } catch (error) {
+    } catch (error: unknown) {
       showToast(localizedApiErrorMessage(error, language, t("migrationFailed")));
     } finally {
       setActionPending(actionKey, false);
@@ -3105,46 +2606,47 @@ export function App() {
       }
       showToast(t("localRepositoryAdded"));
       setActionPending(actionKey, false);
-    } catch (error) {
+    } catch (error: unknown) {
       finishOptimisticTask(actionKey, optimisticTaskId);
-      showToast(error.message || t("directoryInvalid"));
+      showToast(errorMessage(error, t("directoryInvalid")));
     }
   }
 
   async function confirmDeleteSkill() {
-    if (!modal?.skillId) return;
-    const actionKey = `deleteSkill:${modal.skillId}`;
+    if (modal?.type !== "delete-skill" || !modal.skillId) return;
+    const skillId = modal.skillId;
+    const actionKey = `deleteSkill:${skillId}`;
     if (isPending(actionKey)) return;
-    const skill = skills.find((item) => item.id === modal.skillId);
+    const skill = skills.find((item) => item.id === skillId);
     const optimisticTaskId = beginOptimisticTask(actionKey, {
       kind: "Delete Skill",
-      target: skill?.name || modal.skillId,
+      target: skill?.name || skillId,
       summary: "delete Skill started",
       log: ["delete Skill started"],
     });
     if (desktopRuntime) {
       try {
-        const nextSkills = await api.deleteSkill(modal.skillId);
+        const nextSkills = await api.deleteSkill(skillId);
         const nextTasks = await api.listTasks();
         setSkills(nextSkills);
         setTasks(nextTasks);
         setModal(null);
         showToast(t("skillDeleted"));
-      } catch (error) {
+      } catch (error: unknown) {
         finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(error.message || t("directoryInvalid"));
+        showToast(errorMessage(error, t("directoryInvalid")));
         return;
       }
       setActionPending(actionKey, false);
       return;
     }
-    setSkills((items) => items.filter((item) => item.id !== modal.skillId));
+    setSkills((items) => items.filter((item) => item.id !== skillId));
     setModal(null);
     showToast(t("skillDeleted"));
     finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
-  async function restoreSkill(skillId) {
+  async function restoreSkill(skillId: string) {
     const actionKey = `restoreSkill:${skillId}`;
     if (isPending(actionKey)) return;
     const skill = skills.find((item) => item.id === skillId);
@@ -3161,9 +2663,9 @@ export function App() {
         setSkills(nextSkills);
         setTasks(nextTasks);
         showToast(t("restoredSkill"));
-      } catch (error) {
+      } catch (error: unknown) {
         finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(error.message || t("directoryInvalid"));
+        showToast(errorMessage(error, t("directoryInvalid")));
         return;
       }
       setActionPending(actionKey, false);
@@ -3192,21 +2694,14 @@ export function App() {
           skillsRoot,
           defaultSyncTargets,
           syncBackupKeep,
-          concurrency,
-          retryCount,
           autoCheckInterval,
           autoCheckEnabled,
           autoBackupEnabled,
-          cleanupKeep,
         });
-        await Promise.all([
-          api.configureSchedule("check", autoCheckEnabled, autoCheckInterval),
-          api.configureSchedule("backup", autoBackupEnabled, Math.max(autoCheckInterval, 60)),
-        ]);
         applySettings(nextSettings);
         showToast(t("settingsSaved"));
-      } catch (error) {
-        showToast(error.message || t("rootSaved"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("rootSaved")));
       } finally {
         setActionPending(actionKey, false);
       }
@@ -3216,11 +2711,11 @@ export function App() {
     setActionPending(actionKey, false);
   }
 
-  function githubRepoActionKey(repo) {
+  function githubRepoActionKey(repo: GitHubRepository) {
     return `${repo.accountId}:${repo.fullName}`;
   }
 
-  async function saveGithubAccountToken(token) {
+  async function saveGithubAccountToken(token: string) {
     const actionKey = "githubSaveToken";
     if (isPending(actionKey)) return false;
     setActionPending(actionKey, true);
@@ -3231,8 +2726,8 @@ export function App() {
         setActiveGithubAccountId(accounts[0]?.id || "");
         showToast(t("tokenValidated"));
         return true;
-      } catch (error) {
-        showToast(error.message || t("tokenSavedButValidationFailed"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("tokenSavedButValidationFailed")));
         return false;
       } finally {
         setActionPending(actionKey, false);
@@ -3243,7 +2738,7 @@ export function App() {
     return true;
   }
 
-  async function refreshGithubCatalog(accountId) {
+  async function refreshGithubCatalog(accountId?: string) {
     const actionKey = `githubRefresh:${accountId || "all"}`;
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
@@ -3261,8 +2756,8 @@ export function App() {
         const accounts = await api.listGithubAccounts();
         setGithubAccounts(accounts);
         showToast(t("remoteRefreshed"));
-      } catch (error) {
-        showToast(error.message || t("sourceUnavailableToast"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("sourceUnavailableToast")));
       } finally {
         setActionPending(actionKey, false);
       }
@@ -3272,7 +2767,7 @@ export function App() {
     setActionPending(actionKey, false);
   }
 
-  async function validateGithubAccount(accountId) {
+  async function validateGithubAccount(accountId: string) {
     const actionKey = `githubValidate:${accountId}`;
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
@@ -3281,8 +2776,8 @@ export function App() {
         const accounts = await api.validateGithubAccount(accountId);
         setGithubAccounts(accounts);
         showToast(t("tokenValidated"));
-      } catch (error) {
-        showToast(error.message || t("tokenSavedButValidationFailed"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("tokenSavedButValidationFailed")));
       } finally {
         setActionPending(actionKey, false);
       }
@@ -3292,7 +2787,7 @@ export function App() {
     setActionPending(actionKey, false);
   }
 
-  async function deleteGithubAccount(accountId) {
+  async function deleteGithubAccount(accountId: string) {
     const account = githubAccounts.find((item) => item.id === accountId);
     if (!window.confirm(`${t("deleteAccount")}: ${account?.login || accountId}?`)) return;
     if (desktopRuntime) {
@@ -3302,8 +2797,8 @@ export function App() {
         setGithubRepositories((items) => items.filter((item) => item.accountId !== accountId));
         setActiveGithubAccountId(accounts[0]?.id || "");
         showToast(t("tokenCleared"));
-      } catch (error) {
-        showToast(error.message || t("sourceUnavailableToast"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("sourceUnavailableToast")));
       }
       return;
     }
@@ -3311,7 +2806,7 @@ export function App() {
     setGithubRepositories((items) => items.filter((item) => item.accountId !== accountId));
   }
 
-  async function toggleGithubStar(repo) {
+  async function toggleGithubStar(repo: GitHubRepository) {
     const actionKey = `githubStar:${githubRepoActionKey(repo)}`;
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
@@ -3323,8 +2818,8 @@ export function App() {
           ...repos,
         ]);
         showToast(!repo.starred ? t("star") : t("unstar"));
-      } catch (error) {
-        showToast(error.message || t("sourceUnavailableToast"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("sourceUnavailableToast")));
       } finally {
         setActionPending(actionKey, false);
       }
@@ -3340,7 +2835,7 @@ export function App() {
     setActionPending(actionKey, false);
   }
 
-  async function trackGithubRepository(repo) {
+  async function trackGithubRepository(repo: GitHubRepository) {
     const actionKey = `githubTrack:${githubRepoActionKey(repo)}`;
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
@@ -3367,8 +2862,8 @@ export function App() {
           ...nextCatalog,
         ]);
         showToast(t("repoAddedGeneric"));
-      } catch (error) {
-        showToast(error.message || t("repoExists"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("repoExists")));
       } finally {
         setActionPending(actionKey, false);
       }
@@ -3384,7 +2879,7 @@ export function App() {
     setActionPending(actionKey, false);
   }
 
-  async function untrackGithubRepository(repo) {
+  async function untrackGithubRepository(repo: GitHubRepository) {
     if (!repo.trackedRepoId) return;
     if (!window.confirm(`${t("untrack")}: ${repo.fullName}?`)) return;
     const actionKey = `githubTrack:${githubRepoActionKey(repo)}`;
@@ -3408,8 +2903,8 @@ export function App() {
           ...nextCatalog,
         ]);
         showToast(t("settingsSaved"));
-      } catch (error) {
-        showToast(error.message || t("sourceUnavailableToast"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("sourceUnavailableToast")));
       } finally {
         setActionPending(actionKey, false);
       }
@@ -3465,10 +2960,10 @@ export function App() {
           setModal(null);
           showToast(t("repoAddedGeneric"));
         }
-      } catch (error) {
+      } catch (error: unknown) {
         if (addRepoRequestRef.current === requestId) {
           finishOptimisticTask(actionKey, optimisticTaskId);
-          showToast(error.message || t("repoExists"));
+          showToast(errorMessage(error, t("repoExists")));
           setIsAddingRepo(false);
         }
         return;
@@ -3495,7 +2990,7 @@ export function App() {
       skills: isSkillRepo ? 1 : 0,
       remoteSha: isSkillRepo ? "9ac12ef" : "3d20a9f",
       lastBackupSha: "none",
-      lastChecked: "Jun 14 10:08",
+      lastChecked: new Date().toISOString(),
       backupStatus: "never-backed-up",
       checkStatus: "success",
       url: `https://github.com/${name}`,
@@ -3531,10 +3026,11 @@ export function App() {
     finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
-  async function confirmBackup(mode, repoIds = []) {
+  async function confirmBackup(mode = "updated", repoIds: string[] = []) {
     const actionKey = `backup:${mode}`;
-    if (isPending(actionKey)) return;
-    const targetRepos = backupTargetRepos(mode, repoIds);
+    if (isPending(actionKey) || workspaceController.isBusy()) return;
+    const current = workspaceController.snapshot();
+    const targetRepos = backupTargetRepos(mode, repoIds, current.repositories);
     const targetIds = targetRepos.map((repo) => repo.id);
     const optimisticTaskId = beginOptimisticTask(actionKey, {
       kind: "Backup repositories",
@@ -3542,57 +3038,19 @@ export function App() {
       summary: "backup started",
       log: ["backup started"],
     });
-    if (desktopRuntime) {
-      try {
-        const nextTasks = await api.backupRepositories(mode, mode === "selected" ? targetIds : undefined);
-        const nextRepos = await api.listRepositories();
-        setTasks(nextTasks);
-        setRepositories(nextRepos);
+    const result = await workspaceController.backupRepositories({
+      mode,
+      repositoryIds: targetIds,
+      backupRoot: backupRootRef.current,
+    });
+    settleCoordinatedTask(result, {
+      cleanup: () => finishOptimisticTask(actionKey, optimisticTaskId),
+      onCompleted: () => {
         setModal(null);
         showToast(t("backupCreated"));
-      } catch (error) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(error.message || t("backupCreated"));
-        return;
-      }
-      setActionPending(actionKey, false);
-      return;
-    }
-    const successRepos = targetRepos.filter((repo) => repo.backupStatus !== "check-failed");
-    const failedCount = targetRepos.length - successRepos.length;
-
-    setRepositories((repos) =>
-      repos.map((repo) =>
-        successRepos.some((item) => item.id === repo.id)
-          ? {
-              ...repo,
-              backupStatus: "backed-up-latest",
-              lastBackupSha: repo.remoteSha,
-              snapshotTime: "2026-06-14 10:12",
-            }
-          : repo,
-      ),
-    );
-
-    addTask({
-      kind: "Backup repositories",
-      target: mode === "selected" ? "Selected repositories" : "Updated repositories",
-      progress: `${successRepos.length} / ${targetRepos.length}`,
-      status: failedCount ? "partial-success" : "success",
-      summary: `${successRepos.length} success, ${failedCount} skipped`,
-      retryable: false,
-      log: [
-        "refresh remote state before backup",
-        `create ${backupRoot}/2026-06-14_101212`,
-        "download ZIP files to .partial paths",
-        "compute sha256 for successful ZIP files",
-        "write manifest.json",
-        "update last_backup_sha for successful repositories",
-      ],
+      },
+      onFailed: (error) => showToast(errorMessage(error, t("backupCreated"))),
     });
-    setModal(null);
-    showToast(t("backupCreated"));
-    finishOptimisticTask(actionKey, optimisticTaskId);
   }
 
   async function openSkillConflict(skill: UiSkill) {
@@ -3940,9 +3398,13 @@ export function App() {
 
   async function retryTask(task: UiTask) {
     const actionKey = `retryTask:${task.id}`;
-    if (isPending(actionKey)) return;
+    if (isPending(actionKey) || workspaceController.isBusy()) return;
     if (!canRetryTask(task)) {
       showToast(task.retryReason || t("retryRejected"));
+      return;
+    }
+    if (!desktopRuntime) {
+      showToast(t("retryRejected"));
       return;
     }
     const optimisticTaskId = beginOptimisticTask(actionKey, {
@@ -3951,21 +3413,12 @@ export function App() {
       summary: "retry task started",
       log: ["retry task started"],
     });
-    if (desktopRuntime) {
-      try {
-        const nextTasks = await api.retryTask(task.id);
-        setTasks(nextTasks);
-        showToast(t("retryAdded"));
-      } catch (error) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(error.message || t("retryAdded"));
-        return;
-      }
-      setActionPending(actionKey, false);
-      return;
-    }
-    showToast(t("retryRejected"));
-    finishOptimisticTask(actionKey, optimisticTaskId);
+    const result = await workspaceController.retryTask(task.id);
+    settleCoordinatedTask(result, {
+      cleanup: () => finishOptimisticTask(actionKey, optimisticTaskId),
+      onCompleted: () => showToast(t("retryAdded")),
+      onFailed: (error) => showToast(errorMessage(error, t("retryAdded"))),
+    });
   }
 
   async function copyTaskSummary(task: UiTask) {
@@ -3976,8 +3429,8 @@ export function App() {
         await navigator.clipboard?.writeText(backendSummary);
         showToast(t("taskCopied"));
         return;
-      } catch (error) {
-        showToast(error.message || t("taskCopied"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("taskCopied")));
         return;
       }
     }
@@ -3985,17 +3438,13 @@ export function App() {
     showToast(t("taskCopied"));
   }
 
-  async function openBackupFolder(path) {
-    if (desktopRuntime) {
-      try {
-        await api.openBackupFolder(path);
-        return;
-      } catch (error) {
-        showToast(error.message || t("sourceUnavailableToast"));
-        return;
-      }
+  async function openBackupFolder(repositoryId?: string) {
+    try {
+      await appService.openBackupFolder(repositoryId);
+      if (!desktopRuntime) showToast(t("openBackupFolder"));
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("sourceUnavailableToast")));
     }
-    showToast(t("openBackupFolder"));
   }
 
   async function openSkillDetail(skill: UiSkill | PluginSkillSummary) {
@@ -4035,7 +3484,7 @@ export function App() {
     }
   }
 
-  async function openPluginDetail(plugin) {
+  async function openPluginDetail(plugin: UiPlugin) {
     const requestedPluginId = plugin.id;
     pluginDetailRequestRef.current = requestedPluginId;
     setSelectedPluginId(plugin.id);
@@ -4044,7 +3493,15 @@ export function App() {
     if (!desktopRuntime) {
       setPluginDetail({
         ...plugin,
-        linkedSkills: plugin.linkedSkills || skills.filter((skill) => skill.repoId === plugin.repoId),
+        linkedSkills: plugin.linkedSkills || skills
+          .filter((skill) => skill.repoId === plugin.repoId)
+          .map((skill) => ({
+            id: skill.id,
+            name: skill.name,
+            path: skill.path,
+            version: skill.localVersion || skill.remoteVersion,
+            status: skill.status,
+          })),
       });
       return;
     }
@@ -4054,9 +3511,9 @@ export function App() {
       if (pluginDetailRequestRef.current === requestedPluginId) {
         setPluginDetail(detail);
       }
-    } catch (error) {
+    } catch (error: unknown) {
       if (pluginDetailRequestRef.current === requestedPluginId) {
-        setPluginDetailError(error.message || t("pluginDetailUnavailable"));
+        setPluginDetailError(errorMessage(error, t("pluginDetailUnavailable")));
       }
     } finally {
       if (pluginDetailRequestRef.current === requestedPluginId) {
@@ -4066,9 +3523,9 @@ export function App() {
   }
 
   function openPluginEntry(plugin: SkillPluginReference) {
-    const fullPlugin = plugins.find((item) => item.id === plugin.id) || plugin;
+    const fullPlugin = plugins.find((item) => item.id === plugin.id);
     void switchActiveTab("plugins");
-    openPluginDetail(fullPlugin);
+    if (fullPlugin) void openPluginDetail(fullPlugin);
   }
 
   async function openGithubUrl(url: string, mode = "embedded", browserId?: string) {
@@ -4081,15 +3538,15 @@ export function App() {
       try {
         await api.openUrl(url, mode, browserId);
         return;
-      } catch (error) {
-        showToast(error.message || t("openUrlFailed"));
+      } catch (error: unknown) {
+        showToast(errorMessage(error, t("openUrlFailed")));
         return;
       }
     }
     window.open(url, "_blank");
   }
 
-  async function chooseBrowserForUrl(url) {
+  async function chooseBrowserForUrl(url: string) {
     if (!desktopRuntime) {
       window.open(url, "_blank");
       return;
@@ -4097,17 +3554,17 @@ export function App() {
     try {
       const browsers = await api.listSystemBrowsers();
       setModal({ type: "browser-choice", url, browsers });
-    } catch (error) {
-      showToast(error.message || t("openUrlFailed"));
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("openUrlFailed")));
     }
   }
 
-  async function copyUrl(url) {
+  async function copyUrl(url: string) {
     await navigator.clipboard?.writeText(url);
     showToast(t("urlCopied"));
   }
 
-  async function copyInstallCommand(command) {
+  async function copyInstallCommand(command: string) {
     try {
       if (!navigator.clipboard?.writeText) {
         throw new Error("clipboard unavailable");
@@ -4120,38 +3577,10 @@ export function App() {
   }
 
   async function runScheduledCheck() {
-    if (desktopRuntime) {
-      try {
-        const nextRepos = await api.checkRepositories();
-        const [nextSkills, nextPlugins, nextTasks] = await Promise.all([
-          api.listSkills(),
-          api.listPlugins(),
-          api.listTasks(),
-        ]);
-        setRepositories(nextRepos);
-        setSkills(nextSkills);
-        setPlugins(nextPlugins);
-        setTasks(nextTasks);
-      } catch (error) {
-        showToast(error.message || t("sourceUnavailableToast"));
-      }
-      return;
-    }
     await checkAllRepos();
   }
 
   async function runScheduledBackup() {
-    if (desktopRuntime) {
-      try {
-        const nextTasks = await api.backupRepositories("updated");
-        const nextRepos = await api.listRepositories();
-        setTasks(nextTasks);
-        setRepositories(nextRepos);
-      } catch (error) {
-        showToast(error.message || t("backupCreated"));
-      }
-      return;
-    }
     await confirmBackup("updated");
   }
 
@@ -4161,14 +3590,13 @@ export function App() {
       return undefined;
     }
     const intervalMs = Math.max(autoCheckInterval, 15) * 60 * 1000;
-    const setNextRun = () => setNextAutoCheckAt(new Date(Date.now() + intervalMs));
-    setNextRun();
-    const timer = window.setInterval(async () => {
-      await runScheduledCheck();
-      setNextRun();
-    }, intervalMs);
-    return () => window.clearInterval(timer);
-  }, [autoCheckEnabled, autoCheckInterval, desktopRuntime]);
+    const schedule = createForegroundSchedule({
+      intervalMs,
+      run: runScheduledCheck,
+      onNextRun: (timestamp) => setNextAutoCheckAt(timestamp === null ? null : new Date(timestamp)),
+    });
+    return () => schedule.stop();
+  }, [autoCheckEnabled, autoCheckInterval, desktopRuntime, workspaceController]);
 
   useEffect(() => {
     if (!autoBackupEnabled) {
@@ -4176,17 +3604,18 @@ export function App() {
       return undefined;
     }
     const intervalMs = Math.max(autoCheckInterval, 60) * 60 * 1000;
-    const setNextRun = () => setNextAutoBackupAt(new Date(Date.now() + intervalMs));
-    setNextRun();
-    const timer = window.setInterval(async () => {
-      await runScheduledBackup();
-      setNextRun();
-    }, intervalMs);
-    return () => window.clearInterval(timer);
-  }, [autoBackupEnabled, autoCheckInterval, desktopRuntime]);
+    const schedule = createForegroundSchedule({
+      intervalMs,
+      run: runScheduledBackup,
+      onNextRun: (timestamp) => setNextAutoBackupAt(timestamp === null ? null : new Date(timestamp)),
+    });
+    return () => schedule.stop();
+  }, [autoBackupEnabled, autoCheckInterval, desktopRuntime, workspaceController]);
+
+  useEffect(() => () => workspaceController.invalidate(), [workspaceController]);
 
   useEffect(() => {
-    function handleEscape(event) {
+    function handleEscape(event: KeyboardEvent) {
       if (event.key === "Escape" && !modal) {
         closeActiveInspector();
       }
@@ -4195,7 +3624,7 @@ export function App() {
     return () => window.removeEventListener("keydown", handleEscape);
   }, [modal]);
 
-  function handleWorkspaceMouseDown(event) {
+  function handleWorkspaceMouseDown(event: ReactMouseEvent<HTMLElement>) {
     const target = event.target;
     if (!(target instanceof HTMLElement)) return;
     if (shouldIgnoreInspectorDismiss(target)) return;
@@ -4468,7 +3897,6 @@ export function App() {
               setActiveTab={switchActiveTab}
               setModal={setModal}
               onClose={closeActiveInspector}
-              desktopRuntime={desktopRuntime}
               openBackupFolder={openBackupFolder}
               openGithubUrl={openGithubUrl}
               chooseBrowserForUrl={chooseBrowserForUrl}
@@ -4551,8 +3979,12 @@ export function App() {
           {t("change")}
         </Button>
         <span className="status-spacer" />
-        <span>{t("lastChecked")}: 2026-06-14 10:04</span>
-        <span className="status-divider" />
+        {lastRepositoryCheck && (
+          <>
+            <span>{t("lastChecked")}: {displayValue(lastRepositoryCheck, language)}</span>
+            <span className="status-divider" />
+          </>
+        )}
         <span>
           {autoCheckEnabled
             ? language === "zh"
@@ -4660,7 +4092,7 @@ export function App() {
   );
 }
 
-function Metric({ label, value }) {
+function Metric({ label, value }: { label: ReactNode; value: ReactNode }) {
   return (
     <div className="metric-row">
       <span>{label}</span>
@@ -4669,7 +4101,11 @@ function Metric({ label, value }) {
   );
 }
 
-function Legend({ tone, label, value }) {
+function Legend({ tone, label, value }: {
+  tone: string;
+  label: ReactNode;
+  value: ReactNode;
+}) {
   return (
     <div className="legend-row">
       <span className={`legend-dot ${tone}`} />
@@ -4679,7 +4115,12 @@ function Legend({ tone, label, value }) {
   );
 }
 
-function EmptyState({ title, body, actionLabel, onAction }: any) {
+function EmptyState({ title, body, actionLabel, onAction }: {
+  title: ReactNode;
+  body: ReactNode;
+  actionLabel?: ReactNode;
+  onAction?: () => void;
+}) {
   return (
     <div className="empty-state">
       <div className="empty-state-icon" aria-hidden="true">+</div>
@@ -4728,6 +4169,38 @@ export function RepositorySelectionActions({
   );
 }
 
+type ToolbarProps = {
+  activeTab: string;
+  search: string;
+  setSearch: Dispatch<SetStateAction<string>>;
+  repoContentSearch: string;
+  setRepoContentSearch: Dispatch<SetStateAction<string>>;
+  skillSearch: string;
+  setSkillSearch: Dispatch<SetStateAction<string>>;
+  skillContentSearch: string;
+  setSkillContentSearch: Dispatch<SetStateAction<string>>;
+  pluginSearch: string;
+  setPluginSearch: Dispatch<SetStateAction<string>>;
+  pluginContentSearch: string;
+  setPluginContentSearch: Dispatch<SetStateAction<string>>;
+  checkAllRepos: () => void | Promise<void>;
+  setModal: Dispatch<SetStateAction<AppModal | null>>;
+  openAddRepoModal: () => void;
+  selectedRows: string[];
+  currentRepositoryPageIds: string[];
+  clearSelectedRows: () => void;
+  repositories: UiRepository[];
+  skills: UiSkill[];
+  plugins: UiPlugin[];
+  tasks: UiTask[];
+  scanLocalSkills: () => void | Promise<void>;
+  addLocalRepositoryFromPicker: () => void | Promise<void>;
+  isPending: (key: string) => boolean;
+  language: string;
+  githubRateLimitHelp: string;
+  t: Translate;
+};
+
 function Toolbar({
   activeTab,
   search,
@@ -4758,7 +4231,7 @@ function Toolbar({
   language,
   githubRateLimitHelp,
   t,
-}: any) {
+}: ToolbarProps) {
   const titleKey = navItems.find((item) => item.id === activeTab)?.labelKey || "nav.repositories";
   const needsBackup = repositories.filter((repo) =>
     isRepositorySelectable(repo) && ["updated-not-backed-up", "never-backed-up"].includes(repo.backupStatus),
@@ -4982,7 +4455,7 @@ export function RepositoriesView({
     }
   }, [pageSelection.mixed]);
 
-  function toggleSort(key) {
+  function toggleSort(key: RepositorySort["key"]) {
     setRepoSort((current) => ({
       key,
       direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
@@ -5195,6 +4668,22 @@ export function RepositoriesView({
   );
 }
 
+type InspectorProps = {
+  repo: UiRepository;
+  setActiveTab: (tab: string) => void | Promise<void>;
+  setModal: Dispatch<SetStateAction<AppModal | null>>;
+  onClose: () => void;
+  openBackupFolder: (repositoryId?: string) => void | Promise<void>;
+  openGithubUrl: (url: string, mode?: string, browserId?: string) => void | Promise<void>;
+  chooseBrowserForUrl: (url: string) => void | Promise<void>;
+  copyUrl: (url: string) => void | Promise<void>;
+  openPluginDetail: (plugin: SkillPluginReference) => void;
+  onSaveNote: (repo: UiRepository, note: string) => void | Promise<void>;
+  isPending: (key: string) => boolean;
+  language: string;
+  t: Translate;
+};
+
 function Inspector({
   repo,
   setActiveTab,
@@ -5209,10 +4698,11 @@ function Inspector({
   isPending,
   language,
   t,
-}: any) {
-  if (!repo) return null;
+}: InspectorProps) {
+  const recognizedSkills = repo.recognizedSkills || [];
+  const repoUrl = repo.url;
   const [readmeOpen, setReadmeOpen] = useState(false);
-  const [readme, setReadme] = useState(null);
+  const [readme, setReadme] = useState<RepositoryReadme | null>(null);
   const [readmeLoading, setReadmeLoading] = useState(false);
   const [readmeError, setReadmeError] = useState("");
   const [noteDraft, setNoteDraft] = useState(repo.note || "");
@@ -5245,8 +4735,8 @@ function Inspector({
     try {
       const nextReadme = await api.getRepositoryReadme(repo.id);
       setReadme(nextReadme);
-    } catch (error) {
-      setReadmeError(error.message || t("readmeUnavailable"));
+    } catch (error: unknown) {
+      setReadmeError(errorMessage(error, t("readmeUnavailable")));
     } finally {
       setReadmeLoading(false);
     }
@@ -5297,10 +4787,10 @@ function Inspector({
         <Detail label={t("snapshotTime")} value={displayValue(repo.snapshotTime, language)} />
       </Section>
 
-      <Section title={`${t("recognizedSkills")} (${repo.recognizedSkills.length})`}>
-        {repo.recognizedSkills.length ? (
+      <Section title={`${t("recognizedSkills")} (${recognizedSkills.length})`}>
+        {recognizedSkills.length ? (
           <div className="skill-list-mini">
-            {repo.recognizedSkills.map((skill, index) => (
+            {recognizedSkills.map((skill, index) => (
               <div className="mini-skill" key={`${repo.id}:${skill.id || skill.path || `${skill.name}:${skill.version}:${index}`}`}>
                 <span className="health-dot" />
                 <span>{skill.name}</span>
@@ -5360,16 +4850,16 @@ function Inspector({
           <Button onClick={() => setModal({ type: "backup", mode: "selected", repoIds: [repo.id] })} disabled={!isRepositorySelectable(repo)}>
             {t("backupNow")}
           </Button>
-          <Button onClick={() => openBackupFolder(repo.backupPath)} disabled={!hasManifest}>{t("openBackupFolder")}</Button>
-          {repo.sourceType !== "local" && (
-            <Button onClick={() => openGithubUrl(repo.url, "embedded")}>{t("viewGithub")}</Button>
+          <Button onClick={() => openBackupFolder(repo.id)} disabled={!hasManifest}>{t("openBackupFolder")}</Button>
+          {repo.sourceType !== "local" && repoUrl && (
+            <Button onClick={() => openGithubUrl(repoUrl, "embedded")}>{t("viewGithub")}</Button>
           )}
-          {repo.sourceType !== "local" && (
-            <Button onClick={() => chooseBrowserForUrl(repo.url)}>{t("chooseBrowser")}</Button>
+          {repo.sourceType !== "local" && repoUrl && (
+            <Button onClick={() => chooseBrowserForUrl(repoUrl)}>{t("chooseBrowser")}</Button>
           )}
           <Button onClick={() => setActiveTab("skills")}>{t("openSkillsManager")}</Button>
-          {repo.sourceType !== "local" && (
-            <Button onClick={() => copyUrl(repo.url)}>{t("copyLink")}</Button>
+          {repo.sourceType !== "local" && repoUrl && (
+            <Button onClick={() => copyUrl(repoUrl)}>{t("copyLink")}</Button>
           )}
           <Button className="full" onClick={() => setActiveTab("tasks")}>
             {t("backupHistory")}
@@ -5393,7 +4883,12 @@ function Inspector({
   );
 }
 
-function Section({ title, children }: any) {
+type SectionProps = {
+  title: ReactNode;
+  children: ReactNode;
+};
+
+function Section({ title, children }: SectionProps) {
   return (
     <section className="inspector-section">
       <h3>{title}</h3>
@@ -5402,7 +4897,14 @@ function Section({ title, children }: any) {
   );
 }
 
-function Detail({ label, value, mono, link }: any) {
+type DetailProps = {
+  label: ReactNode;
+  value: ReactNode;
+  mono?: boolean;
+  link?: boolean;
+};
+
+function Detail({ label, value, mono, link }: DetailProps) {
   return (
     <div className="detail-row">
       <span>{label}</span>
@@ -5415,8 +4917,18 @@ function Detail({ label, value, mono, link }: any) {
   );
 }
 
-function NoteEditor({ actionKey, isPending, note, onChange, onClear, onSave, t }: any) {
-  const pending = isPending?.(actionKey);
+type NoteEditorProps = {
+  actionKey: string;
+  isPending: (key: string) => boolean;
+  note: string;
+  onChange: (note: string) => void;
+  onClear: () => void | Promise<void>;
+  onSave: () => void | Promise<void>;
+  t: Translate;
+};
+
+function NoteEditor({ actionKey, isPending, note, onChange, onClear, onSave, t }: NoteEditorProps) {
+  const pending = isPending(actionKey);
   return (
     <div className="note-editor">
       <textarea
@@ -5913,7 +5425,7 @@ export function TasksView({
     ["failed", t("failed")],
     ["interrupted", t("interrupted")],
   ];
-  const [expanded, setExpanded] = useState(tasks[0]?.id);
+  const [expanded, setExpanded] = useState<string | undefined>(tasks[0]?.id);
   const expandedTask = tasks.find((task) => task.id === expanded) || tasks[0];
 
   useEffect(() => {
@@ -6072,7 +5584,7 @@ export function TasksView({
   );
 }
 
-function SettingsView(props: any) {
+function SettingsView(props: PreferencesProps) {
   const { t, persistSettings, isPending } = props;
   return (
     <section className="main-pane single">
@@ -6098,7 +5610,11 @@ function SettingsView(props: any) {
   );
 }
 
-function PreferencesModal({ onClose, ...props }: any) {
+type PreferencesModalProps = PreferencesProps & {
+  onClose: () => void;
+};
+
+function PreferencesModal({ onClose, ...props }: PreferencesModalProps) {
   const { t, persistSettings, isPending } = props;
   return (
     <Modal
@@ -6143,22 +5659,15 @@ function PreferencesPanel({
   availableSyncTargets,
   syncBackupKeep,
   setSyncBackupKeep,
-  concurrency,
-  setConcurrency,
-  retryCount,
-  setRetryCount,
   autoCheckInterval,
   setAutoCheckInterval,
   autoCheckEnabled,
   setAutoCheckEnabled,
   autoBackupEnabled,
   setAutoBackupEnabled,
-  cleanupKeep,
-  setCleanupKeep,
   githubTokenConfigured,
   githubTokenStatus,
   githubTokenLastVerified,
-  githubRateLimitHelp,
   nextAutoCheckAt,
   nextAutoBackupAt,
   directoryStatus,
@@ -6168,6 +5677,7 @@ function PreferencesPanel({
   migrationConflictStrategy,
   setMigrationConflictStrategy,
   appMetadata,
+  checkForUpdates,
   chooseDirectory,
   validateDirectory,
   syncInstalledSkills,
@@ -6180,7 +5690,7 @@ function PreferencesPanel({
   compact,
   isPending,
   t,
-}: any) {
+}: PreferencesProps) {
   return (
     <div className={`settings-layout ${compact ? "compact-settings" : ""}`}>
       <div className="settings-main-column">
@@ -6248,40 +5758,6 @@ function PreferencesPanel({
         </SettingsSection>
 
         <SettingsSection title={t("taskBehavior")}>
-          <SettingRow
-            controlId="metadata-concurrency-input"
-            label={
-              <span className="label-with-help">
-                {t("metadataConcurrency")}
-                <HelpTip label={t("help")} text={githubRateLimitHelp} />
-              </span>
-            }
-          >
-            <div className="range-row">
-              <input
-                id="metadata-concurrency-input"
-                max="10"
-                min="1"
-                onChange={(event) => setConcurrency(Number(event.target.value))}
-                type="range"
-                value={concurrency}
-              />
-              <strong>{concurrency}</strong>
-            </div>
-          </SettingRow>
-          <SettingRow controlId="retry-count-input" label={t("retryCount")}>
-            <div className="range-row">
-              <input
-                id="retry-count-input"
-                max="5"
-                min="0"
-                onChange={(event) => setRetryCount(Number(event.target.value))}
-                type="range"
-                value={retryCount}
-              />
-              <strong>{retryCount}</strong>
-            </div>
-          </SettingRow>
           <SettingRow controlId="auto-check-interval-input" label={t("autoCheckInterval")}>
             <div className="range-row">
               <input
@@ -6346,17 +5822,17 @@ function PreferencesPanel({
             stacked
           >
             <div className="target-toggle-grid">
-              {availableSyncTargets.map((target) => {
+              {availableSyncTargets.map((target: SyncTarget) => {
                 const checked = defaultSyncTargets.includes(target.id);
                 return (
                   <label className="check-pill" key={target.id} title={target.path}>
                     <input
                       checked={checked}
                       onChange={(event) => {
-                        setDefaultSyncTargets((items) =>
+                        setDefaultSyncTargets((items: string[]) =>
                           event.target.checked
                             ? [...items, target.id]
-                            : items.filter((id) => id !== target.id),
+                            : items.filter((id: string) => id !== target.id),
                         );
                       }}
                       type="checkbox"
@@ -6437,19 +5913,6 @@ function PreferencesPanel({
                   : t("autoCheckDisabled")}
             </strong>
           </div>
-          <SettingRow controlId="cleanup-keep-input" label={t("cleanupKeep")}>
-            <div className="range-row">
-              <input
-                id="cleanup-keep-input"
-                max="200"
-                min="1"
-                onChange={(event) => setCleanupKeep(Number(event.target.value))}
-                type="range"
-                value={cleanupKeep}
-              />
-              <strong>{cleanupKeep}</strong>
-            </div>
-          </SettingRow>
         </SettingsSection>
       </div>
 
@@ -6490,7 +5953,7 @@ function PreferencesPanel({
             <span>{t("migrationConflictStrategy")}</span>
             <select
               aria-label={t("migrationConflictStrategy")}
-              onChange={(event) => setMigrationConflictStrategy(event.target.value)}
+              onChange={(event) => setMigrationConflictStrategy(event.target.value as MigrationConflictStrategy)}
               value={migrationConflictStrategy}
             >
               <option value="keep-local">{t("migrationKeepLocal")}</option>
@@ -6520,6 +5983,7 @@ function PreferencesPanel({
 
         <AboutPanel
           appMetadata={appMetadata}
+          onCheckForUpdates={checkForUpdates}
           desktopRuntime={desktopRuntime}
           language={language}
           showToast={showToast}
@@ -6530,7 +5994,14 @@ function PreferencesPanel({
   );
 }
 
-function SettingsSection({ title, note, wide = false, children }: any) {
+type SettingsSectionProps = {
+  title: ReactNode;
+  note?: ReactNode;
+  wide?: boolean;
+  children: ReactNode;
+};
+
+function SettingsSection({ title, note, wide = false, children }: SettingsSectionProps) {
   return (
     <section className={`settings-section ${wide ? "wide" : ""}`}>
       <div className="settings-section-header">
@@ -6542,7 +6013,15 @@ function SettingsSection({ title, note, wide = false, children }: any) {
   );
 }
 
-function SettingRow({ label, description, controlId, stacked = false, children }: any) {
+type SettingRowProps = {
+  label: ReactNode;
+  description?: ReactNode;
+  controlId?: string;
+  stacked?: boolean;
+  children: ReactNode;
+};
+
+function SettingRow({ label, description, controlId, stacked = false, children }: SettingRowProps) {
   return (
     <div className={`setting-row ${stacked ? "stacked" : ""}`}>
       <div className="setting-label">
@@ -6554,7 +6033,23 @@ function SettingRow({ label, description, controlId, stacked = false, children }
   );
 }
 
-function AboutPanel({ appMetadata = APP_METADATA, desktopRuntime, language, showToast, t }: any) {
+type AboutPanelProps = {
+  appMetadata?: AppMetadata;
+  onCheckForUpdates: () => Promise<AppUpdateCheck>;
+  desktopRuntime: boolean;
+  language: Language;
+  showToast: (message: string) => void;
+  t: Translate;
+};
+
+function AboutPanel({
+  appMetadata = APP_METADATA,
+  onCheckForUpdates,
+  desktopRuntime,
+  language,
+  showToast,
+  t,
+}: AboutPanelProps) {
   const [checking, setChecking] = useState(false);
   const [updateStatus, setUpdateStatus] = useState("");
   const defaultUpdateStatus = appMetadata.openSource && appMetadata.projectGithubUrl
@@ -6568,31 +6063,18 @@ function AboutPanel({ appMetadata = APP_METADATA, desktopRuntime, language, show
       return;
     }
 
-    const match = appMetadata.projectGithubUrl.match(/github\.com\/([^/]+)\/([^/#?]+)/i);
-    if (!match) {
-      setUpdateStatus(t("updateCheckFailed"));
-      showToast(t("updateCheckFailed"));
-      return;
-    }
-
     setChecking(true);
     setUpdateStatus(t("checkingForUpdates"));
     try {
-      const response = await fetch(`https://api.github.com/repos/${match[1]}/${match[2]}/releases/latest`);
-      if (!response.ok) {
-        throw new Error(`GitHub release check failed: ${response.status}`);
-      }
-      const release = await response.json();
-      const latest = String(release.tag_name || "").replace(/^v/i, "");
-      const current = appMetadata.version.replace(/^v/i, "");
-      const message = latest && latest !== current
-        ? `${language === "zh" ? "发现新版本" : "New version"} v${latest}`
+      const result = await onCheckForUpdates();
+      const message = result.updateAvailable
+        ? `${language === "zh" ? "发现新版本" : "New version"} v${result.latestVersion}`
         : t("updateUpToDate");
       setUpdateStatus(message);
       showToast(message);
-    } catch (error) {
+    } catch (error: unknown) {
       setUpdateStatus(t("updateCheckFailed"));
-      showToast(error.message || t("updateCheckFailed"));
+      showToast(errorMessage(error, t("updateCheckFailed")));
     } finally {
       setChecking(false);
     }
@@ -6609,8 +6091,8 @@ function AboutPanel({ appMetadata = APP_METADATA, desktopRuntime, language, show
       } else {
         window.open(appMetadata.projectGithubUrl, "_blank", "noopener,noreferrer");
       }
-    } catch (error) {
-      showToast(error.message || t("openUrlFailed"));
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("openUrlFailed")));
     }
   }
 
@@ -6668,7 +6150,16 @@ function RunningTask({ tasks, setActiveTab, language, t }: RunningTaskProps) {
   );
 }
 
-function AddRepoModal({ newRepo, setNewRepo, onClose, onConfirm, loading, t }: any) {
+type AddRepoModalProps = {
+  newRepo: NewRepositoryDraft;
+  setNewRepo: Dispatch<SetStateAction<NewRepositoryDraft>>;
+  onClose: () => void;
+  onConfirm: () => void | Promise<void>;
+  loading: boolean;
+  t: Translate;
+};
+
+function AddRepoModal({ newRepo, setNewRepo, onClose, onConfirm, loading, t }: AddRepoModalProps) {
   return (
     <Modal
       title={t("addRepository")}
@@ -6719,7 +6210,14 @@ function AddRepoModal({ newRepo, setNewRepo, onClose, onConfirm, loading, t }: a
   );
 }
 
-function GitHubAccountTokenModal({ onClose, onSaveToken, pending, t }: any) {
+type GitHubAccountTokenModalProps = {
+  onClose: () => void;
+  onSaveToken: (token: string) => boolean | Promise<boolean>;
+  pending: boolean;
+  t: Translate;
+};
+
+function GitHubAccountTokenModal({ onClose, onSaveToken, pending, t }: GitHubAccountTokenModalProps) {
   const [token, setToken] = useState("");
 
   async function submitToken() {
@@ -6774,6 +6272,17 @@ function GitHubAccountTokenModal({ onClose, onSaveToken, pending, t }: any) {
   );
 }
 
+type BackupModalProps = {
+  targetRepos: UiRepository[];
+  backupRoot: string;
+  onClose: () => void;
+  onConfirm: () => void | Promise<void>;
+  mode: string;
+  pending: boolean;
+  language: string;
+  t: Translate;
+};
+
 function BackupModal({
   targetRepos,
   backupRoot,
@@ -6783,7 +6292,7 @@ function BackupModal({
   pending,
   language,
   t,
-}: any) {
+}: BackupModalProps) {
   const backupableRepos = targetRepos.filter((repo) => repo.backupStatus !== "check-failed");
   const skippedRepos = targetRepos.filter((repo) => repo.backupStatus === "check-failed");
   const neverBackedCount = backupableRepos.filter((repo) => repo.backupStatus === "never-backed-up").length;
@@ -6974,7 +6483,15 @@ export function SkillUpdateConflictModal({
   );
 }
 
-function DeleteSkillModal({ skill, onClose, onConfirm, isPending, t }: any) {
+type DeleteSkillModalProps = {
+  skill?: UiSkill;
+  onClose: () => void;
+  onConfirm: () => void | Promise<void>;
+  isPending: (key: string) => boolean;
+  t: Translate;
+};
+
+function DeleteSkillModal({ skill, onClose, onConfirm, isPending, t }: DeleteSkillModalProps) {
   const pending = isPending(`deleteSkill:${skill?.id}`);
   return (
     <Modal
@@ -7006,8 +6523,24 @@ function DeleteSkillModal({ skill, onClose, onConfirm, isPending, t }: any) {
   );
 }
 
-function GithubPreviewModal({ url, onClose, onCopy, onOpenExternal, onChooseBrowser, t }: any) {
-  const [preview, setPreview] = useState(null);
+type GithubPreviewModalProps = {
+  url: string;
+  onClose: () => void;
+  onCopy: (url: string) => void | Promise<void>;
+  onOpenExternal: (url: string, mode?: string, browserId?: string) => void | Promise<void>;
+  onChooseBrowser: (url: string) => void | Promise<void>;
+  t: Translate;
+};
+
+function GithubPreviewModal({
+  url,
+  onClose,
+  onCopy,
+  onOpenExternal,
+  onChooseBrowser,
+  t,
+}: GithubPreviewModalProps) {
+  const [preview, setPreview] = useState<GithubPreview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [reloadKey, setReloadKey] = useState(0);
@@ -7034,8 +6567,8 @@ function GithubPreviewModal({ url, onClose, onCopy, onOpenExternal, onChooseBrow
       try {
         const nextPreview = await api.getGithubPreview(url);
         if (active) setPreview(nextPreview);
-      } catch (loadError) {
-        if (active) setError(loadError.message || t("githubPreviewFailed"));
+      } catch (loadError: unknown) {
+        if (active) setError(errorMessage(loadError, t("githubPreviewFailed")));
       } finally {
         if (active) setLoading(false);
       }
@@ -7098,7 +6631,23 @@ function GithubPreviewModal({ url, onClose, onCopy, onOpenExternal, onChooseBrow
   );
 }
 
-function BrowserChoiceModal({ browsers, url, onClose, onOpen, onCopy, t }: any) {
+type BrowserChoiceModalProps = {
+  browsers: SystemBrowser[];
+  url: string;
+  onClose: () => void;
+  onOpen: (mode: string, browserId?: string) => void | Promise<void>;
+  onCopy: (url: string) => void | Promise<void>;
+  t: Translate;
+};
+
+function BrowserChoiceModal({
+  browsers,
+  url,
+  onClose,
+  onOpen,
+  onCopy,
+  t,
+}: BrowserChoiceModalProps) {
   return (
     <Modal
       title={t("openGithub")}

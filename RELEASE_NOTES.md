@@ -1,5 +1,17 @@
 # Release Notes
 
+## v1.2.3 - 可靠性、安全边界与发布门禁
+
+这个补丁版集中修复任务调度、备份目录访问和迁移失败路径，并把测试、覆盖率、MSRV、端到端测试与 ad-hoc DMG 实物校验收敛为统一发布门禁。
+
+- 手工与定时任务共享 single-flight / generation 协调，旧任务或慢任务晚返回时不会再覆盖较新的结果；仅前台调度的产品边界保持不变。
+- 打开备份目录只接受稳定的 `repositoryId`，实际路径由后端重新解析并 canonicalize，前端不再能提交任意文件系统路径。
+- 移除没有实际作用的 `concurrency`、`retryCount` 和 `cleanupKeep` 设置；旧 SQLite 键继续保留并忽略，现有数据库无需破坏性迁移。
+- 追加式迁移账本、事务和原子文件操作增强了失败回滚；文件系统、Keychain 和 GitHub 失败不会被误报为成功或留下半完成状态。
+- `npm run verify` 成为确定性验证入口，CI 与发布流程另行覆盖 coverage、Rust MSRV、E2E 和完整 ad-hoc DMG 验证。
+
+English summary: v1.2.3 hardens task coordination, repository-based backup-folder access, additive migrations, and failure rollback while removing three no-op settings without breaking existing SQLite data. It also establishes verify, coverage, MSRV, E2E, and ad-hoc DMG release gates. The Apple Silicon package is ad-hoc signed, not Developer ID signed, and not Apple notarized.
+
 ## v1.2.2 - 标签计数与提示词库界面修复
 
 这个补丁版修复提示词保存后的标签使用数量未实时更新的问题。现在从详情编辑器新增或勾选标签并保存后，无需切换 Tab，标签管理面板会立即显示最新数量，并继续在后台以 SQLite 真值校正。

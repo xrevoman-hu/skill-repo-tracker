@@ -448,7 +448,7 @@ pub fn extract_embedded_legacy_v1_json<R: Read + Seek>(
     Ok(bytes)
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub fn write_v2_package<W, Tags, Prompts, Links>(
     writer: W,
     legacy_v1_json: &[u8],
@@ -477,7 +477,7 @@ where
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "archive boundary")]
 fn write_v2_package_with_limits<W, Tags, Prompts, Links>(
     writer: W,
     legacy_v1_json: &[u8],
@@ -713,7 +713,7 @@ where
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "atomic archive boundary")]
 fn write_v2_package_atomic_with_limits<Tags, Prompts, Links>(
     path: &Path,
     legacy_v1_json: &[u8],
@@ -2934,8 +2934,8 @@ mod tests {
                 .map(Ok::<_, PromptMigrationError>)
         };
 
-        let mut transport = MigrationTransportLimits::default();
-        transport.max_legacy_v1_json_bytes = LEGACY.len() as u64 - 1;
+        #[rustfmt::skip]
+        let transport = MigrationTransportLimits { max_legacy_v1_json_bytes: LEGACY.len() as u64 - 1, ..MigrationTransportLimits::default() };
         let error = write_v2_package_atomic_with_limits(
             &destination,
             LEGACY,
@@ -2951,8 +2951,8 @@ mod tests {
         assert_eq!(error.code(), "prompt_migration_entry_too_large");
         assert_eq!(std::fs::read(&destination).unwrap(), b"old");
 
-        let mut transport = MigrationTransportLimits::default();
-        transport.max_tag_record_bytes = 16;
+        #[rustfmt::skip]
+        let transport = MigrationTransportLimits { max_tag_record_bytes: 16, ..MigrationTransportLimits::default() };
         let error = write_v2_package_atomic_with_limits(
             &destination,
             LEGACY,
@@ -2974,8 +2974,8 @@ mod tests {
             max_prompt_body_bytes: 1,
             ..PromptMigrationLimits::default()
         };
-        let mut transport = MigrationTransportLimits::default();
-        transport.prompt_record_metadata_allowance_bytes = 1;
+        #[rustfmt::skip]
+        let transport = MigrationTransportLimits { prompt_record_metadata_allowance_bytes: 1, ..MigrationTransportLimits::default() };
         let error = write_v2_package_atomic_with_limits(
             &destination,
             LEGACY,
@@ -2993,8 +2993,8 @@ mod tests {
         assert_eq!(error.code(), "prompt_migration_jsonl_record_too_large");
         assert_eq!(std::fs::read(&destination).unwrap(), b"old");
 
-        let mut transport = MigrationTransportLimits::default();
-        transport.max_link_record_bytes = 1;
+        #[rustfmt::skip]
+        let transport = MigrationTransportLimits { max_link_record_bytes: 1, ..MigrationTransportLimits::default() };
         let error = write_v2_package_atomic_with_limits(
             &destination,
             LEGACY,
@@ -3019,8 +3019,8 @@ mod tests {
         assert_eq!(error.code(), "prompt_migration_jsonl_record_too_large");
         assert_eq!(std::fs::read(&destination).unwrap(), b"old");
 
-        let mut transport = MigrationTransportLimits::default();
-        transport.max_manifest_bytes = 1;
+        #[rustfmt::skip]
+        let transport = MigrationTransportLimits { max_manifest_bytes: 1, ..MigrationTransportLimits::default() };
         let error = write_v2_package_atomic_with_limits(
             &destination,
             LEGACY,

@@ -1,0 +1,44 @@
+{
+  "newModuleMaxLines": 800,
+  "hotSpots": {
+    "src/App.tsx": {
+      "maxLines": 6679,
+      "targetLines": 700,
+      "adr": "docs/adr/0007-staged-modularization.md"
+    },
+    "src/PromptsView.tsx": {
+      "maxLines": 2646,
+      "targetLines": 800,
+      "adr": "docs/adr/0007-staged-modularization.md"
+    },
+    "src-tauri/src/lib.rs": {
+      "maxLines": 10660,
+      "targetLines": 500,
+      "adr": "docs/adr/0007-staged-modularization.md"
+    },
+    "src-tauri/src/prompts.rs": {
+      "maxLines": 3689,
+      "targetLines": 800,
+      "adr": "docs/adr/0007-staged-modularization.md"
+    },
+    "src-tauri/src/prompt_zip.rs": {
+      "maxLines": 3399,
+      "targetLines": 800,
+      "adr": "docs/adr/0007-staged-modularization.md"
+    },
+    "src-tauri/src/prompt_migration.rs": {
+      "maxLines": 3153,
+      "targetLines": 800,
+      "adr": "docs/adr/0007-staged-modularization.md"
+    },
+    "src-tauri/src/temp_artifacts.rs": {
+      "maxLines": 1860,
+      "targetLines": 800,
+      "adr": "docs/adr/0007-staged-modularization.md"
+    }
+  },
+  "bundle": {
+    "maxTotalBytes": 786432,
+    "maxJavaScriptChunkBytes": 700000
+  }
+}

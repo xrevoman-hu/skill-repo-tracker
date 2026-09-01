@@ -561,6 +561,77 @@ export type AppMetadata = {
   openSource: boolean;
 };
 
+export type AppUpdateCheck = {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+};
+
+export type SyncTarget = {
+  id: string;
+  label: string;
+  path: string;
+  exists?: boolean;
+};
+
+export type AppSettings = {
+  backupRoot: string;
+  skillLibraryRoot: string;
+  skillsRoot?: string;
+  defaultSyncTargets: string[];
+  availableSyncTargets: SyncTarget[];
+  syncBackupKeep: number;
+  autoCheckInterval: number;
+  autoCheckEnabled: boolean;
+  autoBackupEnabled: boolean;
+  githubTokenConfigured: boolean;
+  githubTokenStatus: string;
+  githubTokenLastVerified?: string | null;
+};
+
+export type DirectoryValidation = {
+  writable: boolean;
+  message: string;
+  path?: string;
+};
+
+export type UpdateItemNoteResult = {
+  entityKey: string;
+  note: string;
+};
+
+export type RepositoryReadme = {
+  sourcePath?: string | null;
+  readme: string;
+};
+
+export type GithubPreview = {
+  title: string;
+  url: string;
+  defaultBranch: string;
+  resolvedRef: string;
+  sha: string;
+  readme: string | null;
+  readmeSource?: string | null;
+  readmeError?: string | null;
+};
+
+export type SystemBrowser = {
+  id: string;
+  name: string;
+};
+
+export type UpdateSettingsRequest = Pick<
+  AppSettings,
+  | "backupRoot"
+  | "skillLibraryRoot"
+  | "defaultSyncTargets"
+  | "syncBackupKeep"
+  | "autoCheckInterval"
+  | "autoCheckEnabled"
+  | "autoBackupEnabled"
+> & { skillsRoot?: string };
+
 const runningInTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
 async function command<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
@@ -588,20 +659,22 @@ export const api = {
     accountId?: string;
     fullName?: string;
     note: string;
-  }) => command<any>("update_item_note", { request }),
+  }) => command<UpdateItemNoteResult>("update_item_note", { request }),
   getSkillDetail: (skillId: string) =>
     command<SkillDetail>("get_skill_detail", { request: { skillId } }),
   getPluginDetail: (pluginId: string) => command<PluginDetail>("get_plugin_detail", { request: { pluginId } }),
   getRepositoryReadme: (repoId: string) =>
-    command<any>("get_repository_readme", { request: { repoId } }),
-  getGithubPreview: (url: string) => command<any>("get_github_preview", { request: { url } }),
+    command<RepositoryReadme>("get_repository_readme", { request: { repoId } }),
+  getGithubPreview: (url: string) => command<GithubPreview>("get_github_preview", { request: { url } }),
   listTasks: () => command<UiTask[]>("list_tasks"),
   getAppMetadata: () => command<AppMetadata>("get_app_metadata"),
-  getSettings: () => command<any>("get_settings"),
+  checkAppUpdate: () => command<AppUpdateCheck>("check_app_update"),
+  getSettings: () => command<AppSettings>("get_settings"),
   pickDirectory: (defaultPath?: string) => command<string | null>("pick_directory", { defaultPath }),
   validateDirectory: (kind: string, path: string) =>
-    command<any>("validate_directory", { request: { kind, path } }),
-  updateSettings: (request: Record<string, unknown>) => command<any>("update_settings", { request }),
+    command<DirectoryValidation>("validate_directory", { request: { kind, path } }),
+  updateSettings: (request: UpdateSettingsRequest) =>
+    command<AppSettings>("update_settings", { request }),
   addRepository: (request: { url: string; refName: string; note?: string }) =>
     command<UiRepository[]>("add_repository", { request }),
   addLocalRepository: (path: string) =>
@@ -632,7 +705,7 @@ export const api = {
   updateSkillSyncTargets: (skillId: string, mode: string, targets: string[]) =>
     command<UiSkill[]>("update_skill_sync_targets", { request: { skillId, mode, targets } }),
   retryTask: (taskId: string) => command<UiTask[]>("retry_task", { request: { taskId } }),
-  cancelTask: (taskId: string) => command<any[]>("cancel_task", { request: { taskId } }),
+  cancelTask: (taskId: string) => command<UiTask[]>("cancel_task", { request: { taskId } }),
   copyTaskSummary: (taskId: string) => command<string>("copy_task_summary", { request: { taskId } }),
   removeRepository: (id: string) => command<UiRepository[]>("remove_repository", { id }),
   listGithubAccounts: () => command<GitHubAccount[]>("list_github_accounts"),
@@ -650,10 +723,10 @@ export const api = {
     command<GitHubRepository[]>("set_github_star", { request: { accountId, owner, repo, starred } }),
   addRepositoryFromGithub: (accountId: string, owner: string, repo: string, refName?: string) =>
     command<UiRepository[]>("add_repository_from_github", { request: { accountId, owner, repo, refName } }),
-  setGithubToken: (token: string) => command<any>("set_github_token", { request: { token } }),
-  clearGithubToken: () => command<any>("clear_github_token"),
-  validateGithubToken: () => command<any>("validate_github_token"),
-  listBackupHistory: () => command<any[]>("list_backup_history"),
+  setGithubToken: (token: string) => command<unknown>("set_github_token", { request: { token } }),
+  clearGithubToken: () => command<unknown>("clear_github_token"),
+  validateGithubToken: () => command<unknown>("validate_github_token"),
+  listBackupHistory: () => command<unknown[]>("list_backup_history"),
   listPrompts: (request: PromptListRequest) =>
     command<PromptPage>("list_prompts", { request }),
   getPromptDetail: (id: string) =>
@@ -710,12 +783,11 @@ export const api = {
       expectedPackageSizeBytes,
     },
   }),
-  openBackupFolder: (path?: string) => command<string>("open_backup_folder", { path }),
+  openBackupFolder: (repositoryId?: string) =>
+    command<string>("open_backup_folder", { request: { repositoryId } }),
   openUrl: (url: string, mode = "embedded", browserId?: string) =>
     command<string>("open_url", { request: { url, mode, browserId } }),
   openExternalUrl: (url: string) =>
     command<string>("open_external_url", { request: { url } }),
-  listSystemBrowsers: () => command<any[]>("list_system_browsers"),
-  configureSchedule: (kind: string, enabled: boolean, intervalMinutes: number) =>
-    command<any>("configure_schedule", { request: { kind, enabled, intervalMinutes } }),
+  listSystemBrowsers: () => command<SystemBrowser[]>("list_system_browsers"),
 };
