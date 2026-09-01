@@ -3,7 +3,7 @@
 | 类型 | 当前允许范围 | 变更要求 |
 |---|---|---|
 | Tauri commands | `src-tauri/src/lib.rs` 注册清单 | 输入校验、负向测试、PR 声明 |
-| 网络 host | `api.github.com`、`github.com`、ZIP 重定向 `codeload.github.com` | 仅经 `GithubHttpAdapter`；重定向 host fail-closed；连接 10 秒、完整请求 30 秒超时；用户价值、最小 host、CSP 更新 |
+| 网络 host | `api.github.com`、`github.com`、ZIP 重定向 `codeload.github.com` | 仅经 `GithubHttpAdapter`；重定向 host fail-closed；连接 10 秒；普通 API 完整请求 30 秒、源码 ZIP 完整请求 120 秒；用户价值、最小 host、CSP 更新 |
 | 文件目录 | 数据库目录、备份根、Skill 主库、用户显式选择的导入/工具目标 | 特权操作用稳定 ID；显式 path 后端重验类型、范围并 canonicalize |
 | Keychain | GitHub token service/account | 不落盘；通过 adapter 测试 |
 | macOS entitlement | `src-tauri/entitlements.plist` 的现有最小集合 | 新 ADR、人工安全审查 |

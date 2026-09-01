@@ -7,6 +7,7 @@ struct RecordedRequest {
     method: reqwest::Method,
     url: String,
     headers: HeaderMap,
+    timeout: Option<Duration>,
 }
 
 struct FakeGithubHttp {
@@ -35,6 +36,7 @@ impl FakeGithubHttp {
                 method: request.method.clone(),
                 url: request.url.clone(),
                 headers: request.headers.clone(),
+                timeout: request.timeout,
             })
             .collect()
     }
@@ -46,6 +48,7 @@ impl GithubHttpAdapter for FakeGithubHttp {
             method: request.method().clone(),
             url: request.url().to_string(),
             headers: request.headers().clone(),
+            timeout: request.timeout().copied(),
         });
         let response = self.responses.lock().unwrap().pop_front().unwrap();
         Box::pin(async move { response })
@@ -104,6 +107,41 @@ fn zip_download_preserves_non_utf8_bytes() {
     .unwrap();
 
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn archive_download_extends_only_the_archive_request_timeout() {
+    let archive = FakeGithubHttp::responding([GithubHttpResponse {
+        status: 200,
+        headers: HeaderMap::new(),
+        body: Ok(vec![0x50, 0x4b]),
+    }]);
+
+    tauri::async_runtime::block_on(super::download_zip(
+        &archive,
+        "example-org",
+        "fictional-large-repository",
+        "fictional-sha",
+        None,
+        "none",
+    ))
+    .unwrap();
+
+    assert_eq!(
+        archive.requests()[0].timeout,
+        Some(Duration::from_secs(120))
+    );
+
+    let api = FakeGithubHttp::responding([GithubHttpResponse {
+        status: 200,
+        headers: HeaderMap::new(),
+        body: Ok(br#"{"login":"fictional-octopus"}"#.to_vec()),
+    }]);
+
+    tauri::async_runtime::block_on(super::validate_token_identity(&api, "fictional-token"))
+        .unwrap();
+
+    assert_eq!(api.requests()[0].timeout, Some(Duration::from_secs(30)));
 }
 
 #[test]

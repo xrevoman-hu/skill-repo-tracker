@@ -1,15 +1,16 @@
 # Release Notes
 
-## v1.2.4 - Skill 更新哈希兼容修复
+## v1.2.4 - Skill 更新哈希兼容与大 ZIP 读取修复
 
-这个补丁版修复了少数 Skill 在远端目录同时包含同名词干的文件和子目录时，下载 ZIP 与临时落盘目录会采用不同排序语义、从而导致更新校验失败的问题。
+这个补丁版修复了少数 Skill 在远端目录同时包含同名词干的文件和子目录时，下载 ZIP 与临时落盘目录会采用不同排序语义、从而导致更新校验失败的问题；同时修复较大源码 ZIP 被普通 GitHub API 的 30 秒预算过早中断的问题。
 
 - ZIP 扫描与目录复验现在共享按相对路径组件排序的 canonical 摘要语义，`topic.md` 与 `topic/...` 等同词干路径不再产生伪哈希差异。
 - 对 v1.2.3 已保存的旧摘要提供严格兼容迁移：只有同一固定远端 SHA、且本次下载内容独立复算命中 legacy digest 时才会迁移为 canonical digest。
 - 已处理的本地自定义和等待用户处理的冲突会在摘要编码迁移后保持原状态；无关摘要继续 fail closed，不会修改本地 Skill 文件或元数据。
+- 源码 ZIP 使用独立且有界的 120 秒完整请求预算，31 MB 等较大 Skill 仓库不再被普通 GitHub API 的 30 秒预算过早中断；普通 API 与 10 秒连接预算保持不变。
 - 新增从公开 Tauri command seam 出发的更新、拒绝、已处理自定义与待处理冲突回归测试，并把摘要兼容边界写入文件系统 Rule。
 
-English summary: v1.2.4 fixes false Skill update hash mismatches when a remote tree contains file/directory sibling paths with the same stem. ZIP scans and directory verification now share canonical component ordering. Legacy v1.2.3 digests migrate only for the same pinned remote SHA after an independently recomputed legacy match; unrelated hashes still fail closed without changing local files or metadata. Existing handled customizations and pending conflicts retain their state. The Apple Silicon package is ad-hoc signed, not Developer ID signed, and not Apple notarized.
+English summary: v1.2.4 fixes false Skill update hash mismatches when a remote tree contains file/directory sibling paths with the same stem. ZIP scans and directory verification now share canonical component ordering. Legacy v1.2.3 digests migrate only for the same pinned remote SHA after an independently recomputed legacy match; unrelated hashes still fail closed without changing local files or metadata. Existing handled customizations and pending conflicts retain their state. Source ZIP downloads use a separate bounded 120-second request budget so larger Skill repositories are not cut off by the 30-second API budget; regular API and 10-second connect budgets remain unchanged. The Apple Silicon package is ad-hoc signed, not Developer ID signed, and not Apple notarized.
 
 ## v1.2.3 - 可靠性、安全边界与发布门禁
 
