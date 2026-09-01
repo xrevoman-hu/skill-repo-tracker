@@ -9,8 +9,10 @@
 - 移除没有实际作用的 `concurrency`、`retryCount` 和 `cleanupKeep` 设置；旧 SQLite 键继续保留并忽略，现有数据库无需破坏性迁移。
 - 追加式迁移账本、事务和原子文件操作增强了失败回滚；文件系统、Keychain 和 GitHub 失败不会被误报为成功或留下半完成状态。
 - `npm run verify` 成为确定性验证入口，CI 与发布流程另行覆盖 coverage、Rust MSRV、E2E 和完整 ad-hoc DMG 验证。
+- 锁定依赖升级到 `quinn-proto 0.11.17`，修复对应的 high severity 公告。medium severity 的 `glib 0.18.5` 公告仍在跟踪，但不在 macOS arm64 产品的激活依赖图中，因此本版不宣称安全告警清零。
+- local phase 只输出权限为 `0600` 的 `.release.token` 文件路径，不再把 token 内容写入日志。这个未签名 token 只是产物字段载体，不是凭据或发布来源证明，也不会上传为 Release 资产或写入 Release notes。
 
-English summary: v1.2.3 hardens task coordination, repository-based backup-folder access, additive migrations, and failure rollback while removing three no-op settings without breaking existing SQLite data. It also establishes verify, coverage, MSRV, E2E, and ad-hoc DMG release gates. The Apple Silicon package is ad-hoc signed, not Developer ID signed, and not Apple notarized.
+English summary: v1.2.3 hardens task coordination, repository-based backup-folder access, additive migrations, and failure rollback while removing three no-op settings without breaking existing SQLite data. It also establishes verify, coverage, MSRV, E2E, and ad-hoc DMG release gates; updates `quinn-proto` to `0.11.17` for its high-severity advisory; and keeps manifest-token contents out of release logs. The separate medium-severity `glib 0.18.5` advisory remains tracked outside the active macOS arm64 dependency graph, so this release does not claim that all advisories are cleared. The Apple Silicon package is ad-hoc signed, not Developer ID signed, and not Apple notarized.
 
 ## v1.2.2 - 标签计数与提示词库界面修复
 

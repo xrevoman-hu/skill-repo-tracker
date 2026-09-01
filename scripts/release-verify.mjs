@@ -120,6 +120,40 @@ export function encodeReleaseManifest(manifest) {
   return Buffer.from(JSON.stringify(validated), "utf8").toString("base64url");
 }
 
+export function writeReleaseHandoffFiles({ directory, manifest }) {
+  const validated = validateReleaseManifest(manifest, manifest?.version);
+  const prefix = `${PRODUCT_NAME}_${validated.version}_aarch64.release`;
+  const manifestPath = join(directory, `${prefix}.json`);
+  const tokenPath = join(directory, `${prefix}.token`);
+  const token = encodeReleaseManifest(validated);
+
+  writeFileSync(manifestPath, `${JSON.stringify(validated, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(manifestPath, 0o600);
+  writeFileSync(tokenPath, `${token}\n`, { mode: 0o600 });
+  chmodSync(tokenPath, 0o600);
+
+  return { manifestPath, tokenPath };
+}
+
+export function buildLocalReleaseSummary({
+  dmgPath,
+  manifestPath,
+  tokenPath,
+  bytes,
+  sha256: digest,
+  commit,
+}) {
+  return [
+    "PASS release local artifact",
+    `path=${dmgPath}`,
+    `manifest=${manifestPath}`,
+    `manifestTokenFile=${tokenPath}`,
+    `bytes=${bytes}`,
+    `sha256=${digest}`,
+    `commit=${commit}`,
+  ];
+}
+
 export function decodeReleaseManifestToken(token, expectedVersion) {
   if (!/^[A-Za-z0-9_-]+$/.test(token ?? "")) {
     throw new Error("release manifest token is not canonical base64url");
@@ -427,10 +461,6 @@ function localPhase(version) {
   run("codesign", ["--verify", "--verbose=4", dmgPath]);
   run("hdiutil", ["verify", dmgPath]);
   verifyMountedDmg(dmgPath, version);
-  const manifestPath = join(
-    dmgDirectory,
-    `${PRODUCT_NAME}_${version}_aarch64.release.json`,
-  );
   // Recheck after every gate and build tool, immediately before binding the manifest fields.
   const { bytes, commit, digest, manifest } = withCleanWorktreeBoundary(
     assertCleanWorktree,
@@ -452,16 +482,20 @@ function localPhase(version) {
       };
     },
   );
-  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(manifestPath, 0o600);
-  const manifestToken = encodeReleaseManifest(manifest);
-  console.log(`PASS release local artifact`);
-  console.log(`path=${dmgPath}`);
-  console.log(`manifest=${manifestPath}`);
-  console.log(`bytes=${bytes}`);
-  console.log(`sha256=${digest}`);
-  console.log(`commit=${commit}`);
-  console.log(`manifestToken=${manifestToken}`);
+  const { manifestPath, tokenPath } = writeReleaseHandoffFiles({
+    directory: dmgDirectory,
+    manifest,
+  });
+  for (const line of buildLocalReleaseSummary({
+    dmgPath,
+    manifestPath,
+    tokenPath,
+    bytes,
+    sha256: digest,
+    commit,
+  })) {
+    console.log(line);
+  }
 }
 
 function remotePhase(version, manifest) {

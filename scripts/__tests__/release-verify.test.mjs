@@ -1,12 +1,23 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
   assertDmgSourceLayout,
   buildAppCodesignArguments,
+  buildLocalReleaseSummary,
   buildReleaseManifest,
   buildRemoteFetchArguments,
   decodeReleaseManifestToken,
@@ -19,6 +30,7 @@ import {
   validateReleaseHost,
   validateMountedDmgLayout,
   withCleanWorktreeBoundary,
+  writeReleaseHandoffFiles,
 } from "../release-verify.mjs";
 
 function withTemporaryDirectory(callback) {
@@ -165,6 +177,72 @@ test("operator-carried manifest and remote digest form one artifact identity cha
     () => validateRemoteBytes({ expectedBytes: 42, serverBytes: 42, downloadedBytes: 43 }),
     /downloaded asset bytes 43 do not match the operator-provided manifest bytes 42/,
   );
+});
+
+test("local release handoff stores both manifest representations as 0600 files", () => {
+  withTemporaryDirectory((directory) => {
+    const manifest = buildReleaseManifest({
+      version: "1.2.2",
+      commit: "a".repeat(40),
+      artifact: "Skill Repo Tracker_1.2.2_aarch64.dmg",
+      bytes: 42,
+      sha256: "b".repeat(64),
+    });
+
+    const handoff = writeReleaseHandoffFiles({ directory, manifest });
+
+    assert.equal(statSync(handoff.manifestPath).mode & 0o777, 0o600);
+    assert.equal(statSync(handoff.tokenPath).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(readFileSync(handoff.manifestPath, "utf8")), manifest);
+    assert.deepEqual(
+      decodeReleaseManifestToken(readFileSync(handoff.tokenPath, "utf8").trim(), "1.2.2"),
+      manifest,
+    );
+  });
+});
+
+test("local release summary exposes only the private token file path", () => {
+  const lines = buildLocalReleaseSummary({
+    dmgPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.dmg",
+    manifestPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.release.json",
+    tokenPath: "/tmp/Skill Repo Tracker_1.2.2_aarch64.release.token",
+    bytes: 42,
+    sha256: "b".repeat(64),
+    commit: "a".repeat(40),
+  });
+
+  assert.deepEqual(lines, [
+    "PASS release local artifact",
+    "path=/tmp/Skill Repo Tracker_1.2.2_aarch64.dmg",
+    "manifest=/tmp/Skill Repo Tracker_1.2.2_aarch64.release.json",
+    "manifestTokenFile=/tmp/Skill Repo Tracker_1.2.2_aarch64.release.token",
+    "bytes=42",
+    `sha256=${"b".repeat(64)}`,
+    `commit=${"a".repeat(40)}`,
+  ]);
+  assert.ok(lines.every((line) => !line.startsWith("manifestToken=")));
+});
+
+test("top-level release errors never echo an operator-carried manifest token", () => {
+  const token = Buffer.from("SRT_RELEASE_TOKEN_SENTINEL", "utf8").toString("base64url");
+  const result = spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("../release-verify.mjs", import.meta.url)),
+      "--lane",
+      "adhoc",
+      "--version",
+      "1.2.2",
+      "--phase",
+      "remote",
+      "--manifest-token",
+      token,
+    ],
+    { encoding: "utf8" },
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.doesNotMatch(`${result.stdout}${result.stderr}`, new RegExp(token));
 });
 
 test("remote verification accepts exactly one public DMG asset", () => {

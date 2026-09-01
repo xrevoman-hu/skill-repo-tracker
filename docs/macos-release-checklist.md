@@ -30,10 +30,16 @@ npm run release:verify -- --lane adhoc --version X.Y.Z --phase local
 6. 删除签名前的旧 DMG，并从已签名 App 重新封装；
 7. 签名并校验最终 DMG；
 8. `hdiutil verify`、只读挂载、挂载内 App 签名/版本/arm64 校验；
-9. 输出 bytes、SHA-256、当前 commit 和承载这些操作者交接字段的单一、无签名
-   `manifestToken`，并在 DMG 旁写入权限为 `0600` 的
-   `Skill Repo Tracker_X.Y.Z_aarch64.release.json` 交接清单。token 只防止逐字段混用，
-   不能证明 local gate 已执行或 token 的生成者身份。
+9. 输出 bytes、SHA-256、当前 commit，以及 DMG 旁两个权限均为 `0600` 的交接文件路径：
+   `Skill Repo Tracker_X.Y.Z_aarch64.release.json` 和
+   `Skill Repo Tracker_X.Y.Z_aarch64.release.token`。终端只显示 token 文件路径，不显示
+   token 内容。token 是承载 version/commit/name/bytes/SHA 字段的 unsigned artifact-field
+   carrier，只防止逐字段混用；它不是凭据，也不能作为 local gate provenance 或生成者
+   身份证明。
+
+`.release.token` 不得上传为 Release 资产、写入 Release notes 或复制到终端/CI 日志。
+GitHub 上的 local gate 只在临时 runner 内验证本次构建，不导出 token artifact；正式发布与
+remote phase 仍使用操作者在最终干净 `main` 上本地生成的 `0600` 交接文件。
 
 “签名 loose App 后直接签旧 DMG”不是有效流程，因为旧 DMG 内仍是签名前的 App。
 
@@ -52,12 +58,19 @@ Release notes 必须中英文说明 ad-hoc 边界与首次打开方法。公开�
 
 ## 3. 远端实物门
 
-发布动作返回明确结果后，把操作者从 local phase 取得的单一 `manifestToken` 作为不可
-省略的字段载体传给 remote phase；不要拆开复制 commit/SHA，以免混用不同构建。这个
-未签名 token 本身不构成 local gate provenance：
+发布动作返回明确结果后，从 local phase 输出的 `0600` `.release.token` 文件读取单一
+manifest token，作为不可省略的字段载体传给 remote phase；不要拆开复制 commit/SHA，
+以免混用不同构建。关闭 shell xtrace，使用 `--silent` 避免 npm 把调用命令写入日志，并在
+命令结束后清除变量。这个 unsigned artifact-field carrier 不是凭据，也不构成 local gate
+provenance：
 
 ```bash
-npm run release:verify -- --lane adhoc --version X.Y.Z --phase remote --manifest-token <LOCAL_MANIFEST_TOKEN>
+set +x
+RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_X.Y.Z_aarch64.release.token")"
+npm run --silent release:verify -- \
+  --lane adhoc --version X.Y.Z --phase remote \
+  --manifest-token "$RELEASE_MANIFEST_TOKEN"
+unset RELEASE_MANIFEST_TOKEN
 ```
 
 remote phase 从 token 还原并验证 manifest，再只读核对
