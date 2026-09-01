@@ -1,0 +1,38 @@
+name: Security audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: macos-15
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Audit npm lock through the official registry
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+      - name: Set up pinned Rust
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup default 1.95.0
+      - name: Install pinned cargo-audit
+        run: cargo install cargo-audit --locked --version 0.21.2
+      - name: Audit Cargo.lock
+        run: cargo audit --file src-tauri/Cargo.lock

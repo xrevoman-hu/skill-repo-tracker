@@ -714,7 +714,7 @@ describe("PromptsView", () => {
     let drawer = screen.getByRole("dialog", { name: "Create prompt" });
     let title = within(drawer).getByRole("textbox", { name: "Title" });
     expect(title).not.toHaveAttribute("maxlength");
-    await user.type(title, "😀".repeat(200));
+    fireEvent.change(title, { target: { value: "😀".repeat(200) } });
     await user.type(within(drawer).getByRole("textbox", { name: "Content" }), "body");
     expect(title).toHaveValue("😀".repeat(200));
     await user.click(within(drawer).getByRole("button", { name: "Save" }));
@@ -725,7 +725,7 @@ describe("PromptsView", () => {
     await user.click(screen.getByRole("button", { name: "New prompt" }));
     drawer = screen.getByRole("dialog", { name: "Create prompt" });
     title = within(drawer).getByRole("textbox", { name: "Title" });
-    await user.type(title, "😀".repeat(201));
+    fireEvent.change(title, { target: { value: "😀".repeat(201) } });
     await user.type(within(drawer).getByRole("textbox", { name: "Content" }), "body");
     await user.click(within(drawer).getByRole("button", { name: "Save" }));
     expect(await within(drawer).findByRole("alert")).toHaveTextContent("must not exceed 200 characters");
@@ -740,12 +740,12 @@ describe("PromptsView", () => {
     await user.click(await screen.findByRole("button", { name: "Manage tags" }));
     const newTag = screen.getByRole("textbox", { name: "Tag name" });
     expect(newTag).not.toHaveAttribute("maxlength");
-    await user.type(newTag, "😀".repeat(50));
+    fireEvent.change(newTag, { target: { value: "😀".repeat(50) } });
     expect(newTag).toHaveValue("😀".repeat(50));
     await user.click(screen.getByRole("button", { name: "New tag" }));
     expect(client.createTag).toHaveBeenCalledWith("😀".repeat(50));
 
-    await user.type(newTag, "😀".repeat(51));
+    fireEvent.change(newTag, { target: { value: "😀".repeat(51) } });
     await user.click(screen.getByRole("button", { name: "New tag" }));
     expect(client.createTag).toHaveBeenCalledTimes(1);
 
@@ -753,7 +753,7 @@ describe("PromptsView", () => {
     let rename = screen.getByRole("textbox", { name: "Rename: 研究" });
     expect(rename).not.toHaveAttribute("maxlength");
     await user.clear(rename);
-    await user.type(rename, "🧪".repeat(50));
+    fireEvent.change(rename, { target: { value: "🧪".repeat(50) } });
     expect(rename).toHaveValue("🧪".repeat(50));
     await user.click(screen.getByRole("button", { name: "Save tag" }));
     expect(client.renameTag).toHaveBeenCalledWith("research", "🧪".repeat(50));
@@ -761,7 +761,7 @@ describe("PromptsView", () => {
     await user.click(screen.getAllByRole("button", { name: "Rename" })[0]);
     rename = screen.getByRole("textbox", { name: "Rename: 研究" });
     await user.clear(rename);
-    await user.type(rename, "🧪".repeat(51));
+    fireEvent.change(rename, { target: { value: "🧪".repeat(51) } });
     await user.click(screen.getByRole("button", { name: "Save tag" }));
     expect(client.renameTag).toHaveBeenCalledTimes(1);
   });

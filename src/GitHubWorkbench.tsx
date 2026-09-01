@@ -99,7 +99,8 @@ function repoContentMatches(repo: GitHubRepository, query: string) {
 }
 
 function isPersonalRepository(repo: GitHubRepository, account?: GitHubAccount) {
-  return Boolean(account?.login) && normalize(repo.owner) === normalize(account.login);
+  if (!account?.login) return false;
+  return normalize(repo.owner) === normalize(account.login);
 }
 
 function compareNames(left: string, right: string) {

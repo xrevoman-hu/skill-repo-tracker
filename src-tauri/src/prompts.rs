@@ -306,12 +306,26 @@ fn sqlite_integrity_error(message: impl Into<String>) -> AppError {
 /// Installs the prompt schema, indexes, FTS table, triggers and first rebuild as one transaction.
 /// This intentionally uses `unchecked_transaction` so the caller can keep the established shared
 /// `&Connection` contract while still receiving all-or-nothing migration behavior.
+pub(crate) fn preflight_prompt_schema(conn: &Connection) -> Result<i64, AppError> {
+    let previous_user_version =
+        conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
+    if previous_user_version > PROMPT_SCHEMA_USER_VERSION {
+        return Err(AppError::with_details(
+            "prompt_schema_incompatible",
+            "提示词数据库由更高版本的应用创建，当前版本无法安全打开。",
+            format!(
+                "user_version={previous_user_version}, supported_max={PROMPT_SCHEMA_USER_VERSION}"
+            ),
+        ));
+    }
+    Ok(previous_user_version)
+}
+
 pub(crate) fn migrate_prompt_library(conn: &Connection) -> Result<(), AppError> {
+    let previous_user_version = preflight_prompt_schema(conn)?;
     conn.execute_batch(
         "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",
     )?;
-    let previous_user_version =
-        conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))?;
     let fts_existed = conn.query_row(
         "SELECT EXISTS(
            SELECT 1 FROM sqlite_master WHERE name = 'prompt_fts' AND type = 'table'
@@ -1350,8 +1364,7 @@ fn build_filter_clause(
 
     let tag_ids = unique_filter_tag_ids(tag_ids);
     if !tag_ids.is_empty() {
-        let placeholders = std::iter::repeat("?")
-            .take(tag_ids.len())
+        let placeholders = std::iter::repeat_n("?", tag_ids.len())
             .collect::<Vec<_>>()
             .join(", ");
         match tag_mode {
@@ -1400,9 +1413,10 @@ fn prompt_order_clause(sort: PromptSort) -> &'static str {
     }
 }
 
+type PromptSummaryRecord = (i64, String, String, String, bool, u64, String, String, i64);
 fn rows_to_summaries(
     conn: &Connection,
-    records: Vec<(i64, String, String, String, bool, u64, String, String, i64)>,
+    records: Vec<PromptSummaryRecord>,
 ) -> Result<Vec<PromptSummary>, AppError> {
     records
         .into_iter()
@@ -1924,9 +1938,9 @@ pub(crate) fn safe_prompt_zip_title(title: &str) -> String {
             || matches!(
                 ch,
                 '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' | '\0'
-            ) {
-            '_'
-        } else if ch.is_whitespace() {
+            )
+            || ch.is_whitespace()
+        {
             '_'
         } else {
             ch
@@ -2175,6 +2189,10 @@ pub(crate) fn seed_debug_prompt_fixture(
 }
 
 #[cfg(test)]
+#[path = "prompts_schema_tests.rs"]
+mod schema_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
@@ -2216,112 +2234,6 @@ mod tests {
             query: query.to_string(),
             ..PromptListRequest::default()
         }
-    }
-
-    #[test]
-    fn migration_is_atomic_idempotent_and_integrity_checked() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_prompt_library(&conn).unwrap();
-        migrate_prompt_library(&conn).unwrap();
-        prompt_fts_integrity_check(&conn).unwrap();
-        let version: i64 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, PROMPT_SCHEMA_USER_VERSION);
-        assert_eq!(library_revision(&conn).unwrap(), 0);
-
-        let broken = Connection::open_in_memory().unwrap();
-        broken
-            .execute_batch("CREATE TABLE prompt_tags(id TEXT PRIMARY KEY);")
-            .unwrap();
-        let error = migrate_prompt_library(&broken).unwrap_err();
-        assert_eq!(error.code, "prompt_schema_incompatible");
-        let prompts_created: bool = broken
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'prompts')",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(
-            !prompts_created,
-            "failed migration must roll back new tables"
-        );
-    }
-
-    #[test]
-    fn v2_schema_migrates_to_manual_order_without_changing_visible_order() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            r#"
-            PRAGMA user_version = 2;
-            CREATE TABLE prompts (
-              row_id INTEGER PRIMARY KEY AUTOINCREMENT,
-              id TEXT NOT NULL UNIQUE,
-              title TEXT NOT NULL,
-              content TEXT NOT NULL,
-              excerpt TEXT NOT NULL,
-              pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
-              revision INTEGER NOT NULL DEFAULT 1 CHECK (revision >= 1),
-              created_at TEXT NOT NULL,
-              updated_at TEXT NOT NULL,
-              CHECK (length(title) BETWEEN 1 AND 200),
-              CHECK (length(CAST(content AS BLOB)) BETWEEN 1 AND 5242880)
-            );
-            INSERT INTO prompts
-              (id, title, content, excerpt, pinned, revision, created_at, updated_at)
-            VALUES
-              ('normal-older', '普通旧', '正文', '正文', 0, 1, '2026-01-01', '2026-01-01'),
-              ('normal-newer', '普通新', '正文', '正文', 0, 1, '2026-01-01', '2026-01-02'),
-              ('pinned-older', '置顶旧', '正文', '正文', 1, 1, '2026-01-01', '2026-01-01'),
-              ('pinned-newer', '置顶新', '正文', '正文', 1, 1, '2026-01-01', '2026-01-02');
-            "#,
-        )
-        .unwrap();
-
-        migrate_prompt_library(&conn).unwrap();
-
-        let version: i64 = conn
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(version, 3);
-        let manual_order_column_exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(
-                   SELECT 1 FROM pragma_table_info('prompts') WHERE name = 'manual_order'
-                 )",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(manual_order_column_exists);
-        let manual_index_exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(
-                   SELECT 1 FROM sqlite_master
-                   WHERE type = 'index' AND name = 'prompts_manual_sort_idx'
-                 )",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(manual_index_exists);
-
-        let ids = list_prompts(&conn, &PromptListRequest::default())
-            .unwrap()
-            .items
-            .into_iter()
-            .map(|prompt| prompt.id)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            ids,
-            [
-                "pinned-newer",
-                "pinned-older",
-                "normal-newer",
-                "normal-older",
-            ]
-        );
     }
 
     #[test]

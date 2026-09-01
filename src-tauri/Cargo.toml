@@ -1,6 +1,6 @@
 [package]
 name = "skill-repo-tracker"
-version = "1.2.2"
+version = "1.2.3"
 description = "Local-first GitHub repository and Skill update manager"
 authors = ["Skill Repo Tracker"]
 license = "MIT"
@@ -8,7 +8,7 @@ repository = "https://github.com/xrevoman-hu/skill-repo-tracker"
 homepage = "https://github.com/xrevoman-hu/skill-repo-tracker"
 readme = "../README.md"
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.88.0"
 
 [lib]
 name = "skill_repo_tracker_lib"
@@ -33,10 +33,12 @@ serde_json = "1"
 sha2 = "0.10"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
-tauri-plugin-opener = "2"
 tempfile = "3"
-tokio = { version = "1", features = ["sync"] }
+tokio = { version = "1", features = ["sync", "time"] }
 urlencoding = "2"
 unicode-normalization = "0.1"
 walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tauri = { version = "2", features = ["test"] }
