@@ -1,6 +1,7 @@
 use crate::{
     adapters::{
-        GithubHttpAdapter, GithubHttpResponse, GITHUB_REQUEST_TIMEOUT, GITHUB_TIMEOUT_PREFIX,
+        GithubHttpAdapter, GithubHttpResponse, GITHUB_ARCHIVE_REQUEST_TIMEOUT,
+        GITHUB_REQUEST_TIMEOUT, GITHUB_TIMEOUT_PREFIX,
     },
     classify_github_rejection, github_account_id_for_login, github_account_token_key, headers,
     scopes_from_headers, truncate_preview, utc_now, AppError, GithubAccountRecord,
@@ -41,6 +42,7 @@ async fn send_request_with_timeout(
     })?;
     let mut request = reqwest::Request::new(method, url);
     *request.headers_mut() = headers;
+    *request.timeout_mut() = Some(timeout);
     match tokio::time::timeout(timeout, transport.execute(request)).await {
         Err(_) => Err(AppError::with_details(
             "github_timeout",
@@ -178,12 +180,13 @@ pub(super) async fn download_zip(
     auth: &str,
 ) -> Result<Vec<u8>, AppError> {
     let url = format!("https://api.github.com/repos/{owner}/{repo}/zipball/{sha}");
-    let response = send_request(
+    let response = send_request_with_timeout(
         transport,
         Method::GET,
         url,
         headers(token),
         "源码 ZIP 下载失败。",
+        GITHUB_ARCHIVE_REQUEST_TIMEOUT,
     )
     .await?;
     if !matches!(response.status, 200..=299) {

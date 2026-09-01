@@ -68,6 +68,7 @@ pub(super) struct ReqwestGithubHttpAdapter(reqwest::Client);
 const MAX_GITHUB_REDIRECTS: usize = 5;
 pub(super) const GITHUB_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) const GITHUB_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub(super) const GITHUB_ARCHIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 pub(super) const GITHUB_TIMEOUT_PREFIX: &str = "github_request_timeout: ";
 
 fn github_request_allowed(url: &reqwest::Url) -> bool {
@@ -269,7 +270,12 @@ mod tests {
     fn github_client_timeout_budget_is_explicit_and_bounded() {
         assert_eq!(GITHUB_CONNECT_TIMEOUT, std::time::Duration::from_secs(10));
         assert_eq!(GITHUB_REQUEST_TIMEOUT, std::time::Duration::from_secs(30));
+        assert_eq!(
+            GITHUB_ARCHIVE_REQUEST_TIMEOUT,
+            std::time::Duration::from_secs(120)
+        );
         assert!(GITHUB_CONNECT_TIMEOUT < GITHUB_REQUEST_TIMEOUT);
+        assert!(GITHUB_REQUEST_TIMEOUT < GITHUB_ARCHIVE_REQUEST_TIMEOUT);
     }
 
     #[test]
