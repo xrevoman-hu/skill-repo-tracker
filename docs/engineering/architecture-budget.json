@@ -12,7 +12,7 @@
       "adr": "docs/adr/0007-staged-modularization.md"
     },
     "src-tauri/src/lib.rs": {
-      "maxLines": 10660,
+      "maxLines": 10604,
       "targetLines": 500,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
