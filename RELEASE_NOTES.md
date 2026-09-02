@@ -1,5 +1,18 @@
 # Release Notes
 
+## v1.2.7 - 依赖风险账本与安全审计闭环
+
+这个补丁版不新增产品功能，而是把 v1.2.6 之后已合入 `main` 的运行时依赖安全修复与可执行依赖风险治理交付到新的 Apple Silicon DMG。
+
+- `anyhow` 锁定到 `1.0.103`，修复 `RUSTSEC-2026-0190` 记录的 unsoundness；本版不声称该问题已被实际利用。
+- 新增追加式 dependency risk ledger，active 风险必须记录依赖身份、advisory、适用 target、owner、理由、退出条件、触发器和最长 90 天复查日期；风险不得静默删除或扩大。
+- Security audit 固定使用 `cargo-audit 0.22.2`，在隔离的临时 `CARGO_HOME` 中先证明 crates.io index 与 yanked 检查完整执行，再把 JSON 告警与三个目标平台的 Cargo resolve graph 双向对账；解析、网络、过滤、目标图或账本漂移均 fail closed。
+- 当前唯一允许的 active unsound 风险仍是 `glib 0.18.5 / RUSTSEC-2024-0429`，只存在于既有 Linux GTK/WebKitGTK 依赖图，不在 Apple Silicon macOS 产品图中，最晚于 2026-12-01 复查；本版不宣称所有 RustSec 告警清零。
+- 五个 GitHub workflows 已固定到 Node 24-native 的 `actions/checkout` v7 与 `actions/setup-node` v7 commit；本版不改变产品行为、SQLite schema、外部 API、设置、后台状态或系统权限。
+- Apple Silicon 安装包继续采用 ad-hoc 签名，不是 Developer ID 签名，也没有经过 Apple notarization；首次打开若被 macOS 拦截，请在 Finder 中按住 Control 点击 App 并选择“打开”，或在“系统设置 -> 隐私与安全性”中选择“仍要打开”。
+
+English summary: v1.2.7 adds no product feature. It delivers the post-v1.2.6 `anyhow 1.0.103` runtime security fix and an append-only dependency risk ledger. The pinned `cargo-audit 0.22.2` lane now proves a fresh crates.io index/yanked scan in an isolated temporary `CARGO_HOME`, then reconciles structured findings against three target-specific Cargo resolve graphs. The only active unsound risk remains `glib 0.18.5 / RUSTSEC-2024-0429` in the existing Linux GTK/WebKitGTK graph, not the Apple Silicon macOS product graph, with review due by 2026-12-01; this release does not claim all RustSec warnings are cleared. GitHub workflows use pinned Node 24-native action commits. Product behavior, SQLite, external APIs, settings, background state, and system permissions are unchanged. The package remains ad-hoc signed, not Developer ID signed, and not Apple notarized. If macOS blocks first launch, Control-click the app in Finder and choose Open, or use System Settings -> Privacy & Security -> Open Anyway.
+
 ## v1.2.6 - 发布门禁与 RustSec 依赖收口
 
 这个补丁版不新增产品功能，而是把 v1.2.5 发布后已合入 `main` 的治理与依赖安全修复交付到新的 Apple Silicon DMG。
