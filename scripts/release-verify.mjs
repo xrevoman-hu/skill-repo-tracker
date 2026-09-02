@@ -27,6 +27,21 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import {
+  buildLocalMainFetchArguments,
+  buildRemoteFetchArguments,
+  remoteVerifierTagRef,
+  validateFinalReleaseMetadata,
+  validateLocalReleaseSource,
+} from "./release-source-policy.mjs";
+
+export {
+  buildLocalMainFetchArguments,
+  buildRemoteFetchArguments,
+  validateFinalReleaseMetadata,
+  validateLocalReleaseSource,
+} from "./release-source-policy.mjs";
+
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(SCRIPT_DIR, "..");
 const PRODUCT_NAME = "Skill Repo Tracker";
@@ -414,21 +429,6 @@ export function withCleanWorktreeBoundary(assertClean, buildManifestFields) {
   return buildManifestFields();
 }
 
-function verifierRemoteTagRef(version) {
-  return `refs/tags/_srt-release-remote/v${version}`;
-}
-
-export function buildRemoteFetchArguments(version) {
-  return [
-    "fetch",
-    "--no-tags",
-    "--prune",
-    "origin",
-    "+refs/heads/main:refs/remotes/origin/main",
-    `refs/tags/v${version}:${verifierRemoteTagRef(version)}`,
-  ];
-}
-
 export function validateReleaseHost(platform, architecture) {
   if (platform !== "darwin" || architecture !== "arm64") {
     throw new Error(
@@ -465,6 +465,18 @@ function run(command, args, options = {}) {
     env: process.env,
     ...options,
   });
+}
+
+function assertLocalReleaseSource(version) {
+  run("git", buildLocalMainFetchArguments());
+  const head = run("git", ["rev-parse", "HEAD"], { capture: true }).trim();
+  const remoteMain = run("git", ["rev-parse", "origin/main"], { capture: true }).trim();
+  const remoteTagOutput = run(
+    "git",
+    ["ls-remote", "--tags", "--refs", "origin", `refs/tags/v${version}`],
+    { capture: true },
+  );
+  validateLocalReleaseSource({ version, head, remoteMain, remoteTagOutput });
 }
 
 function sha256(path) {
@@ -589,6 +601,7 @@ function verifyMountedDmg(dmgPath, version) {
 function localPhase(version) {
   validateReleaseHost(process.platform, process.arch);
   assertCleanWorktree();
+  assertLocalReleaseSource(version);
   run("npm", ["run", "verify"]);
   run("npm", ["run", "coverage:check"]);
   run("npm", ["run", "test:e2e"]);
@@ -658,7 +671,10 @@ function localPhase(version) {
   verifyMountedDmg(dmgPath, version);
   // Recheck after every gate and build tool, immediately before binding the manifest fields.
   const { bytes, commit, digest, manifest } = withCleanWorktreeBoundary(
-    assertCleanWorktree,
+    () => {
+      assertCleanWorktree();
+      assertLocalReleaseSource(version);
+    },
     () => {
       const cleanCommit = run("git", ["rev-parse", "HEAD"], { capture: true }).trim();
       const cleanDigest = sha256(dmgPath);
@@ -701,7 +717,7 @@ function remotePhase(version, manifest) {
   run("git", buildRemoteFetchArguments(version));
   const head = run("git", ["rev-parse", "HEAD"], { capture: true }).trim();
   const remote = run("git", ["rev-parse", "origin/main"], { capture: true }).trim();
-  const remoteTag = verifierRemoteTagRef(version);
+  const remoteTag = remoteVerifierTagRef(version);
   const tag = run("git", ["rev-parse", "--verify", `${remoteTag}^{commit}`], {
     capture: true,
   }).trim();
@@ -720,14 +736,14 @@ function remotePhase(version, manifest) {
         "view",
         `v${version}`,
         "--json",
-        "tagName,name,url,isDraft,isPrerelease,assets",
+        "tagName,name,url,isDraft,isPrerelease,body,assets",
       ],
       { capture: true },
     ),
   );
-  if (release.tagName !== `v${version}` || release.isDraft || release.isPrerelease) {
-    throw new Error("GitHub Release is missing or is not a final release");
-  }
+  const releaseNotesPath = join(ROOT, "docs", "releases", `v${version}.md`);
+  assertFile(releaseNotesPath, "tracked release notes");
+  validateFinalReleaseMetadata(release, version, readFileSync(releaseNotesPath, "utf8"));
   const assetName = `Skill.Repo.Tracker_${version}_aarch64.dmg`;
   const asset = selectSingleReleaseAsset(release.assets, version);
 

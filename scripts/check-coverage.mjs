@@ -14,6 +14,8 @@ import {
   rustAttributes,
   shouldEnforceChangedCoverage,
 } from "./governance.mjs";
+import { gitPathExistsAtRef, listUntrackedFiles } from "./git-paths.mjs";
+import { isRustProductionSourcePath } from "./source-classification.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = "docs/engineering/coverage-baseline.json";
@@ -40,12 +42,7 @@ export function isCoverageProductionPath(mode, path) {
     );
   }
   if (mode === "rust") {
-    return (
-      path.startsWith("src-tauri/src/") &&
-      path.endsWith(".rs") &&
-      !/(?:^|\/)(?:tests?|.*_tests)\.rs$/.test(path) &&
-      !path.includes("/tests/")
-    );
+    return isRustProductionSourcePath(path);
   }
   throw new Error(`unknown coverage mode: ${mode}`);
 }
@@ -88,12 +85,7 @@ function changedSourceLines(baseRef, prefix, mode) {
       isCoverageProductionPath(mode, path),
     ),
   );
-  const untracked = execFileSync(
-    "git",
-    ["ls-files", "--others", "--exclude-standard", "--", prefix],
-    { cwd: ROOT, encoding: "utf8" },
-  ).trim();
-  for (const path of untracked.split("\n").filter(Boolean)) {
+  for (const path of listUntrackedFiles(ROOT, [prefix])) {
     if (!isCoverageProductionPath(mode, path)) continue;
     const contents = readFileSync(resolve(ROOT, path), "utf8");
     const lineCount = contents === "" ? 0 : contents.split(/\r?\n/).length;
@@ -118,13 +110,12 @@ function matchingBrace(masked, opening) {
   throw new Error("unclosed #[cfg(test)] Rust block");
 }
 
-export function findRustCfgTestLineRanges(contents) {
+function findRustAttributeItemLineRanges(contents, matchesAttribute) {
   const masked = maskRustNonCode(contents);
   const ranges = [];
   const attributes = rustAttributes(contents);
   for (const attribute of attributes) {
-    const classification = classifyRustCfgAttribute(attribute.text);
-    if (!classification?.testOnly) continue;
+    if (!matchesAttribute(attribute)) continue;
     let cursor = attribute.end;
     while (/\s/.test(masked[cursor] ?? "")) cursor += 1;
     while (true) {
@@ -154,7 +145,7 @@ export function findRustCfgTestLineRanges(contents) {
         break;
       }
     }
-    if (end == null) throw new Error("cannot determine #[cfg(test)] Rust item boundary");
+    if (end == null) throw new Error("cannot determine conditional Rust item boundary");
     ranges.push({
       start: lineAtOffset(masked, attribute.start),
       end: lineAtOffset(masked, end),
@@ -170,7 +161,23 @@ export function findRustCfgTestLineRanges(contents) {
   return merged;
 }
 
+export function findRustCfgTestLineRanges(contents) {
+  return findRustAttributeItemLineRanges(contents, (attribute) =>
+    Boolean(classifyRustCfgAttribute(attribute.text)?.testOnly),
+  );
+}
+
+export function findRustConditionalLineRanges(contents) {
+  return findRustAttributeItemLineRanges(contents, (attribute) => {
+    if (attribute.text.startsWith("#![")) return false;
+    if (classifyRustCfgAttribute(attribute.text)?.testOnly) return false;
+    const compact = attribute.text.replace(/\s+/g, "");
+    return compact.startsWith("#[cfg(") || compact.startsWith("#[cfg_attr(");
+  });
+}
+
 const rustTestLineCache = new Map();
+const rustConditionalLineCache = new Map();
 
 function rustTestLines(path) {
   if (!isCoverageProductionPath("rust", path)) return new Set();
@@ -185,6 +192,21 @@ function rustTestLines(path) {
     rustTestLineCache.set(path, lines);
   }
   return rustTestLineCache.get(path);
+}
+
+function rustConditionalLines(path) {
+  if (!isCoverageProductionPath("rust", path)) return new Set();
+  if (!rustConditionalLineCache.has(path)) {
+    const absolute = resolve(ROOT, path);
+    const lines = new Set();
+    if (existsSync(absolute)) {
+      for (const range of findRustConditionalLineRanges(readFileSync(absolute, "utf8"))) {
+        for (let line = range.start; line <= range.end; line += 1) lines.add(line);
+      }
+    }
+    rustConditionalLineCache.set(path, lines);
+  }
+  return rustConditionalLineCache.get(path);
 }
 
 function parseLcov(path, mode) {
@@ -317,11 +339,19 @@ export function isProbablyExecutableSource(path, contents, line) {
   return true;
 }
 
-export function isOmittedCoverageLineExecutable({ mode, filePresentInLcov, sourceExecutable }) {
+export function isOmittedCoverageLineExecutable({
+  mode,
+  filePresentInLcov,
+  sourceExecutable,
+  conditionallyCompiled = false,
+}) {
   // LLVM emits zero-hit DA records for compiled Rust. A missing line in a
-  // present Rust source record is declarative/non-instrumentable; only a whole
-  // production module missing from LCOV must fail closed via source analysis.
-  return sourceExecutable && (mode !== "rust" || !filePresentInLcov);
+  // present Rust source record is normally declarative/non-instrumentable.
+  // A changed line inside a non-test cfg item is the exception: the active
+  // coverage feature/profile can omit executable release code, so it must be
+  // counted as uncovered instead of disappearing from the denominator.
+  return sourceExecutable &&
+    (mode !== "rust" || !filePresentInLcov || conditionallyCompiled);
 }
 
 export function calculateChangedCoverage({ changed, lcov, isExecutable }) {
@@ -424,6 +454,8 @@ function changedCoverage(baseRef, prefix, lcovPath, mode) {
         mode,
         filePresentInLcov: Boolean(lcov[path]),
         sourceExecutable: isProbablyExecutableSource(path, contents, line),
+        conditionallyCompiled:
+          mode === "rust" && rustConditionalLines(path).has(line),
       });
     },
   });
@@ -435,11 +467,7 @@ function baselineAtBase(baseRef) {
     cwd: ROOT,
     stdio: "ignore",
   });
-  const tracked = execFileSync(
-    "git",
-    ["ls-tree", "--name-only", baseRef, "--", BASELINE_PATH],
-    { cwd: ROOT, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
-  ).trim() === BASELINE_PATH;
+  const tracked = gitPathExistsAtRef(ROOT, baseRef, BASELINE_PATH);
   return loadTrackedJsonAtBase({
     tracked,
     readContents: () =>

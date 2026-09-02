@@ -6,12 +6,14 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { RUST_COVERAGE_TEST_FILE_PATTERN } from "./source-classification.mjs";
+
+export { RUST_COVERAGE_TEST_FILE_PATTERN } from "./source-classification.mjs";
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const userCargo = join(homedir(), ".cargo", "bin", "cargo");
 const cargo = existsSync(userCargo) ? userCargo : "cargo";
 const REQUIRED_CARGO_LLVM_COV = "0.9.0";
-export const RUST_COVERAGE_TEST_FILE_PATTERN =
-  "(^|/)(tests/|[^/]*_tests\\.rs$|tests?\\.rs$)";
 
 export function validateCoverageToolVersion(output) {
   if (output.trim() !== `cargo-llvm-cov ${REQUIRED_CARGO_LLVM_COV}`) {

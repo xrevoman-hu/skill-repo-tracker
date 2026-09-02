@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse as parseYaml } from "yaml";
 
 import {
   checkArchitectureSnapshot,
@@ -12,6 +13,7 @@ import {
   extractRustCommands,
   findExplicitAny,
   findForbiddenClippySuppressions,
+  findForbiddenCoveragePragmas,
   findForbiddenFrontendAliases,
   findForbiddenFrontendRuntimeUsage,
   findForbiddenRustIncludes,
@@ -26,17 +28,27 @@ import {
   findRustTestModulesVisibleInProduction,
   findUnpinnedWorkflowUses,
   isForbiddenProductionJavaScriptPath,
+  isAlternateTauriConfigPath,
   isProductionModule,
   loadTrackedArchitectureBudgetAtBase,
   parseUnifiedDiffLines,
   shouldEnforceChangedCoverage,
   validateCiWorkflowPolicy,
   validateCriticalPackageScripts,
+  validateCargoTestDiscoveryPolicy,
+  validateCargoMetadataPolicy,
+  validateIndexHtmlPolicy,
   validateRuntimeToolchain,
   validateReleaseWorkflowPolicy,
   validateRepositoryAutomationPolicy,
   validateSecurityAuditWorkflowPolicy,
+  validatePlaywrightConfigPolicy,
+  validateTrustedPolicyWorkflowPolicy,
+  validateTypeScriptConfigPolicy,
+  validateTauriBuildScriptPolicy,
+  validateViteConfigPolicy,
   validateVersions,
+  validateVitestConfigPolicy,
   validateWeeklyResilienceWorkflowPolicy,
 } from "../governance.mjs";
 
@@ -51,333 +63,14 @@ const CRITICAL_PACKAGE_SCRIPTS = {
   "coverage:check":
     "npm run test:coverage && node scripts/check-coverage.mjs frontend && npm run coverage:rust && node scripts/check-coverage.mjs rust",
   build: "vite build",
+  "governance:context": "node scripts/governance-context.mjs",
   "verify:governance": "node scripts/governance.mjs all",
   verify: "node scripts/verify.mjs",
   "github:governance:check": "node scripts/github-governance-check.mjs",
   "release:verify": "node scripts/release-verify.mjs",
+  preview: "vite preview --host 127.0.0.1",
   "tauri:build": "tauri build",
 };
-
-test("architecture production inventory excludes dedicated test modules", () => {
-  assert.equal(isProductionModule("src/App.tsx"), true);
-  assert.equal(isProductionModule("src/App.test.tsx"), false);
-  assert.equal(isProductionModule("src/feature.mts"), true);
-  assert.equal(isProductionModule("src/feature.cts"), true);
-  assert.equal(isProductionModule("src/feature.test.mts"), false);
-  assert.equal(isProductionModule("src/contracts.d.mts"), false);
-  assert.equal(isProductionModule("src/contracts.d.cts"), false);
-  assert.equal(isProductionModule("src-tauri/src/backups.rs"), true);
-  assert.equal(isProductionModule("src-tauri/src/backups_tests.rs"), false);
-  assert.equal(isProductionModule("src-tauri/src/tests.rs"), false);
-});
-
-test("production JavaScript cannot bypass the TypeScript and coverage gates", () => {
-  for (const path of [
-    "src/feature.js",
-    "src/feature.jsx",
-    "src/feature.mjs",
-    "src/feature.cjs",
-  ]) {
-    assert.equal(isForbiddenProductionJavaScriptPath(path), true);
-  }
-  assert.equal(isForbiddenProductionJavaScriptPath("src/feature.test.mjs"), false);
-  assert.equal(isForbiddenProductionJavaScriptPath("scripts/governance.mjs"), false);
-});
-
-test("validateVersions accepts one version across every manifest", () => {
-  assert.deepEqual(
-    validateVersions({
-      packageVersion: "1.2.2",
-      lockRootVersion: "1.2.2",
-      cargoVersion: "1.2.2",
-      cargoLockVersion: "1.2.2",
-      tauriVersion: "1.2.2",
-    }),
-    [],
-  );
-});
-
-test("validateVersions reports the exact divergent source", () => {
-  assert.deepEqual(
-    validateVersions({
-      packageVersion: "1.2.2",
-      lockRootVersion: "1.2.2",
-      cargoVersion: "1.2.2",
-      cargoLockVersion: "1.2.1",
-      tauriVersion: "1.2.2",
-    }),
-    ["src-tauri/Cargo.lock package version is 1.2.1; expected 1.2.2"],
-  );
-});
-
-test("runtime toolchain requires the exact pinned Node and npm versions", () => {
-  assert.deepEqual(
-    validateRuntimeToolchain({ nodeVersion: "v22.23.1", npmVersion: "10.9.8" }),
-    [],
-  );
-  assert.deepEqual(
-    validateRuntimeToolchain({ nodeVersion: "v22.22.0", npmVersion: "11.0.0" }),
-    [
-      "running Node is v22.22.0; expected v22.23.1",
-      "running npm is 11.0.0; expected 10.9.8",
-    ],
-  );
-});
-
-test("release workflow is manual, read-only, approved, and runs on Apple Silicon", () => {
-  const valid = readFileSync(
-    new URL("../../.github/workflows/release-gate.yml", import.meta.url),
-    "utf8",
-  );
-  assert.doesNotMatch(valid, /RELEASE_MANIFEST:\s*\$\{\{\s*inputs\.releaseManifest\s*\}\}/);
-  assert.match(valid, /GITHUB_EVENT_PATH/);
-  assert.match(valid, /::add-mask::/);
-  assert.match(valid, /umask 077/);
-  assert.match(valid, /chmod 600/);
-  assert.doesNotMatch(valid, /name: Prepare and mask release manifest/);
-  assert.doesNotMatch(valid, /RELEASE_MANIFEST_FILE|GITHUB_ENV/);
-  assert.match(valid, /trap 'rm -f "\$manifest_file"' EXIT/);
-  assert.match(valid, /npm run --silent release:verify/);
-  assert.deepEqual(validateReleaseWorkflowPolicy(valid), []);
-
-  const unsafe = valid
-    .replace("  workflow_dispatch:\n", "  workflow_dispatch:\n  push:\n")
-    .replace("contents: read", "contents: write")
-    .replace("runs-on: macos-15", "runs-on: macos-15-arm64")
-    .replace("environment: release", "environment: production");
-  const errors = validateReleaseWorkflowPolicy(unsafe);
-  assert.ok(errors.some((error) => error.includes("only workflow_dispatch")));
-  assert.ok(errors.some((error) => error.includes("contents: read")));
-  assert.ok(errors.some((error) => error.includes("Apple Silicon macos-15")));
-  assert.ok(errors.some((error) => error.includes("environment: release")));
-
-  for (const mutation of [
-    valid.replace(
-      "      - name: Run the explicit release verification lane\n        run: |",
-      "      - name: Run the explicit release verification lane\n        continue-on-error: true\n        run: |",
-    ),
-    valid.replace(
-      "      - name: Run the explicit release verification lane\n        run: |",
-      "      - name: Run the explicit release verification lane\n        if: always()\n        run: |",
-    ),
-    valid.replace(
-      "      - name: Run the explicit release verification lane\n        run: |",
-      "      - name: Run the explicit release verification lane\n        shell: bash\n        run: |",
-    ),
-    valid.replace("    runs-on: macos-15", "    if: always()\n    runs-on: macos-15"),
-    valid.replace(
-      "    runs-on: macos-15",
-      "    continue-on-error: true\n    runs-on: macos-15",
-    ),
-    valid.replace(
-      '          npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"',
-      '          npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"\n      - run: npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"',
-    ),
-    valid.replace(
-      '          npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token"',
-      '          npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --phase "$RELEASE_PHASE" --manifest-token "$manifest_token" || true',
-    ),
-    valid.replace("npm run --silent release:verify", "npm run release:verify"),
-  ]) {
-    assert.ok(
-      validateReleaseWorkflowPolicy(mutation).some((error) =>
-        error.includes("release verifier step must be unique, unconditional, fail-closed, and exact"),
-      ),
-    );
-  }
-
-  for (const mutation of [
-    valid.replace(
-      "permissions:\n",
-      "defaults:\n  run:\n    shell: bash {0} || true\npermissions:\n",
-    ),
-    valid.replace(
-      "      - name: Run the explicit release verification lane",
-      "      - name: Rewrite the verifier command\n        run: npm pkg set scripts.release:verify=true\n      - name: Run the explicit release verification lane",
-    ),
-    valid.replace("          printf '::add-mask::%s\\n' \"$manifest_token\"\n", ""),
-    valid.replace("          trap 'rm -f \"$manifest_file\"' EXIT\n", ""),
-    valid.replace("          umask 077\n", ""),
-    valid.replace("          chmod 600 \"$manifest_file\"", "          chmod 644 \"$manifest_file\""),
-    valid.replace(
-      "      RELEASE_PHASE: ${{ inputs.phase }}",
-      "      RELEASE_PHASE: ${{ inputs.phase }}\n      RELEASE_MANIFEST: ${{ inputs.releaseManifest }}",
-    ),
-  ]) {
-    assert.ok(
-      validateReleaseWorkflowPolicy(mutation).some((error) =>
-        error.includes("release workflow must match the complete fail-closed template"),
-      ),
-    );
-  }
-});
-
-test("documented remote release commands preserve verifier failures and scope the token", () => {
-  for (const path of [
-    "../../README.md",
-    "../../docs/macos-release-checklist.md",
-    "../../docs/rules/testing-release.md",
-  ]) {
-    const contents = readFileSync(new URL(path, import.meta.url), "utf8");
-    const remoteCommands = contents.match(
-      /\(\n\s+set -euo pipefail\n\s+set \+x\n\s+RELEASE_MANIFEST_TOKEN=.*?\n\s+npm run --silent release:verify -- \\\n(?:.*\n){1,3}?\s+--manifest-token "\$RELEASE_MANIFEST_TOKEN"\n\)/g,
-    );
-    assert.ok(remoteCommands?.length, `${path} must use a fail-closed token subshell`);
-    assert.doesNotMatch(contents, /unset RELEASE_MANIFEST_TOKEN/);
-  }
-});
-
-test("CI workflow keeps every required gate fail-closed and exact", () => {
-  const valid = readFileSync(new URL("../../.github/workflows/ci.yml", import.meta.url), "utf8");
-  assert.deepEqual(validateCiWorkflowPolicy(valid), []);
-
-  for (const [label, mutation] of [
-    ["replace verify with true", valid.replace("run: npm run verify", "run: true")],
-    [
-      "mask coverage failure",
-      valid.replace("run: npm run coverage:check", "run: npm run coverage:check || true"),
-    ],
-    [
-      "allow E2E failure",
-      valid.replace(
-        "      - name: Run browser acceptance with DemoAppService\n        run: npm run test:e2e",
-        "      - name: Run browser acceptance with DemoAppService\n        continue-on-error: true\n        run: npm run test:e2e",
-      ),
-    ],
-    ["remove pull request trigger", valid.replace("  pull_request:\n", "")],
-    ["rename required job", valid.replace("  verify:\n    name: verify", "  verify-renamed:\n    name: verify")],
-    [
-      "rewrite a critical package script",
-      valid.replace(
-        "      - name: Run the deterministic repository gate",
-        "      - name: Rewrite the deterministic gate\n        run: npm pkg set scripts.verify=true\n      - name: Run the deterministic repository gate",
-      ),
-    ],
-    [
-      "remove the locked MSRV flag",
-      valid.replace("cargo +1.88.0 check --locked", "cargo +1.88.0 check"),
-    ],
-  ]) {
-    assert.ok(
-      validateCiWorkflowPolicy(mutation).includes(
-        "CI workflow must match the complete fail-closed template",
-      ),
-      label,
-    );
-  }
-  assert.match(validateCiWorkflowPolicy("jobs: [")[0], /CI workflow is invalid YAML/);
-});
-
-test("security audit workflow keeps registry and Cargo audits fail-closed and scheduled", () => {
-  const valid = readFileSync(
-    new URL("../../.github/workflows/security-audit.yml", import.meta.url),
-    "utf8",
-  );
-  assert.deepEqual(validateSecurityAuditWorkflowPolicy(valid), []);
-
-  for (const [label, mutation] of [
-    [
-      "replace npm audit with true",
-      valid.replace(
-        "run: npm audit --audit-level=high --registry=https://registry.npmjs.org",
-        "run: true",
-      ),
-    ],
-    [
-      "mask Cargo audit failure",
-      valid.replace(
-        "run: cargo audit --file src-tauri/Cargo.lock",
-        "run: cargo audit --file src-tauri/Cargo.lock || true",
-      ),
-    ],
-    [
-      "allow audit job failure",
-      valid.replace("    runs-on: macos-15", "    continue-on-error: true\n    runs-on: macos-15"),
-    ],
-    ["remove schedule", valid.replace('  schedule:\n    - cron: "17 2 * * 1"\n', "")],
-  ]) {
-    assert.ok(
-      validateSecurityAuditWorkflowPolicy(mutation).includes(
-        "security audit workflow must match the complete fail-closed template",
-      ),
-      label,
-    );
-  }
-  assert.match(
-    validateSecurityAuditWorkflowPolicy("jobs: [")[0],
-    /security audit workflow is invalid YAML/,
-  );
-});
-
-test("weekly resilience workflow keeps repeats and the performance gate fail-closed", () => {
-  const valid = readFileSync(
-    new URL("../../.github/workflows/weekly-resilience.yml", import.meta.url),
-    "utf8",
-  );
-  assert.deepEqual(validateWeeklyResilienceWorkflowPolicy(valid), []);
-
-  for (const [label, mutation] of [
-    ["replace repeated Vitest with true", valid.replace("            npm test", "            true")],
-    [
-      "remove performance command",
-      valid.replace(
-        "run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml prompt_library_release_performance_gate -- --ignored --nocapture --test-threads=1",
-        "run: true",
-      ),
-    ],
-    ["reduce repetition", valid.replace("for attempt in 1 2 3; do", "for attempt in 1 2; do")],
-    [
-      "allow repeat step failure",
-      valid.replace(
-        "      - name: Repeat race and filesystem suites\n        run: |",
-        "      - name: Repeat race and filesystem suites\n        continue-on-error: true\n        run: |",
-      ),
-    ],
-    ["remove schedule", valid.replace('  schedule:\n    - cron: "43 3 * * 0"\n', "")],
-  ]) {
-    assert.ok(
-      validateWeeklyResilienceWorkflowPolicy(mutation).includes(
-        "weekly resilience workflow must match the complete fail-closed template",
-      ),
-      label,
-    );
-  }
-  assert.match(
-    validateWeeklyResilienceWorkflowPolicy("jobs: [")[0],
-    /weekly resilience workflow is invalid YAML/,
-  );
-});
-
-test("repository automation policy requires both scheduled workflows and weekly npm/Cargo updates", () => {
-  const workflowPaths = [
-    ".github/workflows/ci.yml",
-    ".github/workflows/release-gate.yml",
-    ".github/workflows/security-audit.yml",
-    ".github/workflows/weekly-resilience.yml",
-  ];
-  const dependabot = `
-version: 2
-updates:
-  - package-ecosystem: npm
-    directory: /
-    schedule: { interval: weekly }
-  - package-ecosystem: cargo
-    directory: /src-tauri
-    schedule: { interval: weekly }
-`;
-  assert.deepEqual(
-    validateRepositoryAutomationPolicy({ workflowPaths, dependabotContents: dependabot }),
-    [],
-  );
-  const errors = validateRepositoryAutomationPolicy({
-    workflowPaths: workflowPaths.slice(0, 2),
-    dependabotContents: "version: 2\nupdates: []\n",
-  });
-  assert.ok(errors.some((error) => error.includes("security-audit.yml")));
-  assert.ok(errors.some((error) => error.includes("weekly-resilience.yml")));
-  assert.ok(errors.some((error) => error.includes("npm / weekly")));
-  assert.ok(errors.some((error) => error.includes("cargo /src-tauri weekly")));
-});
 
 test("repository boundaries reject private material and runtime build tools", () => {
   assert.deepEqual(
@@ -399,6 +92,206 @@ test("repository boundaries reject private material and runtime build tools", ()
   );
 });
 
+test("Vite public files and unregistered frontend asset types cannot bypass governance", () => {
+  assert.deepEqual(
+    checkRepositoryBoundaries({
+      trackedFiles: [
+        "public/payload.html",
+        "src/payload.wasm",
+        "src/fixture.txt",
+        "src/promptsCss.test.mjs",
+      ],
+      packageJson: {
+        dependencies: {},
+        devDependencies: {},
+        scripts: CRITICAL_PACKAGE_SCRIPTS,
+      },
+      lockUrls: [],
+    }),
+    [
+      "Vite public directory is forbidden; production assets must enter a governed source inventory: public/payload.html",
+      "unregistered frontend source or asset type is forbidden: src/payload.wasm",
+      "unregistered frontend source or asset type is forbidden: src/fixture.txt",
+    ],
+  );
+});
+
+test("Vite cannot auto-discover an external PostCSS execution surface", () => {
+  assert.deepEqual(
+    checkRepositoryBoundaries({
+      trackedFiles: [".postcssrc.json", "styles/postcss.config.ts"],
+      packageJson: {
+        dependencies: {},
+        devDependencies: {},
+        scripts: CRITICAL_PACKAGE_SCRIPTS,
+        postcss: { plugins: ["hidden-plugin"] },
+      },
+      lockUrls: [],
+    }),
+    [
+      "external PostCSS config is forbidden because Vite uses an exact inline plugin inventory: .postcssrc.json",
+      "external PostCSS config is forbidden because Vite uses an exact inline plugin inventory: styles/postcss.config.ts",
+      "executable JavaScript/TypeScript is outside governed roots: styles/postcss.config.ts",
+      "package.json postcss config is forbidden because Vite uses an exact inline plugin inventory",
+    ],
+  );
+});
+
+test("executable repository code cannot live outside governed source and tooling roots", () => {
+  assert.deepEqual(
+    checkRepositoryBoundaries({
+      trackedFiles: [
+        "docs/helper.mjs",
+        "support/escape.ts",
+        "vite.config.mjs",
+        "vitest.config.ts",
+        "playwright.config.ts",
+        "scripts/helper.mjs",
+        "src/helper.ts",
+        "e2e/helper.ts",
+      ],
+      packageJson: {
+        dependencies: {},
+        devDependencies: {},
+        scripts: CRITICAL_PACKAGE_SCRIPTS,
+      },
+      lockUrls: [],
+    }),
+    [
+      "executable JavaScript/TypeScript is outside governed roots: docs/helper.mjs",
+      "executable JavaScript/TypeScript is outside governed roots: support/escape.ts",
+    ],
+  );
+});
+
+test("governance scripts cannot escape the audited JavaScript graph through another runtime", () => {
+  assert.deepEqual(
+    checkRepositoryBoundaries({
+      trackedFiles: ["scripts/escape.py", "scripts/escape.sh", "scripts/governed.mjs"],
+      packageJson: {
+        dependencies: {},
+        devDependencies: {},
+        scripts: CRITICAL_PACKAGE_SCRIPTS,
+      },
+      lockUrls: [],
+    }),
+    [
+      "unregistered governance script type is forbidden; executable tooling must remain in the audited .mjs graph: scripts/escape.py",
+      "unregistered governance script type is forbidden; executable tooling must remain in the audited .mjs graph: scripts/escape.sh",
+    ],
+  );
+});
+
+test("repository-local npm and Cargo overrides cannot replace gate executors", () => {
+  const errors = checkRepositoryBoundaries({
+    trackedFiles: [
+      ".npmrc",
+      "rust-toolchain",
+      ".cargo/config.toml",
+      "src-tauri/.cargo/config.toml",
+      "npm-shrinkwrap.json",
+      "packages/hidden/npm-shrinkwrap.json",
+    ],
+    packageJson: {
+      dependencies: {},
+      devDependencies: {},
+      scripts: CRITICAL_PACKAGE_SCRIPTS,
+    },
+    lockUrls: [],
+  });
+  assert.deepEqual(errors, [
+    "repository-local toolchain override is forbidden because it can bypass deterministic gates: .npmrc",
+    "repository-local toolchain override is forbidden because it can bypass deterministic gates: rust-toolchain",
+    "repository-local toolchain override is forbidden because it can bypass deterministic gates: .cargo/config.toml",
+    "repository-local toolchain override is forbidden because it can bypass deterministic gates: src-tauri/.cargo/config.toml",
+    "tracked npm-shrinkwrap.json is forbidden because it overrides package-lock.json: npm-shrinkwrap.json",
+    "tracked npm-shrinkwrap.json is forbidden because it overrides package-lock.json: packages/hidden/npm-shrinkwrap.json",
+  ]);
+});
+
+test("tracked symlinks and submodules cannot move executable sources outside governance roots", () => {
+  assert.deepEqual(
+    checkRepositoryBoundaries({
+      trackedFiles: ["src/escaped.ts", "vendor/hidden"],
+      trackedEntries: [
+        { mode: "120000", path: "src/escaped.ts" },
+        { mode: "160000", path: "vendor/hidden" },
+      ],
+      packageJson: {
+        dependencies: {},
+        devDependencies: {},
+        scripts: CRITICAL_PACKAGE_SCRIPTS,
+      },
+      lockUrls: [],
+    }),
+    [
+      "tracked path must be a regular file, not mode 120000: src/escaped.ts",
+      "tracked path must be a regular file, not mode 160000: vendor/hidden",
+    ],
+  );
+});
+
+test("Vitest workspace and projects auto-discovery cannot replace the governed suite", () => {
+  for (const path of [
+    "vitest.workspace.ts",
+    "vitest.workspace.json",
+    "vitest.projects.mts",
+    "vitest.projects.cjs",
+  ]) {
+    assert.deepEqual(
+      checkRepositoryBoundaries({
+        trackedFiles: [path],
+        packageJson: {
+          dependencies: {},
+          devDependencies: {},
+          scripts: CRITICAL_PACKAGE_SCRIPTS,
+        },
+        lockUrls: [],
+      }),
+      [
+        ...(/\.(?:ts|mts|cjs)$/.test(path)
+          ? [`executable JavaScript/TypeScript is outside governed roots: ${path}`]
+          : []),
+        `Vitest workspace/projects config is forbidden because it can replace governed test discovery: ${path}`,
+      ],
+    );
+  }
+});
+
+test("platform Tauri overlays and custom build logic cannot escape the governed config", () => {
+  for (const path of [
+    "src-tauri/tauri.macos.conf.json",
+    "src-tauri/tauri.macos.conf.json5",
+    "src-tauri/Tauri.macos.toml",
+    "src-tauri/tauri.linux.conf.toml",
+  ]) {
+    assert.equal(isAlternateTauriConfigPath(path), true, path);
+  }
+  assert.equal(isAlternateTauriConfigPath("src-tauri/tauri.conf.json"), false);
+  const boundaryErrors = checkRepositoryBoundaries({
+    trackedFiles: ["src-tauri/tauri.conf.json", "src-tauri/tauri.macos.conf.json"],
+    packageJson: {
+      dependencies: {},
+      devDependencies: {},
+      scripts: CRITICAL_PACKAGE_SCRIPTS,
+    },
+    lockUrls: [],
+  });
+  assert.deepEqual(boundaryErrors, [
+    "alternate Tauri config is forbidden; keep src-tauri/tauri.conf.json as the only effective config: src-tauri/tauri.macos.conf.json",
+  ]);
+  assert.deepEqual(
+    validateTauriBuildScriptPolicy("fn main() {\n    tauri_build::build();\n}\n"),
+    [],
+  );
+  assert.match(
+    validateTauriBuildScriptPolicy(
+      "fn main() { println!(\"cargo:rustc-env=TAURI_CONFIG=unsafe\"); tauri_build::build(); }\n",
+    )[0],
+    /exact default Tauri build contract/,
+  );
+});
+
 test("repository boundaries reject local package escape hatches", () => {
   assert.deepEqual(
     checkRepositoryBoundaries({
@@ -407,13 +300,21 @@ test("repository boundaries reject local package escape hatches", () => {
         dependencies: { shared: "file:../shared" },
         devDependencies: { tooling: "workspace:*" },
         imports: { "#hidden": "./src/hidden.test.ts" },
+        workspaces: ["packages/*"],
         scripts: CRITICAL_PACKAGE_SCRIPTS,
       },
       lockUrls: [],
+      lockPackages: {
+        "": { workspaces: ["packages/*"] },
+        "node_modules/hidden": { resolved: "packages/hidden", link: true },
+      },
     }),
     [
       "dependencies contains a local package outside governed src/: shared=file:../shared",
       "devDependencies contains a local package outside governed src/: tooling=workspace:*",
+      "package.json workspaces are forbidden until every workspace source root is governed",
+      "package-lock.json root workspaces are forbidden until every workspace source root is governed",
+      "package-lock contains a local linked package outside governed src/: node_modules/hidden",
       "package.json imports aliases are forbidden; repository-relative module paths keep the governed graph auditable",
     ],
   );
@@ -447,6 +348,22 @@ test("critical package scripts are exact and repository boundaries enforce them"
   ]);
 });
 
+test("critical npm lifecycle hooks cannot execute before or after a governed gate", () => {
+  const scripts = {
+    ...CRITICAL_PACKAGE_SCRIPTS,
+    preverify: "true",
+    "posttest:scripts": "true",
+    preinstall: "node exploit.mjs",
+    prepare: "node exploit.mjs",
+  };
+  assert.deepEqual(validateCriticalPackageScripts(scripts), [
+    "critical package script lifecycle hook is forbidden: posttest:scripts",
+    "critical package script lifecycle hook is forbidden: preverify",
+    "package install lifecycle hook is forbidden: preinstall",
+    "package install lifecycle hook is forbidden: prepare",
+  ]);
+});
+
 test("TypeScript AST rejects explicit any without matching prose or string literals", () => {
   const errors = findExplicitAny(
     "src/example.ts",
@@ -475,7 +392,7 @@ test("test policy rejects focus, skip, and conditional run modifiers", () => {
     ].join("\n"),
   );
 
-  assert.equal(errors.length, 10);
+  assert.equal(errors.length, 11);
   assert.match(errors[0], /test\.skip is forbidden/);
   assert.match(errors[1], /it\.concurrent\.only is forbidden/);
   assert.match(errors[2], /test\.skipIf is forbidden/);
@@ -485,7 +402,83 @@ test("test policy rejects focus, skip, and conditional run modifiers", () => {
   assert.match(errors[6], /test\.skip is forbidden/);
   assert.match(errors[7], /it\.only is forbidden/);
   assert.match(errors[8], /test\.each\.skip is forbidden/);
-  assert.match(errors[9], /t\.todo is forbidden/);
+  assert.match(errors[9], /test registration API is used indirectly/);
+  assert.match(errors[10], /t\.todo is forbidden/);
+});
+
+test("test policy requires static non-empty data tables", () => {
+  const errors = findForbiddenTestModifiers(
+    "scripts/__tests__/false-evidence.test.mjs",
+    [
+      'test("skipped", { skip: true }, () => { throw new Error("never"); });',
+      'test("indirect", options, callback);',
+      'test.each([])("zero rows", () => { throw new Error("never"); });',
+      'const rows = [1]; test.each(rows)("indirect rows", () => {});',
+      'test.each(new Array(0))("constructed rows", () => {});',
+      'test.each(flag ? [1] : [])("conditional rows", () => {});',
+      'test.each`value\n${1}`("tagged rows", () => {});',
+      'test.each(([1] as const))("static rows", () => {});',
+      'test("safe", () => {}, 1000);',
+    ].join("\n"),
+  );
+  assert.equal(errors.length, 8);
+  assert.match(errors[0], /direct \(title, callback/);
+  assert.match(errors[1], /direct \(title, callback/);
+  for (const error of errors.slice(2, 6)) {
+    assert.match(error, /\.each data must be a direct non-empty array literal/);
+  }
+  assert.match(errors[6], /test registration API is used indirectly/);
+  assert.match(errors[7], /tagged \.each data is forbidden/);
+});
+
+test("test policy rejects computed, aliased, destructured, and rebound registration APIs", () => {
+  const errors = findForbiddenTestModifiers(
+    "scripts/__tests__/indirect.test.mjs",
+    [
+      'const mode = "skip"; test[mode]("computed", () => {});',
+      "const { skip: disabled } = test; disabled(\"destructured\", () => {});",
+      "const alias = it; alias(\"aliased\", () => {});",
+      "let rebound; rebound = describe;",
+      "suite = replacement;",
+      'test("safe direct", () => {});',
+      'it.each([1])("safe table", () => {});',
+    ].join("\n"),
+  );
+
+  assert.equal(errors.length, 5);
+  assert.match(errors[0], /test registration API is used indirectly/);
+  assert.match(errors[1], /test registration API is used indirectly/);
+  assert.match(errors[2], /it registration API is used indirectly/);
+  assert.match(errors[3], /describe registration API is used indirectly/);
+  assert.match(errors[4], /suite registration API is used indirectly/);
+});
+
+test("test registration APIs cannot escape through value positions or reflection", () => {
+  const errors = findForbiddenTestModifiers(
+    "scripts/__tests__/reflected.test.mjs",
+    [
+      'import test from "node:test";',
+      'import { describe, it, suite } from "node:test";',
+      'import runner from "node:test";',
+      'import * as runnerNamespace from "vitest";',
+      "register(test);",
+      "consume([it]);",
+      'Reflect.get(globalThis, "describe")("hidden", () => {});',
+      'Reflect.get(suite, "skip")("hidden", () => {});',
+      'globalThis[registrationName]("hidden", () => {});',
+      'test("safe", () => {});',
+      'describe.each([1])("safe table", () => {});',
+    ].join("\n"),
+  );
+
+  assert.equal(errors.length, 7);
+  assert.match(errors[0], /test runner default import must be named test/);
+  assert.match(errors[1], /test runner namespace imports are forbidden/);
+  assert.match(errors[2], /test registration API is used indirectly/);
+  assert.match(errors[3], /it registration API is used indirectly/);
+  assert.match(errors[4], /Reflect\.get is forbidden/);
+  assert.match(errors[5], /Reflect\.get is forbidden/);
+  assert.match(errors[6], /computed global test API access is forbidden/);
 });
 
 test("Worker module URLs are part of the governed production module graph", () => {
@@ -614,6 +607,22 @@ test("frontend production imports cannot resolve outside governed src", () => {
   );
 });
 
+test("absolute Vite imports cannot traverse out of src or attach loader queries", () => {
+  const errors = findFrontendImportEscapes(
+    "src/product.ts",
+    [
+      'import payload from "/src/../README.md?raw";',
+      'import raw from "/src/App.tsx?raw";',
+      'import safe from "/src/App";',
+    ].join("\n"),
+  ).map((error) => error.replace(/:\d+:\d+/, ":LINE"));
+
+  assert.deepEqual(errors, [
+    "src/product.ts:LINE imports outside governed src/: /src/../README.md?raw",
+    "src/product.ts:LINE uses a Vite loader query or fragment outside the governed module contract: /src/App.tsx?raw",
+  ]);
+});
+
 test("dedicated Rust test modules must be unreachable outside cfg(test)", () => {
   assert.deepEqual(
     findRustTestModulesVisibleInProduction(
@@ -630,6 +639,16 @@ test("dedicated Rust test modules must be unreachable outside cfg(test)", () => 
     [
       "src-tauri/src/product.rs:4 exposes dedicated test module leaked_tests without #[cfg(test)]",
       "src-tauri/src/product.rs:5 uses #[path] module hidden-production.inc; only canonical #[cfg(test)] external dedicated *_tests.rs modules are allowed",
+    ],
+  );
+
+  assert.deepEqual(
+    findRustTestModulesVisibleInProduction(
+      "src-tauri/src/product.rs",
+      '#[cfg(test)]\n#[path = "tests.rs"]\nmod tests;',
+    ),
+    [
+      "src-tauri/src/product.rs:2 uses #[path] module tests.rs; only canonical #[cfg(test)] external dedicated *_tests.rs modules are allowed",
     ],
   );
 });
@@ -672,6 +691,23 @@ test("non-canonical test cfg and cfg_attr(test) fail closed", () => {
       "src-tauri/src/example.rs:3 uses non-canonical test cfg; use exact #[cfg(test)] so production coverage filtering fails closed",
       "src-tauri/src/example.rs:5 conditionally applies test cfg; cfg_attr involving test is forbidden",
       "src-tauri/src/example.rs:9 uses non-canonical test cfg; use exact #[cfg(test)] so production coverage filtering fails closed",
+    ],
+  );
+});
+
+test("production Rust cannot opt out of LLVM coverage instrumentation", () => {
+  assert.deepEqual(
+    findForbiddenRustTestCfg(
+      "src-tauri/src/example.rs",
+      [
+        "#![cfg_attr(coverage_nightly, feature(coverage_attribute))]",
+        "#[cfg_attr(coverage_nightly, coverage(off))]",
+        "fn hidden_from_lcov() {}",
+      ].join("\n"),
+    ),
+    [
+      "src-tauri/src/example.rs:1 enables the Rust coverage exclusion attribute; production coverage exclusions are forbidden",
+      "src-tauri/src/example.rs:2 disables Rust coverage instrumentation; production coverage exclusions are forbidden",
     ],
   );
 });
@@ -730,6 +766,12 @@ test("Clippy suppressions must be narrow expectations with reasons", () => {
         "fn spaced_allow() {}",
         '#[expect(r#clippy :: unwrap_used, reason = "raw identifier probe")]',
         "fn raw_identifier_expect() {}",
+        "#![allow(warnings)]",
+        "fn crate_wide_warning_escape() {}",
+        '#[expect(warnings, reason = "do not fail CI")]',
+        "fn local_warning_escape() {}",
+        '#[expect(clippy::too_many_arguments, reason = "warnings are reviewed here")]',
+        "fn reason_text_is_not_a_lint_name() {}",
       ].join("\n"),
     ),
     [
@@ -739,369 +781,8 @@ test("Clippy suppressions must be narrow expectations with reasons", () => {
       "src-tauri/src/example.rs:8 conditionally suppresses Clippy through cfg_attr; use an unconditional narrow expect with a reason",
       "src-tauri/src/example.rs:10 conditionally suppresses Clippy through cfg_attr; use an unconditional narrow expect with a reason",
       "src-tauri/src/example.rs:12 uses allow(clippy); use a narrow expect with a reason",
+      "src-tauri/src/example.rs:16 suppresses the Rust warnings lint group; -D warnings must remain authoritative",
+      "src-tauri/src/example.rs:18 suppresses the Rust warnings lint group; -D warnings must remain authoritative",
     ],
-  );
-});
-
-test("workflow uses are parsed recursively across block, flow, and reusable jobs", () => {
-  const sha = "1234567890abcdef1234567890abcdef12345678";
-  assert.deepEqual(
-    findUnpinnedWorkflowUses(
-      "probe.yml",
-      [
-        "jobs:",
-        "  build:",
-        "    steps:",
-        `      - uses: actions/checkout@${sha}`,
-        "      - { name: unsafe flow, uses: owner/action@main }",
-        "  reusable:",
-        "    uses: owner/repo/.github/workflows/reuse.yml@v1",
-        "  local:",
-        "    uses: ./.github/workflows/local.yml",
-      ].join("\n"),
-    ),
-    [
-      "third-party Action is not pinned to a full commit SHA: probe.yml: owner/action@main",
-      "third-party Action is not pinned to a full commit SHA: probe.yml: owner/repo/.github/workflows/reuse.yml@v1",
-    ],
-  );
-});
-
-test("invalid workflow YAML fails closed", () => {
-  assert.match(findUnpinnedWorkflowUses("broken.yml", "jobs: [")[0], /invalid YAML/);
-});
-
-test("GitHub transport policy keeps raw reqwest clients inside the adapter", () => {
-  assert.deepEqual(
-    findForbiddenGithubTransportUsage(
-      "src-tauri/src/lib.rs",
-      [
-        "let client = reqwest::Client::new();",
-        "state.adapters.github.client().get(url);",
-        "let request: reqwest::RequestBuilder = client.get(url);",
-        "request.send().await?;",
-      ].join("\n"),
-    ),
-    [
-      "src-tauri/src/lib.rs constructs or names a raw reqwest client outside adapters.rs",
-      "src-tauri/src/lib.rs bypasses GithubHttpAdapter through client()",
-      "src-tauri/src/lib.rs sends an HTTP request outside adapters.rs",
-    ],
-  );
-  assert.deepEqual(
-    findForbiddenGithubTransportUsage(
-      "src-tauri/src/adapters.rs",
-      "let client = reqwest::Client::new(); client.execute(request).await?;",
-    ),
-    [],
-  );
-  assert.deepEqual(
-    findForbiddenGithubTransportUsage(
-      "src-tauri/src/adapters.rs",
-      "fn client(&self) -> &reqwest::Client { &self.0 }",
-    ),
-    ["src-tauri/src/adapters.rs exposes the raw GitHub HTTP client"],
-  );
-  assert.deepEqual(
-    findForbiddenGithubTransportUsage(
-      "src-tauri/src/lib.rs",
-      [
-        "use crate::adapters::GithubHttpAdapter;",
-        "let adapter_type_is_available: Option<GithubHttpAdapter> = None;",
-        "let _ = finished_tx.send(());",
-      ].join("\n"),
-    ),
-    [],
-  );
-  for (const directGet of ["reqwest::get(url).await?;", "reqwest::blocking::get(url)?;"]) {
-    assert.deepEqual(
-      findForbiddenGithubTransportUsage("src-tauri/src/lib.rs", directGet),
-      ["src-tauri/src/lib.rs sends an HTTP request outside adapters.rs"],
-    );
-  }
-  for (const rawClient of [
-    "let client = reqwest::ClientBuilder::new().build()?;",
-    "let client = reqwest::blocking::Client::new();",
-    "use reqwest::blocking::{Client, ClientBuilder}; let client = ClientBuilder::new();",
-  ]) {
-    assert.deepEqual(
-      findForbiddenGithubTransportUsage("src-tauri/src/lib.rs", rawClient),
-      ["src-tauri/src/lib.rs constructs or names a raw reqwest client outside adapters.rs"],
-    );
-  }
-});
-
-test("frontend runtime policy keeps network and Tauri invoke behind governed adapters", () => {
-  assert.deepEqual(
-    findForbiddenFrontendRuntimeUsage(
-      "src/UnsafeView.tsx",
-      [
-        'import { invoke as rawInvoke } from "@tauri-apps/api/core";',
-        'fetch("https://api.github.com/repos/example/repo");',
-        'window.fetch("https://example.invalid");',
-        "new XMLHttpRequest();",
-        'new window.EventSource("https://example.invalid/events");',
-        'new globalThis.WebSocket("wss://example.invalid");',
-        'navigator.sendBeacon("https://example.invalid", "payload");',
-        'window.__TAURI__.core.invoke("open_backup_folder", { path: "/tmp" });',
-        'window.__TAURI_INTERNALS__.invoke("open_backup_folder", { path: "/tmp" });',
-      ].join("\n"),
-    ),
-    [
-      "src/UnsafeView.tsx uses raw frontend network API fetch; route network access through AppService and Rust adapters",
-      "src/UnsafeView.tsx uses raw frontend network API XMLHttpRequest; route network access through AppService and Rust adapters",
-      "src/UnsafeView.tsx uses raw frontend network API EventSource; route network access through AppService and Rust adapters",
-      "src/UnsafeView.tsx uses raw frontend network API WebSocket; route network access through AppService and Rust adapters",
-      "src/UnsafeView.tsx uses raw frontend network API sendBeacon; route network access through AppService and Rust adapters",
-      "src/UnsafeView.tsx imports @tauri-apps/api/core outside the governed src/api.ts wrapper",
-      "src/UnsafeView.tsx invokes the raw Tauri global outside the governed src/api.ts wrapper",
-    ],
-  );
-  assert.deepEqual(
-    findForbiddenFrontendRuntimeUsage(
-      "src/api.ts",
-      [
-        'import { invoke } from "@tauri-apps/api/core";',
-        'export const command = (name: string) => invoke(name);',
-      ].join("\n"),
-    ),
-    [],
-  );
-  assert.deepEqual(
-    findForbiddenFrontendRuntimeUsage(
-      "src/App.tsx",
-      'service.checkForUpdates("1.2.3"); api.openUrl("https://example.invalid");',
-    ),
-    [],
-  );
-});
-
-test("Tauri command inventory matches the frontend API boundary", () => {
-  const frontend = extractFrontendCommands(`
-    command<Repository[]>("list_repositories");
-    command<void>("open_backup_folder", { repositoryId });
-  `);
-  const rust = extractRustCommands(`
-    .invoke_handler(tauri::generate_handler![
-      list_repositories,
-      open_backup_folder,
-    ])
-  `);
-
-  assert.deepEqual(frontend, ["list_repositories", "open_backup_folder"]);
-  assert.deepEqual(rust, ["list_repositories", "open_backup_folder"]);
-  assert.deepEqual(compareCommandInventories({ frontend, rust }), []);
-});
-
-test("Tauri command inventory ignores comments and string decoys", () => {
-  const frontend = extractFrontendCommands(`
-    /* command("ghost_block") */
-    // command("ghost_line")
-    const decoy = 'command("ghost_string")';
-    command<void>("real_command");
-  `);
-  const rust = extractRustCommands(`
-    /* tauri::generate_handler![ghost_block] */
-    const _: &str = "tauri::generate_handler![ghost_string]";
-    .invoke_handler(tauri::generate_handler![
-      #[cfg(target_os = "macos")]
-      crate::commands::real_command,
-      /* ghost_nested, */
-    ])
-  `);
-
-  assert.deepEqual(frontend, ["real_command"]);
-  assert.deepEqual(rust, ["real_command"]);
-});
-
-test("Tauri command inventory fails closed on drift and retired scheduling command", () => {
-  assert.deepEqual(
-    compareCommandInventories({
-      frontend: ["list_repositories", "frontend_only", "configure_schedule"],
-      rust: ["list_repositories", "rust_only", "configure_schedule"],
-    }),
-    [
-      "frontend command is not registered by Rust: frontend_only",
-      "Rust command has no frontend API wrapper: rust_only",
-      "removed command must not return: configure_schedule",
-    ],
-  );
-});
-
-test("architecture snapshot is exact for hotspots and enforces the 800-line new-module cap", () => {
-  assert.deepEqual(
-    checkArchitectureSnapshot({
-      files: {
-        "src/App.tsx": 7001,
-        "src/new-feature.ts": 801,
-      },
-      budget: {
-        hotSpots: {
-          "src/App.tsx": { maxLines: 7000, adr: "docs/adr/0007.md" },
-        },
-        newModuleMaxLines: 800,
-      },
-    }),
-    [
-      "src/App.tsx has 7001 lines; hotspot snapshot must equal 7000 and be updated downward with the code",
-      "src/new-feature.ts has 801 lines; new production modules are limited to 800",
-    ],
-  );
-  assert.deepEqual(
-    checkArchitectureSnapshot({
-      files: { "src/App.tsx": 6999 },
-      budget: {
-        hotSpots: { "src/App.tsx": { maxLines: 7000 } },
-        newModuleMaxLines: 800,
-      },
-    }),
-    [
-      "src/App.tsx has 6999 lines; hotspot snapshot must equal 7000 and be updated downward with the code",
-    ],
-  );
-});
-
-test("architecture snapshot does not permit raising the global new-module cap", () => {
-  assert.deepEqual(
-    checkArchitectureSnapshot({
-      files: {},
-      budget: { hotSpots: {}, newModuleMaxLines: 801 },
-    }),
-    ["new production module cap must remain 800 lines; found 801"],
-  );
-});
-
-test("architecture budgets cannot bless a new oversized module as a hotspot", () => {
-  assert.deepEqual(
-    compareArchitectureBudgets(
-      {
-        hotSpots: {
-          "src/App.tsx": { maxLines: 6000 },
-          "src/new-feature.ts": { maxLines: 1200, adr: "docs/adr/9999.md" },
-        },
-      },
-      { hotSpots: { "src/App.tsx": { maxLines: 6000 } } },
-    ),
-    ["new hotspot budgets are forbidden; keep new modules within 800 lines: src/new-feature.ts"],
-  );
-});
-
-test("architecture hotspot targets cannot be raised or silently removed", () => {
-  assert.deepEqual(
-    compareArchitectureBudgets(
-      { hotSpots: { "src/App.tsx": { maxLines: 6000, targetLines: 900 } } },
-      { hotSpots: { "src/App.tsx": { maxLines: 6000, targetLines: 700 } } },
-    ),
-    ["src/App.tsx target increased from 700 to 900; targets may only decrease"],
-  );
-  assert.deepEqual(
-    compareArchitectureBudgets(
-      { hotSpots: { "src/App.tsx": { maxLines: 6000 } } },
-      { hotSpots: { "src/App.tsx": { maxLines: 6000, targetLines: 700 } } },
-    ),
-    ["src/App.tsx target increased from 700 to missing; targets may only decrease"],
-  );
-});
-
-test("bundle budgets cannot be raised or silently removed", () => {
-  assert.deepEqual(
-    compareArchitectureBudgets(
-      {
-        hotSpots: {},
-        bundle: { maxTotalBytes: 5000 },
-      },
-      {
-        hotSpots: {},
-        bundle: { maxTotalBytes: 4000, maxJavaScriptChunkBytes: 2000 },
-      },
-    ),
-    [
-      "bundle maxTotalBytes increased from 4000 to 5000; budgets may only decrease",
-      "bundle maxJavaScriptChunkBytes increased from 2000 to missing; budgets may only decrease",
-    ],
-  );
-});
-
-test("architecture budget bootstrap rejects tracked base read and JSON failures", () => {
-  assert.equal(
-    loadTrackedArchitectureBudgetAtBase({
-      tracked: false,
-      readContents: () => {
-        throw new Error("must not read an absent path");
-      },
-      label: "base budget",
-    }),
-    undefined,
-  );
-  assert.throws(
-    () =>
-      loadTrackedArchitectureBudgetAtBase({
-        tracked: true,
-        readContents: () => {
-          throw new Error("git read failed");
-        },
-        label: "base budget",
-      }),
-    /cannot read tracked base budget/,
-  );
-  assert.throws(
-    () =>
-      loadTrackedArchitectureBudgetAtBase({
-        tracked: true,
-        readContents: () => "not-json",
-        label: "base budget",
-      }),
-    /tracked base budget is invalid JSON/,
-  );
-});
-
-test("parseUnifiedDiffLines extracts only added destination lines", () => {
-  const diff = [
-    "diff --git a/src/a.ts b/src/a.ts",
-    "+++ b/src/a.ts",
-    "@@ -2,2 +2,3 @@",
-    " unchanged",
-    "+added",
-    "+another",
-    "@@ -20 +21 @@",
-    "+last",
-    "diff --git a/src/遗漏.ts b/src/遗漏.ts",
-    "+++ b/src/遗漏.ts",
-    "@@ -0,0 +1 @@",
-    "+export const uncovered = true;",
-  ].join("\n");
-
-  assert.deepEqual(parseUnifiedDiffLines(diff), {
-    "src/a.ts": [3, 4, 21],
-    "src/遗漏.ts": [1],
-  });
-});
-
-test("compareCoverage rejects regressions and uncovered changed lines", () => {
-  const result = compareCoverage({
-    current: { lines: 79.99, branches: 70, functions: 81 },
-    baseline: { lines: 80, branches: 69, functions: 81 },
-    changed: { linePercent: 79, branchPercent: 69 },
-  });
-
-  assert.deepEqual(result, [
-    "overall lines coverage regressed: 79.99% < 80%",
-    "changed lines coverage is 79%; required 80%",
-    "changed branches coverage is 69%; required 70%",
-  ]);
-});
-
-test("changed coverage is enforced whenever a base commit is available", () => {
-  assert.equal(
-    shouldEnforceChangedCoverage({ baseRef: "origin/main", baselineExistsAtBase: false }),
-    true,
-  );
-  assert.equal(
-    shouldEnforceChangedCoverage({ baseRef: "origin/main", baselineExistsAtBase: true }),
-    true,
-  );
-  assert.equal(
-    shouldEnforceChangedCoverage({ baseRef: undefined, baselineExistsAtBase: true }),
-    false,
   );
 });

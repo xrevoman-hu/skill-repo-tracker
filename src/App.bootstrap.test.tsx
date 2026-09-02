@@ -21,6 +21,7 @@ describe("application bootstrap", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("fails closed when one persisted desktop domain cannot be loaded", async () => {
@@ -120,6 +121,7 @@ describe("application bootstrap", () => {
   it("checks releases through AppService without browser network access", async () => {
     const user = userEvent.setup();
     const browserFetch = vi.fn();
+    const browserOpen = vi.spyOn(window, "open").mockReturnValue(null);
     vi.stubGlobal("fetch", browserFetch);
     const checkForUpdates = vi.fn().mockResolvedValue({
       currentVersion: "1.2.2",
@@ -154,5 +156,11 @@ describe("application bootstrap", () => {
     await waitFor(() => expect(checkForUpdates).toHaveBeenCalledWith("1.2.2"));
     expect(browserFetch).not.toHaveBeenCalled();
     expect((await screen.findAllByText("发现新版本 v1.2.3")).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "进入 GitHub" }));
+    expect(browserOpen).toHaveBeenCalledWith(
+      "https://github.com/example/project",
+      "_blank",
+      "noopener,noreferrer",
+    );
   });
 });

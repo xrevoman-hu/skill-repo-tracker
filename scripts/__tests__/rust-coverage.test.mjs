@@ -19,5 +19,7 @@ test("Rust coverage reports exclude dedicated test modules, not production modul
   assert.equal(excluded.test("/workspace/src-tauri/src/backups_tests.rs"), true);
   assert.equal(excluded.test("/workspace/src-tauri/src/prompts_schema_tests.rs"), true);
   assert.equal(excluded.test("/workspace/src-tauri/tests/schema_upgrade.rs"), true);
+  assert.equal(excluded.test("/workspace/src-tauri/src/test.rs"), false);
+  assert.equal(excluded.test("/workspace/src-tauri/src/tests.rs"), false);
   assert.equal(excluded.test("/workspace/src-tauri/src/backups.rs"), false);
 });

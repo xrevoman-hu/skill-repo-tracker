@@ -42,6 +42,17 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Reject tracked dependency and Cargo overrides
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' path; do
+            case "$path" in
+              .npmrc|rust-toolchain|npm-shrinkwrap.json|*/npm-shrinkwrap.json|.cargo|.cargo/*|*/.cargo|*/.cargo/*)
+                echo "forbidden tracked dependency/toolchain override: $path" >&2
+                exit 1
+                ;;
+            esac
+          done < <(git ls-files -z)
       - name: Set up Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -54,7 +65,7 @@ jobs:
           rustup toolchain install nightly-2026-08-01 --profile minimal --component llvm-tools-preview
           rustup default 1.95.0
       - name: Install npm dependencies
-        run: npm ci --registry=https://registry.npmjs.org
+        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org
       - name: Install local-phase coverage and browser tools
         if: inputs.phase == 'local'
         run: |

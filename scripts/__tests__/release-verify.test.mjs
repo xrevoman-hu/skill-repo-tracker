@@ -22,6 +22,7 @@ import {
   assertDmgSourceLayout,
   buildAppCodesignArguments,
   buildLocalReleaseSummary,
+  buildLocalMainFetchArguments,
   buildReleaseManifest,
   buildRemoteFetchArguments,
   decodeReleaseManifestToken,
@@ -31,6 +32,8 @@ import {
   validateRemoteBytes,
   validateRemoteCommit,
   validateRemoteDigest,
+  validateFinalReleaseMetadata,
+  validateLocalReleaseSource,
   validateReleaseHost,
   validateMountedDmgLayout,
   withCleanWorktreeBoundary,
@@ -487,6 +490,90 @@ test("remote verification fetches fresh main and tag into explicit destinations"
     "+refs/heads/main:refs/remotes/origin/main",
     "refs/tags/v1.2.2:refs/tags/_srt-release-remote/v1.2.2",
   ]);
+});
+
+test("local verification binds the build to fresh main before any artifact exists", () => {
+  assert.deepEqual(buildLocalMainFetchArguments(), [
+    "fetch",
+    "--no-tags",
+    "--prune",
+    "origin",
+    "+refs/heads/main:refs/remotes/origin/main",
+  ]);
+  assert.doesNotThrow(() =>
+    validateLocalReleaseSource({
+      version: "1.2.3",
+      head: "a".repeat(40),
+      remoteMain: "a".repeat(40),
+      remoteTagOutput: "",
+    }),
+  );
+  assert.throws(
+    () =>
+      validateLocalReleaseSource({
+        version: "1.2.3",
+        head: "a".repeat(40),
+        remoteMain: "b".repeat(40),
+        remoteTagOutput: "",
+      }),
+    /must equal fresh origin\/main/,
+  );
+  assert.throws(
+    () =>
+      validateLocalReleaseSource({
+        version: "1.2.3",
+        head: "a".repeat(40),
+        remoteMain: "a".repeat(40),
+        remoteTagOutput: `${"c".repeat(40)}\trefs/tags/v1.2.3\n`,
+      }),
+    /remote tag v1\.2\.3 already exists/,
+  );
+});
+
+test("remote verification requires the exact final release title", () => {
+  const body = [
+    "## 中文",
+    "ad-hoc；不是 Developer ID，也没有 notarized。首次启动请 Control-click。",
+    "## English",
+    "Privacy & Security; ad-hoc, not Developer ID, not notarized; Control-click.",
+  ].join("\n");
+  const release = {
+    tagName: "v1.2.3",
+    name: "Skill Repo Tracker v1.2.3",
+    isDraft: false,
+    isPrerelease: false,
+    body,
+  };
+  assert.doesNotThrow(() => validateFinalReleaseMetadata(release, "1.2.3", body));
+  assert.throws(
+    () => validateFinalReleaseMetadata({ ...release, name: "Almost v1.2.3" }, "1.2.3", body),
+    /title Skill Repo Tracker v1\.2\.3/,
+  );
+  assert.throws(
+    () => validateFinalReleaseMetadata({ ...release, isDraft: true }, "1.2.3", body),
+    /must be final/,
+  );
+  assert.throws(
+    () => validateFinalReleaseMetadata({ ...release, body: "" }, "1.2.3", body),
+    /must exactly match docs\/releases\/v1\.2\.3\.md/,
+  );
+});
+
+test("release phases call the source and metadata validators at their acceptance boundaries", () => {
+  const source = readFileSync(new URL("../release-verify.mjs", import.meta.url), "utf8");
+  const localPhase = source.slice(
+    source.indexOf("function localPhase(version)"),
+    source.indexOf("function remotePhase(version, manifest)"),
+  );
+  assert.equal(localPhase.match(/assertLocalReleaseSource\(version\)/g)?.length, 2);
+  assert.ok(localPhase.indexOf("assertLocalReleaseSource(version)") < localPhase.indexOf('run("npm", ["run", "verify"])'));
+
+  const remotePhase = source.slice(source.indexOf("function remotePhase(version, manifest)"));
+  assert.equal(remotePhase.match(/validateFinalReleaseMetadata\(release, version,/g)?.length, 1);
+  assert.ok(
+    remotePhase.indexOf("validateFinalReleaseMetadata(release, version,") <
+      remotePhase.indexOf("selectSingleReleaseAsset(release.assets, version)"),
+  );
 });
 
 test("remote verification isolates the authoritative annotated tag and rejects rewrites", (t) => {

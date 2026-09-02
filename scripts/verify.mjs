@@ -6,6 +6,8 @@ import { homedir } from "node:os";
 import { dirname, delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { VERIFY_PLAN, validateVerifyPlan } from "./verify-plan.mjs";
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cargoBin = join(homedir(), ".cargo", "bin");
 const env = {
@@ -15,49 +17,14 @@ const env = {
     : process.env.PATH,
 };
 
-const steps = [
-  ["治理脚本测试", "npm", ["run", "test:scripts"]],
-  ["版本、边界与架构预算", process.execPath, ["scripts/governance.mjs", "all"]],
-  ["TypeScript 全量检查", "npm", ["run", "typecheck"]],
-  ["TypeScript strict islands", "npm", ["run", "typecheck:strict-islands"]],
-  ["Vitest 全量测试", "npm", ["test"]],
-  ["Vite 生产构建", "npm", ["run", "build"]],
-  ["前端包体预算", process.execPath, ["scripts/governance.mjs", "bundle"]],
-  [
-    "Rust 格式",
-    "cargo",
-    ["fmt", "--check", "--manifest-path", "src-tauri/Cargo.toml"],
-  ],
-  [
-    "Rust Clippy",
-    "cargo",
-    [
-      "clippy",
-      "--locked",
-      "--manifest-path",
-      "src-tauri/Cargo.toml",
-      "--all-targets",
-      "--all-features",
-      "--",
-      "-D",
-      "warnings",
-    ],
-  ],
-  [
-    "Rust 全量测试",
-    "cargo",
-    [
-      "test",
-      "--locked",
-      "--manifest-path",
-      "src-tauri/Cargo.toml",
-      "--all-features",
-    ],
-  ],
-  ["Git 空白错误", process.execPath, ["scripts/check-diff.mjs"]],
-];
+const planErrors = validateVerifyPlan(VERIFY_PLAN);
+if (planErrors.length > 0) {
+  for (const error of planErrors) console.error(`FAIL verify contract: ${error}`);
+  process.exit(1);
+}
 
-for (const [label, command, args] of steps) {
+for (const { label, command: commandName, args } of VERIFY_PLAN) {
+  const command = commandName === "node" ? process.execPath : commandName;
   console.log(`\n=== ${label} ===`);
   try {
     execFileSync(command, args, {

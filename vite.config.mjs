@@ -3,6 +3,10 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   clearScreen: false,
+  publicDir: false,
+  css: {
+    postcss: { plugins: [] },
+  },
   optimizeDeps: {
     include: ["react", "react-dom/client"],
   },

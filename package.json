@@ -33,6 +33,7 @@
     "coverage:rust": "node scripts/rust-coverage.mjs",
     "coverage:check": "npm run test:coverage && node scripts/check-coverage.mjs frontend && npm run coverage:rust && node scripts/check-coverage.mjs rust",
     "build": "vite build",
+    "governance:context": "node scripts/governance-context.mjs",
     "verify:governance": "node scripts/governance.mjs all",
     "verify": "node scripts/verify.mjs",
     "github:governance:check": "node scripts/github-governance-check.mjs",
