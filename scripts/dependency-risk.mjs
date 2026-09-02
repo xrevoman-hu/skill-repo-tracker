@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { gitPathExistsAtRef } from "./git-paths.mjs";
+import { gitPathExistsAtRef } from "./git-paths-core.mjs";
 
 export const DEPENDENCY_RISK_PATH = "docs/engineering/dependency-risk-ledger.json";
 export const AUDITED_TARGETS = Object.freeze([
@@ -38,7 +38,8 @@ const RETIRED_FIELDS = [...ACTIVE_FIELDS, "retiredOn", "retirementReason"];
 const RISK_ID = /^RISK-(\d{4})-(\d{3})$/;
 const ADVISORY_ID = /^RUSTSEC-\d{4}-\d{4}$/;
 const PACKAGE_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9_-]{0,63})$/;
-const PACKAGE_VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,127}$/;
+const PACKAGE_VERSION = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const CARGO_SOURCE = /^[a-z][a-z0-9+.-]*\+\S+$/;
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const TRIGGER = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -46,6 +47,14 @@ const MAX_ACTIVE_DAYS = 90;
 const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 const AUDIT_VERSION = "0.22.2";
 const KNOWN_WARNING_KINDS = new Set(["unsound", "unmaintained", "yanked", "notice"]);
+const AUDIT_SETTINGS_FIELDS = [
+  "target_arch",
+  "target_os",
+  "severity",
+  "ignore",
+  "informational_warnings",
+];
+const INFORMATIONAL_WARNINGS = Object.freeze(["notice", "unmaintained", "unsound"]);
 
 function exactFields(value, expected, label, errors) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -140,8 +149,8 @@ function validateRiskEntry(entry, index, today, enforceFreshness, errors) {
     if (typeof entry.package.version !== "string" || !PACKAGE_VERSION.test(entry.package.version)) {
       errors.push(`${label} package.version must be a non-empty Cargo version`);
     }
-    if (!nonEmptyText(entry.package.source, 5, 500)) {
-      errors.push(`${label} package.source must be a single-line Cargo source identity`);
+    if (!nonEmptyText(entry.package.source, 5, 500) || !CARGO_SOURCE.test(entry.package.source)) {
+      errors.push(`${label} package.source must be a canonical single-line Cargo source identity`);
     }
   }
 
@@ -332,7 +341,8 @@ function advisoryId(value, label, errors) {
   return id;
 }
 
-function auditIdentity(value, label, errors) {
+function auditIdentity(value, kind, index, errors) {
+  const label = `${kind} warning ${index}`;
   const advisory = advisoryId(value, label, errors);
   const package_ = value?.package;
   if (!package_ || typeof package_ !== "object" || Array.isArray(package_)) {
@@ -340,98 +350,152 @@ function auditIdentity(value, label, errors) {
     return undefined;
   }
   const { name, version, source } = package_;
-  if (typeof name !== "string" || typeof version !== "string" || typeof source !== "string") {
-    errors.push(`${label} package must include string name, version, and source`);
-    return undefined;
+  let canonical = true;
+  if (value?.kind !== kind) {
+    errors.push(`${label} kind must be exactly ${kind}`);
+    canonical = false;
   }
-  if (value.kind !== undefined && value.kind !== label.split(" ")[0]) {
-    errors.push(`${label} kind does not match its warning category`);
+  if (typeof name !== "string" || !PACKAGE_NAME.test(name)) {
+    errors.push(`${label} package.name must be a canonical Cargo package name`);
+    canonical = false;
   }
-  return advisory ? { advisory, name, version, source } : undefined;
+  if (typeof version !== "string" || !PACKAGE_VERSION.test(version)) {
+    errors.push(`${label} package.version must be a canonical non-empty Cargo version`);
+    canonical = false;
+  }
+  if (!nonEmptyText(source, 5, 500) || !CARGO_SOURCE.test(source)) {
+    errors.push(`${label} package.source must be a canonical single-line Cargo source identity`);
+    canonical = false;
+  }
+  return advisory && canonical ? { advisory, name, version, source } : undefined;
 }
 
 function identityKey(identity) {
   return [identity.advisory, identity.name, identity.version, identity.source].join("\0");
 }
 
-function reachablePackage(metadata, identity, target, errors) {
+function validateMetadataGraph(metadata, target, errors) {
   const label = `cargo metadata for ${target}`;
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
     errors.push(`${label} must be an object`);
-    return false;
+    return undefined;
   }
-  if (!Array.isArray(metadata.packages) || !Array.isArray(metadata.workspace_members)) {
-    errors.push(`${label} must include packages and workspace_members arrays`);
-    return false;
+  if (!Array.isArray(metadata.packages) || metadata.packages.length === 0) {
+    errors.push(`${label} packages must be a non-empty array`);
+    return undefined;
   }
-  if (!metadata.resolve || typeof metadata.resolve !== "object" || !Array.isArray(metadata.resolve.nodes)) {
-    errors.push(`${label} resolve.nodes must be an array`);
-    return false;
+  if (!Array.isArray(metadata.workspace_members) || metadata.workspace_members.length === 0) {
+    errors.push(`${label} workspace_members must be a non-empty array`);
+    return undefined;
+  }
+  if (!metadata.resolve || typeof metadata.resolve !== "object" ||
+      !Array.isArray(metadata.resolve.nodes) || metadata.resolve.nodes.length === 0) {
+    errors.push(`${label} resolve.nodes must be a non-empty array`);
+    return undefined;
   }
 
   const packages = new Map();
+  let valid = true;
   for (const package_ of metadata.packages) {
-    if (!package_ || typeof package_.id !== "string" || packages.has(package_.id)) {
-      errors.push(`${label} package IDs must be unique strings`);
-      return false;
+    if (!package_ || typeof package_.id !== "string" || package_.id.length === 0 ||
+        packages.has(package_.id)) {
+      errors.push(`${label} package IDs must be unique non-empty strings`);
+      valid = false;
+      continue;
     }
     packages.set(package_.id, package_);
   }
-  const matches = [...packages.values()].filter(
-    (package_) =>
-      package_.name === identity.name &&
-      package_.version === identity.version &&
+
+  const nodes = new Map();
+  for (const node of metadata.resolve.nodes) {
+    if (!node || typeof node.id !== "string" || node.id.length === 0 ||
+        !Array.isArray(node.dependencies) || nodes.has(node.id)) {
+      errors.push(`${label} resolve nodes must have unique non-empty string IDs and dependency arrays`);
+      valid = false;
+      continue;
+    }
+    nodes.set(node.id, node.dependencies);
+    if (!packages.has(node.id)) {
+      errors.push(`${label} resolve node ${node.id} does not reference a package`);
+      valid = false;
+    }
+  }
+  if (new Set(metadata.workspace_members).size !== metadata.workspace_members.length) {
+    errors.push(`${label} workspace_members must be unique`);
+    valid = false;
+  }
+  for (const id of metadata.workspace_members) {
+    if (typeof id !== "string" || id.length === 0 || !packages.has(id) || !nodes.has(id)) {
+      errors.push(`${label} workspace members must reference packages and resolve nodes`);
+      valid = false;
+    }
+  }
+  for (const dependencies of nodes.values()) {
+    if (new Set(dependencies).size !== dependencies.length) {
+      errors.push(`${label} resolve node dependencies must be unique`);
+      valid = false;
+    }
+    for (const dependency of dependencies) {
+      if (typeof dependency !== "string" || dependency.length === 0 ||
+          !packages.has(dependency) || !nodes.has(dependency)) {
+        errors.push(`${label} dependency references an unknown package or resolve node`);
+        valid = false;
+      }
+    }
+  }
+  return valid ? { packages, nodes, workspaceMembers: metadata.workspace_members } : undefined;
+}
+
+function reachablePackage(graph, identity, target, errors) {
+  if (!graph) return false;
+  const label = `cargo metadata for ${target}`;
+  const matches = [...graph.packages.values()].filter(
+    (package_) => package_.name === identity.name && package_.version === identity.version &&
       package_.source === identity.source,
   );
   if (matches.length > 1) {
     errors.push(`${label} package identity is ambiguous for ${identity.name}@${identity.version}`);
     return false;
   }
-
-  const nodes = new Map();
-  for (const node of metadata.resolve.nodes) {
-    if (!node || typeof node.id !== "string" || !Array.isArray(node.dependencies) || nodes.has(node.id)) {
-      errors.push(`${label} resolve nodes must have unique string IDs and dependency arrays`);
-      return false;
-    }
-    nodes.set(node.id, node.dependencies);
-  }
-  if (metadata.workspace_members.some((id) => typeof id !== "string" || !nodes.has(id))) {
-    errors.push(`${label} workspace members must reference resolve nodes`);
-    return false;
-  }
   const reachable = new Set();
-  const pending = [...metadata.workspace_members];
+  const pending = [...graph.workspaceMembers];
   while (pending.length > 0) {
     const id = pending.pop();
     if (reachable.has(id)) continue;
-    const dependencies = nodes.get(id);
-    if (!dependencies) {
-      errors.push(`${label} dependency ${id} has no resolve node`);
-      return false;
-    }
+    const dependencies = graph.nodes.get(id);
     reachable.add(id);
-    for (const dependency of dependencies) {
-      if (typeof dependency !== "string" || !nodes.has(dependency)) {
-        errors.push(`${label} dependency references an unknown resolve node`);
-        return false;
-      }
-      pending.push(dependency);
-    }
+    pending.push(...dependencies);
   }
   return matches.length === 1 && reachable.has(matches[0].id);
+}
+
+function validateAuditSettings(settings, errors) {
+  if (!exactFields(settings, AUDIT_SETTINGS_FIELDS, "cargo audit settings", errors)) return;
+  for (const field of ["target_arch", "target_os", "ignore"]) {
+    if (!Array.isArray(settings[field]) || settings[field].length !== 0) {
+      errors.push(`cargo audit settings.${field} must be an empty array`);
+    }
+  }
+  if (settings.severity !== null) errors.push("cargo audit settings.severity must be null");
+  const informational = settings.informational_warnings;
+  if (!Array.isArray(informational) || informational.some((value) => typeof value !== "string") ||
+      new Set(informational).size !== INFORMATIONAL_WARNINGS.length ||
+      !isDeepStrictEqual([...informational].sort(), INFORMATIONAL_WARNINGS)) {
+    errors.push(
+      "cargo audit settings.informational_warnings must contain exactly notice, unmaintained, and unsound",
+    );
+  }
 }
 
 export function reconcileCargoAuditReport(ledger, report, metadataByTarget, options = {}) {
   const errors = validateDependencyRiskLedger(ledger, { now: options.now ?? new Date() });
   if (!report || typeof report !== "object" || Array.isArray(report)) {
-    return { errors: [...errors, "cargo audit report must be an object"], unmaintained: { count: 0, advisoryIds: [] } };
+    return {
+      errors: [...errors, "cargo audit report must be an object"],
+      unmaintained: { count: 0, identities: [] },
+    };
   }
-  if (!report.settings || !Array.isArray(report.settings.ignore)) {
-    errors.push("cargo audit settings.ignore must be an array");
-  } else if (report.settings.ignore.length !== 0) {
-    errors.push("cargo audit settings.ignore must be empty");
-  }
+  validateAuditSettings(report.settings, errors);
 
   const vulnerabilities = report.vulnerabilities;
   if (!vulnerabilities || typeof vulnerabilities.found !== "boolean" ||
@@ -445,10 +509,9 @@ export function reconcileCargoAuditReport(ledger, report, metadataByTarget, opti
       errors.push("cargo audit vulnerability found flag does not match list contents");
     }
     if (vulnerabilities.list.length > 0) {
-      const ids = vulnerabilities.list
-        .map((entry, index) => advisoryId(entry, `vulnerability ${index}`, errors))
-        .filter(Boolean)
-        .sort();
+      const ids = vulnerabilities.list.map(
+        (entry, index) => auditIdentity(entry, "vulnerability", index, errors)?.advisory,
+      ).filter(Boolean).sort();
       errors.push(`cargo audit vulnerabilities are never allowlisted: ${ids.join(", ") || "unknown"}`);
     }
   }
@@ -469,23 +532,38 @@ export function reconcileCargoAuditReport(ledger, report, metadataByTarget, opti
   if (yanked.length > 0) errors.push("cargo audit yanked warnings are never allowed");
   if (notice.length > 0) errors.push("cargo audit notice warnings require explicit checker support");
 
-  const unmaintainedIds = unmaintained
-    .map((entry, index) => auditIdentity(entry, `unmaintained warning ${index}`, errors)?.advisory)
-    .filter(Boolean);
+  const warningIdentities = Object.fromEntries(
+    [["unsound", unsound], ["unmaintained", unmaintained], ["yanked", yanked], ["notice", notice]]
+      .map(([kind, entries]) => [
+        kind,
+        entries.map((entry, index) => auditIdentity(entry, kind, index, errors)).filter(Boolean),
+      ]),
+  );
+  const unmaintainedIdentities = [...new Set(warningIdentities.unmaintained.map((identity) =>
+    `${identity.name}@${identity.version} / ${identity.advisory} / ${identity.source}`,
+  ))].sort();
   const active = (ledger?.risks ?? []).filter((entry) => entry?.status === "active");
   const activeByIdentity = new Map(active.map((entry) => [riskIdentity(entry), entry]));
   const seenWarnings = new Set();
   const matchedRisks = new Set();
-  const metadataKeys = metadataByTarget && typeof metadataByTarget === "object"
-    ? Object.keys(metadataByTarget)
-    : [];
+  const metadataKeys = metadataByTarget && typeof metadataByTarget === "object" &&
+    !Array.isArray(metadataByTarget) ? Object.keys(metadataByTarget) : [];
+  if (!metadataByTarget || typeof metadataByTarget !== "object" || Array.isArray(metadataByTarget)) {
+    errors.push("cargo metadata by target must be an object");
+  }
   for (const target of metadataKeys) {
     if (!AUDITED_TARGETS.includes(target)) errors.push(`unexpected audited target metadata ${target}`);
   }
+  const graphByTarget = {};
+  for (const target of AUDITED_TARGETS) {
+    if (!Object.hasOwn(metadataByTarget ?? {}, target)) {
+      errors.push(`missing cargo metadata for audited target ${target}`);
+      continue;
+    }
+    graphByTarget[target] = validateMetadataGraph(metadataByTarget[target], target, errors);
+  }
 
-  unsound.forEach((entry, index) => {
-    const identity = auditIdentity(entry, `unsound warning ${index}`, errors);
-    if (!identity) return;
+  warningIdentities.unsound.forEach((identity) => {
     const key = identityKey(identity);
     if (seenWarnings.has(key)) {
       errors.push(`duplicate unsound warning identity ${identity.advisory} ${identity.name}@${identity.version}`);
@@ -494,10 +572,7 @@ export function reconcileCargoAuditReport(ledger, report, metadataByTarget, opti
     seenWarnings.add(key);
     const actualTargets = [];
     for (const target of AUDITED_TARGETS) {
-      const metadata = metadataByTarget?.[target];
-      if (metadata === undefined) {
-        errors.push(`missing cargo metadata for audited target ${target}`);
-      } else if (reachablePackage(metadata, identity, target, errors)) {
+      if (reachablePackage(graphByTarget[target], identity, target, errors)) {
         actualTargets.push(target);
       }
     }
@@ -519,8 +594,8 @@ export function reconcileCargoAuditReport(ledger, report, metadataByTarget, opti
   return {
     errors: [...new Set(errors)],
     unmaintained: {
-      count: unmaintained.length,
-      advisoryIds: [...new Set(unmaintainedIds)].sort(),
+      count: unmaintainedIdentities.length,
+      identities: unmaintainedIdentities,
     },
   };
 }
@@ -604,6 +679,9 @@ export function runDependencyRiskAudit({
     stderr(`Dependency risk audit failed: ${auditFailure}`);
     return 1;
   }
+  if (audit.stderr.trim().length > 0) {
+    failures.push("cargo audit wrote to stderr, so registry and advisory scan completeness cannot be proven");
+  }
   let auditReport;
   try {
     auditReport = parseJsonOutput(audit.stdout, "cargo audit JSON");
@@ -650,10 +728,8 @@ export function runDependencyRiskAudit({
     [...new Set(failures)].forEach((error) => stderr(`- ${error}`));
     return 1;
   }
-  if (reconciled.unmaintained.count > 0) {
-    stdout(
-      `REPORT-ONLY unmaintained warnings: ${reconciled.unmaintained.count} (${reconciled.unmaintained.advisoryIds.join(", ")})`,
-    );
+  for (const identity of reconciled.unmaintained.identities) {
+    stdout(`REPORT-ONLY unmaintained warning: ${identity}`);
   }
   const activeCount = ledger.risks.filter((entry) => entry.status === "active").length;
   stdout(`PASS dependency risk ledger reconciles ${activeCount} active unsound warning${activeCount === 1 ? "" : "s"}`);

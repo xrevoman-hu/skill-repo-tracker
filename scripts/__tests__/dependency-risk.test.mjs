@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -62,7 +70,13 @@ function warning(overrides = {}) {
 
 function report(overrides = {}) {
   return {
-    settings: { ignore: [] },
+    settings: {
+      target_arch: [],
+      target_os: [],
+      severity: null,
+      ignore: [],
+      informational_warnings: ["unmaintained", "unsound", "notice"],
+    },
     vulnerabilities: { found: false, count: 0, list: [] },
     warnings: {
       unsound: [warning()],
@@ -72,6 +86,13 @@ function report(overrides = {}) {
     },
     ...overrides,
   };
+}
+
+function emptyReport(overrides = {}) {
+  return report({
+    warnings: { unsound: [], unmaintained: [], yanked: [], notice: [] },
+    ...overrides,
+  });
 }
 
 function metadata(reachable) {
@@ -126,6 +147,8 @@ test("dependency risk ledger rejects stale and malformed active entries", () => 
     ],
     [ledger([activeRisk({ reviewTriggers: ["upgrade-tauri-wry-gtk", "upgrade-tauri-wry-gtk"] })]), /reviewTriggers must be unique/],
     [ledger([activeRisk({ package: { name: "glib", version: "0.18.5" } })]), /package is missing field source/],
+    [ledger([activeRisk({ package: { name: "glib", version: "latest", source: SOURCE } })]), /package.version/],
+    [ledger([activeRisk({ package: { name: "glib", version: "0.18.5", source: "crates.io" } })]), /package.source/],
   ];
   for (const [document, expected] of cases) {
     assert.ok(
@@ -211,12 +234,20 @@ test("cargo audit reconciliation proves exact unsound target scope", () => {
     now: NOW,
   });
   assert.deepEqual(result.errors, []);
-  assert.deepEqual(result.unmaintained, { count: 0, advisoryIds: [] });
+  assert.deepEqual(result.unmaintained, { count: 0, identities: [] });
 
   const withUnmaintained = report();
-  withUnmaintained.warnings.unmaintained.push(
-    warning({ kind: "unmaintained", advisory: { id: "RUSTSEC-2025-0001" } }),
-  );
+  const alpha = warning({
+    kind: "unmaintained",
+    advisory: { id: "RUSTSEC-2025-0001" },
+    package: { name: "alpha", version: "1.0.0", source: SOURCE },
+  });
+  const zeta = warning({
+    kind: "unmaintained",
+    advisory: { id: "RUSTSEC-2025-0002" },
+    package: { name: "zeta", version: "2.0.0", source: SOURCE },
+  });
+  withUnmaintained.warnings.unmaintained.push(zeta, alpha, structuredClone(alpha));
   const summary = reconcileCargoAuditReport(
     ledger([activeRisk()]),
     withUnmaintained,
@@ -225,8 +256,11 @@ test("cargo audit reconciliation proves exact unsound target scope", () => {
   );
   assert.deepEqual(summary.errors, []);
   assert.deepEqual(summary.unmaintained, {
-    count: 1,
-    advisoryIds: ["RUSTSEC-2025-0001"],
+    count: 2,
+    identities: [
+      `alpha@1.0.0 / RUSTSEC-2025-0001 / ${SOURCE}`,
+      `zeta@2.0.0 / RUSTSEC-2025-0002 / ${SOURCE}`,
+    ],
   });
 });
 
@@ -238,7 +272,10 @@ test("cargo audit reconciliation fails closed on findings and inconsistent count
       /vulnerabilities are never allowlisted.*RUSTSEC-2026-9999/,
     ],
     [report({ vulnerabilities: { found: false, count: 1, list: [] } }), /count does not match list/],
-    [{ ...report(), settings: { ignore: ["RUSTSEC-2026-9999"] } }, /settings.ignore must be empty/],
+    [
+      { ...report(), settings: { ...report().settings, ignore: ["RUSTSEC-2026-9999"] } },
+      /settings.ignore must be an empty array/,
+    ],
     [
       (() => {
         const value = report();
@@ -272,6 +309,34 @@ test("cargo audit reconciliation fails closed on findings and inconsistent count
   }
 });
 
+test("cargo audit settings must exactly describe an unfiltered complete informational scan", () => {
+  const mutations = [
+    [{ ...report().settings, severity: "medium" }, /settings.severity must be null/],
+    [{ ...report().settings, target_arch: ["aarch64"] }, /settings.target_arch must be an empty array/],
+    [{ ...report().settings, target_os: ["macos"] }, /settings.target_os must be an empty array/],
+    [
+      { ...report().settings, informational_warnings: ["unmaintained", "unsound"] },
+      /informational_warnings must contain exactly/,
+    ],
+    [
+      { ...report().settings, informational_warnings: ["notice", "unmaintained", "unsound", "future"] },
+      /informational_warnings must contain exactly/,
+    ],
+    [{ ...report().settings, future_filter: [] }, /settings has unknown field future_filter/],
+  ];
+  for (const [settings, expected] of mutations) {
+    assert.match(
+      reconcileCargoAuditReport(
+        ledger([activeRisk()]),
+        { ...report(), settings },
+        targetMetadata(),
+        { now: NOW },
+      ).errors.join("\n"),
+      expected,
+    );
+  }
+});
+
 test("unmaintained warnings remain report-only only after complete identity validation", () => {
   for (const [mutation, expected] of [
     [
@@ -280,11 +345,39 @@ test("unmaintained warnings remain report-only only after complete identity vali
         advisory: { id: "RUSTSEC-2025-0001" },
         package: { name: "glib", version: "0.18.5" },
       }),
-      /package must include string name, version, and source/,
+      /package.source must be a canonical single-line Cargo source identity/,
     ],
     [
       warning({ kind: "unsound", advisory: { id: "RUSTSEC-2025-0001" } }),
-      /kind does not match its warning category/,
+      /kind must be exactly unmaintained/,
+    ],
+    [
+      warning({ kind: undefined, advisory: { id: "RUSTSEC-2025-0001" } }),
+      /kind must be exactly unmaintained/,
+    ],
+    [
+      warning({
+        kind: "unmaintained",
+        advisory: { id: "RUSTSEC-2025-0001" },
+        package: { name: "glib bad", version: "0.18.5", source: SOURCE },
+      }),
+      /package.name must be a canonical Cargo package name/,
+    ],
+    [
+      warning({
+        kind: "unmaintained",
+        advisory: { id: "RUSTSEC-2025-0001" },
+        package: { name: "glib", version: "0.18.5", source: ` ${SOURCE}` },
+      }),
+      /package.source must be a canonical single-line Cargo source identity/,
+    ],
+    [
+      warning({
+        kind: "unmaintained",
+        advisory: { id: "RUSTSEC-2025-0001" },
+        package: { name: "glib", version: "latest", source: SOURCE },
+      }),
+      /package.version must be a canonical non-empty Cargo version/,
     ],
   ]) {
     const auditReport = report();
@@ -345,10 +438,57 @@ test("cargo audit reconciliation rejects malformed or ambiguous metadata", () =>
     reconcileCargoAuditReport(
       ledger([activeRisk()]),
       report(),
-      targetMetadata({ "aarch64-unknown-linux-gnu": { packages: [], workspace_members: [], resolve: null } }),
+      targetMetadata({
+        "aarch64-unknown-linux-gnu": {
+          packages: [{ id: ROOT_ID }],
+          workspace_members: [ROOT_ID],
+          resolve: null,
+        },
+      }),
       { now: NOW },
     ).errors.join("\n"),
     /metadata.*resolve/,
+  );
+});
+
+test("zero-warning audits still require exactly three complete target graphs", () => {
+  const clean = emptyReport();
+  assert.deepEqual(
+    reconcileCargoAuditReport(ledger(), clean, targetMetadata(), { now: NOW }).errors,
+    [],
+  );
+
+  const missing = targetMetadata();
+  delete missing["aarch64-apple-darwin"];
+  assert.match(
+    reconcileCargoAuditReport(ledger(), clean, missing, { now: NOW }).errors.join("\n"),
+    /missing cargo metadata for audited target aarch64-apple-darwin/,
+  );
+
+  const extra = targetMetadata({ "x86_64-pc-windows-msvc": metadata(false) });
+  assert.match(
+    reconcileCargoAuditReport(ledger(), clean, extra, { now: NOW }).errors.join("\n"),
+    /unexpected audited target metadata x86_64-pc-windows-msvc/,
+  );
+
+  const broken = targetMetadata({
+    "aarch64-apple-darwin": { packages: [], workspace_members: [], resolve: { nodes: [] } },
+  });
+  assert.match(
+    reconcileCargoAuditReport(ledger(), clean, broken, { now: NOW }).errors.join("\n"),
+    /packages must be a non-empty array/,
+  );
+
+  const unknownDependency = metadata(false);
+  unknownDependency.resolve.nodes[0].dependencies.push("missing-package");
+  assert.match(
+    reconcileCargoAuditReport(
+      ledger(),
+      clean,
+      targetMetadata({ "aarch64-apple-darwin": unknownDependency }),
+      { now: NOW },
+    ).errors.join("\n"),
+    /dependency references an unknown package or resolve node/,
   );
 });
 
@@ -364,6 +504,29 @@ function writeAuditRoot() {
   writeFileSync(join(root, "src-tauri/Cargo.lock"), "# fixture\n");
   return root;
 }
+
+test("dependency risk CLI boots in a fresh checkout without node_modules", () => {
+  const root = mkdtempSync(join(realpathSync(tmpdir()), "srt-dependency-fresh-checkout-"));
+  mkdirSync(join(root, "scripts"), { recursive: true });
+  mkdirSync(join(root, "docs/engineering"), { recursive: true });
+  copyFileSync(new URL("../dependency-risk.mjs", import.meta.url), join(root, "scripts/dependency-risk.mjs"));
+  copyFileSync(new URL("../git-paths-core.mjs", import.meta.url), join(root, "scripts/git-paths-core.mjs"));
+  writeFileSync(
+    join(root, "docs/engineering/dependency-risk-ledger.json"),
+    `${JSON.stringify(ledger(), null, 2)}\n`,
+  );
+  assert.equal(existsSync(join(root, "node_modules")), false);
+  const env = { ...process.env };
+  delete env.VERIFY_BASE_REF;
+  assert.match(
+    execFileSync(process.execPath, [join(root, "scripts/dependency-risk.mjs"), "check"], {
+      cwd: root,
+      encoding: "utf8",
+      env,
+    }),
+    /PASS tracked dependency risk ledger/,
+  );
+});
 
 function successfulSpawn(calls, auditReport = report(), metadataByTarget = targetMetadata()) {
   return (command, args, options) => {
@@ -425,6 +588,60 @@ test("audit runner proves every warning against the audited target graph", () =>
   assert.ok(calls.slice(2).every((call) => call.command === "cargo"));
   assert.ok(calls.every((call) => call.options.shell === false));
   assert.ok(calls.every((call) => call.options.maxBuffer === 32 * 1024 * 1024));
+});
+
+test("audit runner reports every unique unmaintained identity in stable order", () => {
+  const auditReport = report();
+  const alpha = warning({
+    kind: "unmaintained",
+    advisory: { id: "RUSTSEC-2025-0001" },
+    package: { name: "alpha", version: "1.0.0", source: SOURCE },
+  });
+  auditReport.warnings.unmaintained.push(
+    warning({
+      kind: "unmaintained",
+      advisory: { id: "RUSTSEC-2025-0002" },
+      package: { name: "zeta", version: "2.0.0", source: SOURCE },
+    }),
+    alpha,
+    structuredClone(alpha),
+  );
+  const stdout = [];
+  assert.equal(
+    runDependencyRiskAudit({
+      root: writeAuditRoot(),
+      now: NOW,
+      spawnSyncImpl: successfulSpawn([], auditReport),
+      stdout: (line) => stdout.push(line),
+      stderr: () => {},
+    }),
+    0,
+  );
+  assert.deepEqual(stdout.slice(0, 2), [
+    `REPORT-ONLY unmaintained warning: alpha@1.0.0 / RUSTSEC-2025-0001 / ${SOURCE}`,
+    `REPORT-ONLY unmaintained warning: zeta@2.0.0 / RUSTSEC-2025-0002 / ${SOURCE}`,
+  ]);
+});
+
+test("audit runner rejects successful cargo audit output accompanied by stderr", () => {
+  const normal = successfulSpawn([]);
+  const errors = [];
+  assert.equal(
+    runDependencyRiskAudit({
+      root: writeAuditRoot(),
+      now: NOW,
+      spawnSyncImpl: (command, args, options) => {
+        const result = normal(command, args, options);
+        return command === "cargo-audit" && args[1] !== "--version"
+          ? { ...result, stderr: "warning: advisory registry scan was skipped\n" }
+          : result;
+      },
+      stdout: () => {},
+      stderr: (line) => errors.push(line),
+    }),
+    1,
+  );
+  assert.match(errors.join("\n"), /wrote to stderr.*scan completeness cannot be proven/);
 });
 
 test("audit runner stays independent from pull request base history", () => {
