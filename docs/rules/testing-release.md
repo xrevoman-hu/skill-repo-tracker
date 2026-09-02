@@ -1,5 +1,7 @@
 # 测试、修 Bug 与发布 Rules
 
+<!-- Trusted policy probe: temporary documentation-only change; never merge. -->
+
 ## 修 Bug 协议
 
 1. 先写一个会让旧实现失败的公开 seam 回归测试。
