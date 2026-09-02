@@ -1,6 +1,6 @@
 # 测试、修 Bug 与发布 Rules
 
-<!-- Trusted policy probe: temporary documentation-only change; never merge. -->
+<!-- Trusted policy probe: second temporary head; never merge. -->
 
 ## 修 Bug 协议
 
