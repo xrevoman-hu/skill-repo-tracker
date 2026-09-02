@@ -32,6 +32,7 @@ import type {
 } from "./api";
 import { DemoAppService, TauriAppService } from "./appService";
 import type { AppService } from "./appService";
+import { openGithub } from "./externalNavigation";
 import { GitHubWorkbench } from "./GitHubWorkbench";
 import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
 import { PluginInspector, PluginsView } from "./PluginsView";
@@ -54,7 +55,6 @@ import {
   settleCoordinatedTask,
 } from "./taskCoordinator";
 import { createWorkspaceController } from "./workspaceController";
-
 type RepositorySort = {
   key: "name" | "addedAt";
   direction: "asc" | "desc";
@@ -3543,12 +3543,12 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         return;
       }
     }
-    window.open(url, "_blank");
+    openGithub(url);
   }
 
   async function chooseBrowserForUrl(url: string) {
     if (!desktopRuntime) {
-      window.open(url, "_blank");
+      openGithub(url);
       return;
     }
     try {
@@ -6089,7 +6089,7 @@ function AboutPanel({
       if (desktopRuntime) {
         await api.openUrl(appMetadata.projectGithubUrl, "systemDefault");
       } else {
-        window.open(appMetadata.projectGithubUrl, "_blank", "noopener,noreferrer");
+        openGithub(appMetadata.projectGithubUrl);
       }
     } catch (error: unknown) {
       showToast(errorMessage(error, t("openUrlFailed")));

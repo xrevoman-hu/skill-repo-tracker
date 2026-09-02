@@ -31,21 +31,44 @@ fn map_keyring_delete(result: keyring::Result<()>) -> Result<(), String> {
     }
 }
 
+fn keychain_account_allowed(key: &str) -> bool {
+    key == crate::TOKEN_USER
+        || key
+            .strip_prefix("github-account-token:github:")
+            .is_some_and(|account| {
+                !account.is_empty()
+                    && account.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(byte, b'-' | b'_')
+                    })
+            })
+}
+
+fn system_keychain_entry(service: &str, key: &str) -> Result<keyring::Entry, String> {
+    if service != crate::TOKEN_SERVICE {
+        return Err("unreviewed keychain service".to_string());
+    }
+    if !keychain_account_allowed(key) {
+        return Err("unreviewed keychain account namespace".to_string());
+    }
+    keyring::Entry::new(crate::TOKEN_SERVICE, key).map_err(|error| error.to_string())
+}
+
 impl CredentialStore for SystemKeychain {
     fn get(&self, service: &str, key: &str) -> Result<Option<String>, String> {
-        let entry = keyring::Entry::new(service, key).map_err(|error| error.to_string())?;
+        let entry = system_keychain_entry(service, key)?;
         map_keyring_get(entry.get_password())
     }
 
     fn set(&self, service: &str, key: &str, secret: &str) -> Result<(), String> {
-        keyring::Entry::new(service, key)
-            .map_err(|error| error.to_string())?
+        system_keychain_entry(service, key)?
             .set_password(secret)
             .map_err(|error| error.to_string())
     }
 
     fn delete(&self, service: &str, key: &str) -> Result<(), String> {
-        let entry = keyring::Entry::new(service, key).map_err(|error| error.to_string())?;
+        let entry = system_keychain_entry(service, key)?;
         map_keyring_delete(entry.delete_credential())
     }
 }
@@ -94,9 +117,11 @@ impl Default for ReqwestGithubHttpAdapter {
             }
         });
         let client = reqwest::Client::builder()
+            .no_proxy()
             .redirect(redirect)
             .connect_timeout(GITHUB_CONNECT_TIMEOUT)
             .timeout(GITHUB_REQUEST_TIMEOUT)
+            .https_only(true)
             .build()
             .expect("GitHub HTTP client configuration must be valid");
         Self(client)
@@ -191,6 +216,42 @@ impl Default for AppAdapters {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_keychain_accepts_only_reviewed_account_namespaces() {
+        assert!(keychain_account_allowed(crate::TOKEN_USER));
+        assert!(keychain_account_allowed(
+            "github-account-token:github:alice_1"
+        ));
+        assert!(!keychain_account_allowed("github-account-token:github:"));
+        assert!(!keychain_account_allowed(
+            "github-account-token:github:Alice"
+        ));
+        assert!(!keychain_account_allowed("unreviewed-token"));
+    }
+
+    #[test]
+    fn system_keychain_rejects_unreviewed_namespaces_before_platform_access() {
+        let keychain = SystemKeychain;
+        assert_eq!(
+            keychain
+                .get("Unreviewed Service", crate::TOKEN_USER)
+                .unwrap_err(),
+            "unreviewed keychain service"
+        );
+        assert_eq!(
+            keychain
+                .set(crate::TOKEN_SERVICE, "unreviewed-token", "fictional-secret")
+                .unwrap_err(),
+            "unreviewed keychain account namespace"
+        );
+        assert_eq!(
+            keychain
+                .delete("Unreviewed Service", crate::TOKEN_USER)
+                .unwrap_err(),
+            "unreviewed keychain service"
+        );
+    }
 
     #[test]
     fn system_keychain_get_treats_only_no_entry_as_missing() {

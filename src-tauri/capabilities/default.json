@@ -4,7 +4,8 @@
   "description": "Default desktop capability for Skill Repo Tracker",
   "windows": ["main"],
   "permissions": [
-    "core:default",
-    "dialog:default"
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-destroy"
   ]
 }

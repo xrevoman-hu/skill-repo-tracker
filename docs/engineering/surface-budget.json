@@ -1,0 +1,2294 @@
+{
+  "schemaVersion": 1,
+  "description": "Fail-closed inventory of product settings, commands, Tauri security defaults, permissions, network and Keychain policy, Cargo direct dependency contracts, Rust filesystem/process/task sites, runtime inputs, Tauri Builder extensions, recurring foreground schedules, and every frontend timer/frame callback.",
+  "lifecycle": {
+    "addition": "Add the exact new identifier and purpose in the same PR; the source remains blocked until registered.",
+    "retirement": "Change active to retiring with retirementReason while removing the source, then remove the retired entry in a later PR."
+  },
+  "categories": {
+    "settingsFields": [
+      {
+        "id": "AppSettings.autoBackupEnabled",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.autoCheckEnabled",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.autoCheckInterval",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.availableSyncTargets",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.backupRoot",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.defaultSyncTargets",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.githubTokenConfigured",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.githubTokenLastVerified",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.githubTokenStatus",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.skillLibraryRoot",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.skillsRoot",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "AppSettings.syncBackupKeep",
+        "status": "active",
+        "purpose": "Shipped settings response field."
+      },
+      {
+        "id": "UpdateSettingsRequest.autoBackupEnabled",
+        "status": "active",
+        "purpose": "Accepted settings update field."
+      },
+      {
+        "id": "UpdateSettingsRequest.autoCheckEnabled",
+        "status": "active",
+        "purpose": "Accepted settings update field."
+      },
+      {
+        "id": "UpdateSettingsRequest.autoCheckInterval",
+        "status": "active",
+        "purpose": "Accepted settings update field."
+      },
+      {
+        "id": "UpdateSettingsRequest.backupRoot",
+        "status": "active",
+        "purpose": "Accepted settings update field."
+      },
+      {
+        "id": "UpdateSettingsRequest.defaultSyncTargets",
+        "status": "active",
+        "purpose": "Accepted settings update field."
+      },
+      {
+        "id": "UpdateSettingsRequest.skillLibraryRoot",
+        "status": "active",
+        "purpose": "Accepted settings update field."
+      },
+      {
+        "id": "UpdateSettingsRequest.skillsRoot",
+        "status": "active",
+        "purpose": "Accepted settings update field."
+      },
+      {
+        "id": "UpdateSettingsRequest.syncBackupKeep",
+        "status": "active",
+        "purpose": "Accepted settings update field."
+      }
+    ],
+    "tauriCommands": [
+      {
+        "id": "add_local_repository",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "add_repository",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "add_repository_from_github",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "backup_repositories",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "cancel_task",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "check_app_update",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "check_repositories",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "clear_github_token",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "confirm_skill_update_conflict",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "copy_task_summary",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "create_prompt",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "create_prompt_tag",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "delete_github_account",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "delete_prompt",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "delete_prompt_tag",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "delete_skill",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "export_migration_package",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "export_prompt_markdown",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "export_prompts_zip",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "get_app_metadata",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "get_github_preview",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "get_plugin_detail",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "get_prompt_detail",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "get_repository_readme",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "get_settings",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "get_skill_detail",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "get_skill_update_conflict",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "import_migration_package",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "import_prompts_zip",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "install_skill",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "list_backup_history",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "list_github_accounts",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "list_github_repository_catalog",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "list_plugins",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "list_prompt_tags",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "list_prompts",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "list_repositories",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "list_skills",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "list_system_browsers",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "list_tasks",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "merge_prompt_tags",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "open_backup_folder",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "open_external_url",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "open_skill_folder",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "open_url",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "pick_directory",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "preview_prompt_migration_package",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "preview_prompts_zip_import",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "refresh_github_repositories",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "remove_repository",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "rename_prompt_tag",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "reorder_prompt",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "restore_skill",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "retry_task",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "save_github_account_token",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "scan_local_skills",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "set_github_star",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "set_github_token",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "set_prompt_pinned",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "sync_installed_skills",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "update_item_note",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "update_prompt",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "update_settings",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "update_skill",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "update_skill_sync_targets",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "validate_directory",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "validate_github_account",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "validate_github_token",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "verify_skill_update_conflict",
+        "status": "active",
+        "purpose": "Shipped Tauri command boundary."
+      }
+    ],
+    "capabilityPermissions": [
+      {
+        "id": "src-tauri/capabilities/default.json#default:identifier=default",
+        "status": "active",
+        "purpose": "Bind the shipped desktop capability to its tracked file and identifier."
+      },
+      {
+        "id": "src-tauri/capabilities/default.json#default:permission=core:event:allow-listen",
+        "status": "active",
+        "purpose": "Register the main-window close-request listener used by the unsaved-prompt guard."
+      },
+      {
+        "id": "src-tauri/capabilities/default.json#default:permission=core:event:allow-unlisten",
+        "status": "active",
+        "purpose": "Remove the close-request listener when the guarded view unmounts."
+      },
+      {
+        "id": "src-tauri/capabilities/default.json#default:permission=core:window:allow-destroy",
+        "status": "active",
+        "purpose": "Allow the locked Tauri onCloseRequested wrapper to finish an approved close; this is an internal window IPC capability, not a macOS entitlement."
+      },
+      {
+        "id": "src-tauri/capabilities/default.json#default:window=main",
+        "status": "active",
+        "purpose": "Limit the default capability to the main desktop window."
+      }
+    ],
+    "tauriSecurityConfig": [
+      {
+        "id": "app.allowedKeys=[\"windows\",\"security\"]",
+        "status": "active",
+        "purpose": "Reject unmodeled application-level Tauri options, including private macOS APIs."
+      },
+      {
+        "id": "app.security.allowedKeys=[\"assetProtocol\",\"csp\",\"dangerousDisableAssetCspModification\"]",
+        "status": "active",
+        "purpose": "Reject unmodeled WebView security fields such as alternate development CSP, isolation assets, response headers, or prototype mutation."
+      },
+      {
+        "id": "app.security.assetProtocol.enable=false",
+        "status": "active",
+        "purpose": "Keep the Tauri asset protocol disabled unless a reviewed capability and path budget is added."
+      },
+      {
+        "id": "app.security.assetProtocol.scope=[]",
+        "status": "active",
+        "purpose": "Keep the asset protocol filesystem scope empty while the protocol is disabled."
+      },
+      {
+        "id": "app.security.capabilities=external-files-only",
+        "status": "active",
+        "purpose": "Require capabilities to remain in separately tracked files; inline capability decoys are forbidden."
+      },
+      {
+        "id": "app.security.dangerousDisableAssetCspModification=false",
+        "status": "active",
+        "purpose": "Keep Tauri asset CSP hardening enabled."
+      },
+      {
+        "id": "app.windows.url=absent",
+        "status": "active",
+        "purpose": "Require every shipped window to load the bundled frontend instead of a remote URL."
+      },
+      {
+        "id": "app.windows=[{\"height\":1024,\"minHeight\":720,\"minWidth\":1120,\"resizable\":true,\"title\":\"Skill Repo Tracker\",\"width\":1440}]",
+        "status": "active",
+        "purpose": "Lock the single reviewed window contract and reject unbudgeted proxy, devtools, browser, storage, or protocol options."
+      },
+      {
+        "id": "app.withGlobalTauri=false",
+        "status": "active",
+        "purpose": "Keep the Tauri API out of the global window object."
+      },
+      {
+        "id": "build.allowedKeys=[\"beforeBuildCommand\",\"beforeDevCommand\",\"devUrl\",\"frontendDist\"]",
+        "status": "active",
+        "purpose": "Reject unmodeled Tauri build runners, feature switches, and pre-bundle execution hooks."
+      },
+      {
+        "id": "build.beforeBuildCommand=\"npm run build\"",
+        "status": "active",
+        "purpose": "Build releases only through the reviewed frontend build entrypoint."
+      },
+      {
+        "id": "build.beforeBundleCommand=absent",
+        "status": "active",
+        "purpose": "Prevent an unbudgeted command from mutating release inputs immediately before bundling."
+      },
+      {
+        "id": "build.beforeDevCommand=\"npm run dev\"",
+        "status": "active",
+        "purpose": "Start the development frontend only through the reviewed npm entrypoint."
+      },
+      {
+        "id": "build.devUrl=\"http://127.0.0.1:5173\"",
+        "status": "active",
+        "purpose": "Keep development webview loading bound to the loopback Vite server."
+      },
+      {
+        "id": "build.frontendDist=\"../dist\"",
+        "status": "active",
+        "purpose": "Bundle only the repository-owned production frontend output."
+      },
+      {
+        "id": "bundle.active=true",
+        "status": "active",
+        "purpose": "Keep the reviewed application bundle enabled on release builds."
+      },
+      {
+        "id": "bundle.allowedKeys=[\"active\",\"targets\",\"category\",\"icon\",\"shortDescription\",\"longDescription\",\"macOS\"]",
+        "status": "active",
+        "purpose": "Reject every unmodeled bundle input, including sidecars, resources, and platform-specific payload injection fields."
+      },
+      {
+        "id": "bundle.category=\"DeveloperTool\"",
+        "status": "active",
+        "purpose": "Keep the shipped macOS application category explicit."
+      },
+      {
+        "id": "bundle.externalBin=absent",
+        "status": "active",
+        "purpose": "Prevent unreviewed sidecar executables from entering the application bundle."
+      },
+      {
+        "id": "bundle.icon=[\"icons/icon.png\",\"icons/icon.icns\"]",
+        "status": "active",
+        "purpose": "Bundle only the two repository-owned application icon assets."
+      },
+      {
+        "id": "bundle.longDescription=\"A local-first GitHub repository and Skills update manager.\"",
+        "status": "active",
+        "purpose": "Lock the reviewed long bundle metadata value."
+      },
+      {
+        "id": "bundle.macOS.allowedKeys=[\"hardenedRuntime\",\"entitlements\",\"minimumSystemVersion\"]",
+        "status": "active",
+        "purpose": "Reject alternate plist files, frameworks, copied payloads, exception domains, and signing/provider overrides."
+      },
+      {
+        "id": "bundle.macOS.entitlements=\"entitlements.plist\"",
+        "status": "active",
+        "purpose": "Require the bundle to consume the same tracked entitlement file inventoried by this gate."
+      },
+      {
+        "id": "bundle.macOS.hardenedRuntime=true",
+        "status": "active",
+        "purpose": "Keep hardened runtime enabled for the shipped application."
+      },
+      {
+        "id": "bundle.macOS.minimumSystemVersion=\"12.0\"",
+        "status": "active",
+        "purpose": "Keep the reviewed macOS deployment floor explicit."
+      },
+      {
+        "id": "bundle.resources=absent",
+        "status": "active",
+        "purpose": "Prevent unreviewed files or directories from entering the application bundle."
+      },
+      {
+        "id": "bundle.shortDescription=\"Track GitHub repositories, backups, and local Skills.\"",
+        "status": "active",
+        "purpose": "Lock the reviewed short bundle metadata value."
+      },
+      {
+        "id": "bundle.targets=[\"app\",\"dmg\"]",
+        "status": "active",
+        "purpose": "Limit release bundle targets to the reviewed macOS app and DMG outputs."
+      },
+      {
+        "id": "topLevel.$schema=\"https://schema.tauri.app/config/2\"",
+        "status": "active",
+        "purpose": "Keep Tauri configuration validation bound to the reviewed version 2 schema."
+      },
+      {
+        "id": "topLevel.allowedKeys=[\"$schema\",\"productName\",\"version\",\"identifier\",\"build\",\"app\",\"bundle\"]",
+        "status": "active",
+        "purpose": "Reject unmodeled top-level Tauri configuration, including plugin endpoint and update surfaces."
+      },
+      {
+        "id": "topLevel.identifier=\"com.skillrepotracker.desktop\"",
+        "status": "active",
+        "purpose": "Keep the application identity and its data and Keychain namespace stable."
+      },
+      {
+        "id": "topLevel.plugins=absent",
+        "status": "active",
+        "purpose": "Require every Tauri plugin configuration and remote endpoint to be modeled before use."
+      },
+      {
+        "id": "topLevel.productName=\"Skill Repo Tracker\"",
+        "status": "active",
+        "purpose": "Keep the shipped application product identity stable."
+      }
+    ],
+    "entitlementKeys": [],
+    "cspDirectives": [
+      {
+        "id": "base-uri 'self'",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "connect-src 'self'",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "connect-src http://ipc.localhost",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "connect-src https://api.github.com",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "connect-src https://github.com",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "connect-src ipc:",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "default-src 'self'",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "default-src asset:",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "default-src customprotocol:",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "font-src 'self'",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "font-src data:",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "form-action 'none'",
+        "status": "active",
+        "purpose": "Prevent WebView forms from navigating or submitting outside React handlers."
+      },
+      {
+        "id": "frame-ancestors 'none'",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "img-src 'self'",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "img-src asset:",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "img-src blob:",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "img-src data:",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "object-src 'none'",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "script-src 'self'",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "style-src 'self'",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      },
+      {
+        "id": "style-src 'unsafe-inline'",
+        "status": "active",
+        "purpose": "Exact shipped CSP token; widening creates a new surface."
+      }
+    ],
+    "externalHosts": [
+      {
+        "id": "https://api.github.com",
+        "status": "active",
+        "purpose": "GitHub API requests through the bounded backend adapter."
+      },
+      {
+        "id": "https://codeload.github.com",
+        "status": "active",
+        "purpose": "Validated GitHub ZIP redirect target."
+      },
+      {
+        "id": "https://github.com",
+        "status": "active",
+        "purpose": "Validated GitHub request and ZIP redirect target."
+      }
+    ],
+    "rustDependencies": [
+      {
+        "id": "build:tauri-build={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"tauri-build\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed Cargo build dependency tauri-build; identity, source, default features, and features are immutable without an explicit surface change."
+      },
+      {
+        "id": "dev:tauri={\"defaultFeatures\":true,\"features\":[\"test\"],\"optional\":false,\"package\":\"tauri\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed Cargo test-only dependency tauri; it must not become a production transport or runtime dependency."
+      },
+      {
+        "id": "normal:anyhow={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"anyhow\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency anyhow; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:base64={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"base64\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency base64; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:chrono={\"defaultFeatures\":true,\"features\":[\"serde\"],\"optional\":false,\"package\":\"chrono\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency chrono; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:dirs={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"dirs\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency dirs; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:hex={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"hex\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency hex; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:keyring={\"defaultFeatures\":true,\"features\":[\"apple-native\"],\"optional\":false,\"package\":\"keyring\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency keyring; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:libc={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"libc\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency libc; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:opener={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"opener\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency opener; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:reqwest={\"defaultFeatures\":false,\"features\":[\"json\",\"rustls-tls\"],\"optional\":false,\"package\":\"reqwest\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "The only production HTTP transport; source calls remain confined to the hardened GitHub adapter."
+      },
+      {
+        "id": "normal:rusqlite={\"defaultFeatures\":true,\"features\":[\"bundled\",\"chrono\"],\"optional\":false,\"package\":\"rusqlite\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency rusqlite; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:serde_json={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"serde_json\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency serde_json; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:serde={\"defaultFeatures\":true,\"features\":[\"derive\"],\"optional\":false,\"package\":\"serde\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency serde; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:sha2={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"sha2\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency sha2; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:tauri-plugin-dialog={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"tauri-plugin-dialog\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency tauri-plugin-dialog; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:tauri={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"tauri\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency tauri; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:tempfile={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"tempfile\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency tempfile; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:tokio={\"defaultFeatures\":true,\"features\":[\"sync\",\"time\"],\"optional\":false,\"package\":\"tokio\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency tokio; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:unicode-normalization={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"unicode-normalization\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency unicode-normalization; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:urlencoding={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"urlencoding\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency urlencoding; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:walkdir={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"walkdir\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency walkdir; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:zip={\"defaultFeatures\":false,\"features\":[\"deflate\"],\"optional\":false,\"package\":\"zip\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "Reviewed production dependency zip; additions require explicit dependency, permission, and attack-surface review."
+      }
+    ],
+    "rustTaskSites": [
+      {
+        "id": "src-tauri/src/lib.rs:tauri::async_runtime::spawn_blocking:export_migration_package#1",
+        "status": "active",
+        "purpose": "One-shot migration export work is moved off the async command executor and awaited before return."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:tauri::async_runtime::spawn_blocking:export_prompt_markdown#1",
+        "status": "active",
+        "purpose": "One-shot prompt Markdown export is moved off the async command executor and awaited before return."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:tauri::async_runtime::spawn_blocking:export_prompts_zip#1",
+        "status": "active",
+        "purpose": "One-shot prompt ZIP export is moved off the async command executor and awaited before return."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:tauri::async_runtime::spawn_blocking:import_prompts_zip#1",
+        "status": "active",
+        "purpose": "One-shot prompt ZIP import is moved off the async command executor and awaited before return."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:tauri::async_runtime::spawn_blocking:list_prompts#1",
+        "status": "active",
+        "purpose": "One-shot prompt query work is moved off the async command executor and awaited before return."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:tauri::async_runtime::spawn_blocking:pick_directory#1",
+        "status": "active",
+        "purpose": "The user-mediated native directory dialog is one-shot and awaited by its command."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:tauri::async_runtime::spawn_blocking:preview_prompt_migration_package#1",
+        "status": "active",
+        "purpose": "One-shot migration preview work is moved off the async command executor and awaited before return."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:tauri::async_runtime::spawn_blocking:preview_prompts_zip_import#1",
+        "status": "active",
+        "purpose": "One-shot prompt ZIP file selection is moved off the async command executor and awaited before return."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:tauri::async_runtime::spawn_blocking:preview_prompts_zip_import#2",
+        "status": "active",
+        "purpose": "One-shot prompt ZIP preview parsing is moved off the async command executor and awaited before return."
+      },
+      {
+        "id": "src-tauri/src/prompt_search.rs:std::thread::spawn:spawn_watchdog#1",
+        "status": "active",
+        "purpose": "A bounded one-shot search timeout watchdog is explicitly disarmed and joined; it is not a recurring worker."
+      }
+    ],
+    "rustPathSites": [
+      {
+        "id": "src-tauri/src/backup_fs.rs:File::from_raw_fd:open_directory_at#1",
+        "status": "active",
+        "purpose": "Existing File::from_raw_fd filesystem operation in open_directory_at; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:File::from_raw_fd:open_directory_path#1",
+        "status": "active",
+        "purpose": "Existing File::from_raw_fd filesystem operation in open_directory_path; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:File::from_raw_fd:open_new_file_at#1",
+        "status": "active",
+        "purpose": "Existing File::from_raw_fd filesystem operation in open_new_file_at; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:fs::symlink_metadata:identity_from_path#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in identity_from_path; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:libc::fstatat:entry_exists_at#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in entry_exists_at; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:libc::fstatat:identity_at#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in identity_at; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:libc::mkdirat:mkdir_at#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in mkdir_at; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:libc::open:open_directory_path#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in open_directory_path; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:libc::openat:open_directory_at#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in open_directory_at; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:libc::openat:open_new_file_at#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in open_new_file_at; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:libc::renameat:rename_at#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in rename_at; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:libc::renameatx_np:rename_at#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in rename_at; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:libc::unlinkat:unlink_at#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in unlink_at; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/backups.rs:fs::create_dir_all:create_backup_directory#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in create_backup_directory; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/github_accounts.rs:fs::create_dir_all:new#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in new; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/github_accounts.rs:libc::flock:acquire#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in acquire; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/github_accounts.rs:libc::flock:drop#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in drop; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/github_accounts.rs:OpenOptions::new:acquire#1",
+        "status": "active",
+        "purpose": "Existing OpenOptions::new filesystem operation in acquire; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Command::new(\"open\"):open_url#1",
+        "status": "active",
+        "purpose": "Launch the user-selected installed macOS browser for an already validated URL; executable and arguments are structurally fixed."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:File::create:extract_skill_to_registered_temp#1",
+        "status": "active",
+        "purpose": "Existing File::create filesystem operation in extract_skill_to_registered_temp; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:File::open:snapshot_migration_package#1",
+        "status": "active",
+        "purpose": "Existing File::open filesystem operation in snapshot_migration_package; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::copy:backup_sync_target#1",
+        "status": "active",
+        "purpose": "Existing fs::copy filesystem operation in backup_sync_target; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::copy:copy_dir_all#1",
+        "status": "active",
+        "purpose": "Existing fs::copy filesystem operation in copy_dir_all; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::copy:copy_dir_contents_missing#1",
+        "status": "active",
+        "purpose": "Existing fs::copy filesystem operation in copy_dir_contents_missing; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:backup_sync_target#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in backup_sync_target; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:copy_dir_all#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in copy_dir_all; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:copy_dir_all#2",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in copy_dir_all; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:copy_dir_all#3",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in copy_dir_all; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:copy_dir_contents_missing#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in copy_dir_contents_missing; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:copy_dir_contents_missing#2",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in copy_dir_contents_missing; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:copy_dir_contents_missing#3",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in copy_dir_contents_missing; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:database_path_for_run#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in database_path_for_run; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:extract_skill_to_registered_temp#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in extract_skill_to_registered_temp; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:extract_skill_to_registered_temp#2",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in extract_skill_to_registered_temp; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:move_skill_to_deleted#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in move_skill_to_deleted; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:new_with_adapters#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in new_with_adapters; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:prepare_dir_replacement_from_source#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in prepare_dir_replacement_from_source; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:restore_skill#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in restore_skill; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir_all:validate_directory_path#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in validate_directory_path; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir:extract_skill_to_registered_temp#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir filesystem operation in extract_skill_to_registered_temp; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::create_dir:prepare_dir_replacement_from_source#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir filesystem operation in prepare_dir_replacement_from_source; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::metadata:snapshot_migration_package#1",
+        "status": "active",
+        "purpose": "Existing fs::metadata filesystem operation in snapshot_migration_package; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::read_dir:prune_sync_backups#1",
+        "status": "active",
+        "purpose": "Existing fs::read_dir filesystem operation in prune_sync_backups; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::read_to_string:read_local_readme_search#1",
+        "status": "active",
+        "purpose": "Existing fs::read_to_string filesystem operation in read_local_readme_search; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::read_to_string:read_text_preview#1",
+        "status": "active",
+        "purpose": "Existing fs::read_to_string filesystem operation in read_text_preview; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::read_to_string:scan_skills_from_directory#1",
+        "status": "active",
+        "purpose": "Existing fs::read_to_string filesystem operation in scan_skills_from_directory; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::remove_dir_all:commit#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir_all filesystem operation in commit; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::remove_dir_all:move_skill_to_deleted#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir_all filesystem operation in move_skill_to_deleted; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::remove_dir_all:prune_sync_backups#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir_all filesystem operation in prune_sync_backups; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::remove_dir_all:remove_path#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir_all filesystem operation in remove_path; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::remove_dir_all:restore_skill#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir_all filesystem operation in restore_skill; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::remove_file:remove_path#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_file filesystem operation in remove_path; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::rename:begin_registered_temp_replacement#1",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in begin_registered_temp_replacement; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::rename:begin_registered_temp_replacement#2",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in begin_registered_temp_replacement; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::rename:begin_registered_temp_replacement#3",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in begin_registered_temp_replacement; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::rename:begin_registered_temp_replacement#4",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in begin_registered_temp_replacement; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::rename:begin_registered_temp_replacement#5",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in begin_registered_temp_replacement; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::rename:move_skill_to_deleted#1",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in move_skill_to_deleted; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::rename:restore_skill#1",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in restore_skill; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::rename:rollback#1",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in rollback; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::rename:rollback#2",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in rollback; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::symlink_metadata:begin_registered_temp_replacement#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in begin_registered_temp_replacement; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::symlink_metadata:begin_registered_temp_replacement#2",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in begin_registered_temp_replacement; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::symlink_metadata:remove_path#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in remove_path; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::symlink_metadata:resolve_skill_folder_path#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in resolve_skill_folder_path; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::symlink_metadata:resolve_skill_folder_path#2",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in resolve_skill_folder_path; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::symlink_metadata:revalidate_skill_folder_before_open#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in revalidate_skill_folder_before_open; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:fs::write:backup_sync_target#1",
+        "status": "active",
+        "purpose": "Existing fs::write filesystem operation in backup_sync_target; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/plugins.rs:fs::read_to_string:scan_plugins_from_directory#1",
+        "status": "active",
+        "purpose": "Existing fs::read_to_string filesystem operation in scan_plugins_from_directory; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/prompt_migration.rs:File::open:write_v2_package_atomic_with_limits#1",
+        "status": "active",
+        "purpose": "Existing File::open filesystem operation in write_v2_package_atomic_with_limits; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:File::open:persist_temp_file#1",
+        "status": "active",
+        "purpose": "Existing File::open filesystem operation in persist_temp_file; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:File::open:snapshot_package#1",
+        "status": "active",
+        "purpose": "Existing File::open filesystem operation in snapshot_package; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:fs::metadata:export_prompts_zip_in_snapshot_with_limits#1",
+        "status": "active",
+        "purpose": "Existing fs::metadata filesystem operation in export_prompts_zip_in_snapshot_with_limits; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:fs::metadata:export_prompts_zip_in_snapshot_with_limits#2",
+        "status": "active",
+        "purpose": "Existing fs::metadata filesystem operation in export_prompts_zip_in_snapshot_with_limits; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/prompts.rs:File::open:sync_parent_directory#1",
+        "status": "active",
+        "purpose": "Existing File::open filesystem operation in sync_parent_directory; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/prompts.rs:fs::remove_file:write_bytes_atomic#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_file filesystem operation in write_bytes_atomic; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/prompts.rs:fs::rename:finish_atomic_replace#1",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in finish_atomic_replace; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/prompts.rs:OpenOptions::new:write_bytes_atomic#1",
+        "status": "active",
+        "purpose": "Existing OpenOptions::new filesystem operation in write_bytes_atomic; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/settings_directories.rs:fs::create_dir:create_settings_directory_tree#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir filesystem operation in create_settings_directory_tree; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/settings_directories.rs:fs::metadata:create_settings_directory_tree#1",
+        "status": "active",
+        "purpose": "Existing fs::metadata filesystem operation in create_settings_directory_tree; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/settings_directories.rs:fs::remove_dir:cleanup_created_settings_directories#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir filesystem operation in cleanup_created_settings_directories; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/settings_directories.rs:fs::remove_dir:create_settings_directory_tree#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir filesystem operation in create_settings_directory_tree; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/skill_hash.rs:fs::read:hash_directory#1",
+        "status": "active",
+        "purpose": "Existing fs::read filesystem operation in hash_directory; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/skill_hash.rs:fs::symlink_metadata:hash_directory#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in hash_directory; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::create_dir_all:cleanup_stale_temp_artifacts#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in cleanup_stale_temp_artifacts; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::create_dir_all:create#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in create; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::create_dir_all:new#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in new; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::create_dir_all:open#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir_all filesystem operation in open; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::create_dir:create#1",
+        "status": "active",
+        "purpose": "Existing fs::create_dir filesystem operation in create; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::read_dir:cleanup_stale_temp_artifacts#1",
+        "status": "active",
+        "purpose": "Existing fs::read_dir filesystem operation in cleanup_stale_temp_artifacts; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::read_link:classify_sync_destination#1",
+        "status": "active",
+        "purpose": "Existing fs::read_link filesystem operation in classify_sync_destination; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::remove_dir_all:cleanup_stale_temp_artifacts#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir_all filesystem operation in cleanup_stale_temp_artifacts; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::remove_dir_all:drop#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir_all filesystem operation in drop; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::remove_dir_all:mark_completed#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir_all filesystem operation in mark_completed; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::remove_dir_all:mark_rolled_back#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir_all filesystem operation in mark_rolled_back; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::remove_dir_all:purge_expired_quarantine#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir_all filesystem operation in purge_expired_quarantine; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::remove_dir:create#1",
+        "status": "active",
+        "purpose": "Existing fs::remove_dir filesystem operation in create; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::rename:cleanup_stale_temp_artifacts#1",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in cleanup_stale_temp_artifacts; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::rename:cleanup_stale_temp_artifacts#2",
+        "status": "active",
+        "purpose": "Existing fs::rename filesystem operation in cleanup_stale_temp_artifacts; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::symlink_metadata:classify_sync_destination#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in classify_sync_destination; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::symlink_metadata:cleanup_stale_temp_artifacts#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in cleanup_stale_temp_artifacts; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::symlink_metadata:cleanup_stale_temp_artifacts#2",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in cleanup_stale_temp_artifacts; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::symlink_metadata:drop#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in drop; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::symlink_metadata:mark_completed#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in mark_completed; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::symlink_metadata:mark_rolled_back#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in mark_rolled_back; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:fs::symlink_metadata:purge_expired_quarantine#1",
+        "status": "active",
+        "purpose": "Existing fs::symlink_metadata filesystem operation in purge_expired_quarantine; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:libc::flock:drop#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in drop; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:libc::flock:lock_file#1",
+        "status": "active",
+        "purpose": "Existing descriptor-level filesystem primitive in lock_file; additions require path-boundary and rollback review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:OpenOptions::new:open_file#1",
+        "status": "active",
+        "purpose": "Existing OpenOptions::new filesystem operation in open_file; additions require path-intent and rollback review."
+      },
+      {
+        "id": "src-tauri/src/adapters.rs:Path::canonicalize:canonicalize#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in canonicalize; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/adapters.rs:Path::is_dir:is_dir#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in is_dir; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/backup_fs.rs:Path::is_dir:identity_from_metadata#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in identity_from_metadata; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/backup_paths.rs:Path::canonicalize:resolve_backup_folder#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in resolve_backup_folder; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/backup_paths.rs:Path::canonicalize:resolve_backup_folder#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in resolve_backup_folder; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/backup_paths.rs:Path::is_dir:resolve_backup_folder#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in resolve_backup_folder; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/backup_paths.rs:Path::is_dir:resolve_backup_folder#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in resolve_backup_folder; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/backups.rs:Path::canonicalize:create_backup_directory#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in create_backup_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/backups.rs:Path::metadata:create_backup_directory#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in create_backup_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/backups.rs:Path::metadata:create_backup_directory#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in create_backup_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/backups.rs:Path::metadata:validate_identity#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in validate_identity; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/backups.rs:Path::metadata:validate_identity#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in validate_identity; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::canonicalize:begin_registered_temp_replacement#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in begin_registered_temp_replacement; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::canonicalize:database_path_for_run#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in database_path_for_run; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::canonicalize:database_path_for_run#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in database_path_for_run; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::canonicalize:resolve_skill_folder_path#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in resolve_skill_folder_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::canonicalize:resolve_skill_folder_path#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in resolve_skill_folder_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::canonicalize:revalidate_skill_folder_before_open#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in revalidate_skill_folder_before_open; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::canonicalize:save_local_repository_with_plugins#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in save_local_repository_with_plugins; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:backup_sync_target#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in backup_sync_target; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:browser_candidates#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in browser_candidates; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:browser_candidates#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in browser_candidates; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:copy_dir_contents_missing#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in copy_dir_contents_missing; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:existing_sync_target_ids#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in existing_sync_target_ids; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:migrate_independent_skill_library#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in migrate_independent_skill_library; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:move_skill_to_deleted#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in move_skill_to_deleted; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:prune_sync_backups#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in prune_sync_backups; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:remove_path#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in remove_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:restore_skill#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in restore_skill; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:scan_skills_from_directory#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in scan_skills_from_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:sync_target_info#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in sync_target_info; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:update_settings_with_resources#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in update_settings_with_resources; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::exists:validate_directory_path#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in validate_directory_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:add_local_repository#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in add_local_repository; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:backup_sync_target#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in backup_sync_target; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:begin_registered_temp_replacement#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in begin_registered_temp_replacement; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:begin_registered_temp_replacement#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in begin_registered_temp_replacement; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:copy_dir_all#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in copy_dir_all; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:copy_dir_contents_missing#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in copy_dir_contents_missing; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:extract_skill_to_registered_temp#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in extract_skill_to_registered_temp; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:migrate_independent_skill_library#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in migrate_independent_skill_library; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:prune_sync_backups#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in prune_sync_backups; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:reconcile_skill_sync#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in reconcile_skill_sync; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:remove_path#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in remove_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:resolve_skill_folder_path#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in resolve_skill_folder_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:resolve_skill_folder_path#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in resolve_skill_folder_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:restore_skill#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in restore_skill; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:revalidate_skill_folder_before_open#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in revalidate_skill_folder_before_open; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:scan_skills_from_directory#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in scan_skills_from_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_dir:skill_markdown_path#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in skill_markdown_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_file:import_migration_package#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in import_migration_package; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_file:local_readme_path#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in local_readme_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_file:markdown_file_in_dir#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in markdown_file_in_dir; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_file:markdown_file_in_dir#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in markdown_file_in_dir; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_file:markdown_file_in_dir#3",
+        "status": "active",
+        "purpose": "Existing path metadata query in markdown_file_in_dir; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_file:readme_search_from_zip#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in readme_search_from_zip; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_file:resolve_skill_folder_path#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in resolve_skill_folder_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_file:scan_skills_from_directory#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in scan_skills_from_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_file:scan_skills_from_zip#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in scan_skills_from_zip; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:Path::is_file:skill_markdown_path#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in skill_markdown_path; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/plugins.rs:Path::exists:scan_plugins_from_directory#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in scan_plugins_from_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/plugins.rs:Path::is_dir:scan_plugins_from_directory#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in scan_plugins_from_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/plugins.rs:Path::is_file:scan_plugins_from_directory#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in scan_plugins_from_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/plugins.rs:Path::is_file:scan_plugins_from_zip#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in scan_plugins_from_zip; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/prompt_migration.rs:Path::is_dir:validate_archive_layout#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in validate_archive_layout; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/prompt_migration.rs:Path::is_dir:write_v2_package_atomic_with_limits#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in write_v2_package_atomic_with_limits; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:Path::is_dir:validate_archive_layout#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in validate_archive_layout; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:Path::is_dir:validate_destination#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in validate_destination; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:Path::metadata:raw_zip_entry_count#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in raw_zip_entry_count; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:Path::metadata:snapshot_package#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in snapshot_package; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/prompts.rs:Path::is_dir:validate_export_destination#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in validate_export_destination; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/settings_directories.rs:Path::is_dir:create_settings_directory_tree#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in create_settings_directory_tree; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/skill_hash.rs:Path::is_dir:hash_directory#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in hash_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/skill_hash.rs:Path::is_file:hash_directory#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in hash_directory; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/skill_hash.rs:Path::is_file:skill_hashes_from_zip#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in skill_hashes_from_zip; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::canonicalize:classify_sync_destination#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in classify_sync_destination; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::canonicalize:classify_sync_destination#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in classify_sync_destination; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::canonicalize:cleanup_stale_temp_artifacts#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in cleanup_stale_temp_artifacts; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::canonicalize:create#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in create; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::canonicalize:create#2",
+        "status": "active",
+        "purpose": "Existing path metadata query in create; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::canonicalize:purge_expired_quarantine#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in purge_expired_quarantine; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::canonicalize:quarantine_record#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in quarantine_record; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::is_dir:cleanup_stale_temp_artifacts#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in cleanup_stale_temp_artifacts; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::is_dir:drop#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in drop; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::is_dir:mark_completed#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in mark_completed; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::is_dir:mark_rolled_back#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in mark_rolled_back; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:Path::is_dir:purge_expired_quarantine#1",
+        "status": "active",
+        "purpose": "Existing path metadata query in purge_expired_quarantine; additions require path-intent and trust-boundary review."
+      },
+      {
+        "id": "src-tauri/src/github_accounts.rs:OpenOptions::open:acquire#1",
+        "status": "active",
+        "purpose": "Open the account lock file whose path is derived by the GitHub account adapter."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:dirs::home_dir:backup_sync_target#1",
+        "status": "active",
+        "purpose": "Resolve the user home only while deriving a configured Skill backup target."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:dirs::home_dir:browser_candidates#1",
+        "status": "active",
+        "purpose": "Resolve the user home only to enumerate reviewed macOS browser application locations."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:dirs::home_dir:expand_tilde#1",
+        "status": "active",
+        "purpose": "Expand a leading tilde through the current user home for validated directory settings."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:dirs::home_dir:expand_tilde#2",
+        "status": "active",
+        "purpose": "Expand a home-only tilde through the current user home for validated directory settings."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:dirs::home_dir:new_with_adapters#1",
+        "status": "active",
+        "purpose": "Derive the local Skill library root while assembling application state."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:dirs::home_dir:prune_sync_backups#1",
+        "status": "active",
+        "purpose": "Derive the governed Skill sync backup root before retention pruning."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:dirs::home_dir:reconcile_skill_sync#1",
+        "status": "active",
+        "purpose": "Derive the governed user Skill roots before synchronization reconciliation."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:dirs::home_dir:retry_temp_artifact_cleanup#1",
+        "status": "active",
+        "purpose": "Derive the local quarantine root for explicit cleanup retry."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:dirs::home_dir:settings_from_db#1",
+        "status": "active",
+        "purpose": "Derive defaults for persisted directory settings from the current user home."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:opener::open:open_backup_folder#1",
+        "status": "active",
+        "purpose": "Open only the canonical backup folder resolved by stable repository identity."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:opener::open:open_external_url#1",
+        "status": "active",
+        "purpose": "Open only an external URL accepted by the reviewed http, https, or mailto validator."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:opener::open:open_skill_folder#1",
+        "status": "active",
+        "purpose": "Open only a registered Skill directory after canonical revalidation under the filesystem lock."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:opener::open:open_url#1",
+        "status": "active",
+        "purpose": "Open only a GitHub URL accepted by the reviewed host and scheme validator."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:tempfile::Builder::new:validate_directory_path_after_creation#1",
+        "status": "active",
+        "purpose": "Create a bounded write probe inside the user-selected directory being validated."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:tempfile::tempfile:snapshot_migration_package#1",
+        "status": "active",
+        "purpose": "Create an anonymous temporary snapshot used during migration package verification."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:WalkDir::new:copy_dir_all#1",
+        "status": "active",
+        "purpose": "Walk only the validated source tree during an atomic directory copy."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:WalkDir::new:copy_dir_contents_missing#1",
+        "status": "active",
+        "purpose": "Walk only the validated source tree while restoring missing synchronized content."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:WalkDir::new:scan_skills_from_directory#1",
+        "status": "active",
+        "purpose": "Walk the selected or registered directory while discovering Skills."
+      },
+      {
+        "id": "src-tauri/src/plugins.rs:WalkDir::new:scan_plugins_from_directory#1",
+        "status": "active",
+        "purpose": "Walk the selected or registered directory while discovering plugin metadata."
+      },
+      {
+        "id": "src-tauri/src/prompt_migration.rs:NamedTempFile::new_in:write_v2_package_atomic_with_limits#1",
+        "status": "active",
+        "purpose": "Stage a migration package beside its validated destination before atomic persistence."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:NamedTempFile::new_in:export_prompts_zip_in_snapshot_with_limits#1",
+        "status": "active",
+        "purpose": "Stage a Prompt ZIP beside its validated destination before atomic persistence."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:NamedTempFile::new:snapshot_package#1",
+        "status": "active",
+        "purpose": "Create an anonymous temporary Prompt ZIP snapshot for deterministic verification."
+      },
+      {
+        "id": "src-tauri/src/prompts.rs:OpenOptions::open:write_bytes_atomic#1",
+        "status": "active",
+        "purpose": "Open the exclusive temporary file used by atomic Prompt writes."
+      },
+      {
+        "id": "src-tauri/src/skill_hash.rs:WalkDir::new:hash_directory#1",
+        "status": "active",
+        "purpose": "Walk a validated Skill directory to compute its deterministic content hash."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:OpenOptions::open:open_file#1",
+        "status": "active",
+        "purpose": "Open the lock file within the governed temporary-artifact root."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:rusqlite::Connection::open:new_with_adapters#1",
+        "status": "active",
+        "purpose": "Open the application SQLite database at the backend-derived application data path."
+      },
+      {
+        "id": "src-tauri/src/prompt_zip.rs:rusqlite::Connection::open_with_flags:persist_export_with_revision_guard#1",
+        "status": "active",
+        "purpose": "Open the existing application SQLite database read-only while persisting a revision-guarded Prompt ZIP export."
+      },
+      {
+        "id": "src-tauri/src/prompts.rs:rusqlite::Connection::open_with_flags:open_prompt_read_connection#1",
+        "status": "active",
+        "purpose": "Open the existing application SQLite database read-only for bounded Prompt queries."
+      },
+      {
+        "id": "src-tauri/src/temp_artifacts.rs:rusqlite::Connection::open:open#1",
+        "status": "active",
+        "purpose": "Open the application SQLite database used to register and reconcile governed temporary artifacts."
+      }
+    ],
+    "keychainEntries": [
+      {
+        "id": "service=Skill Repo Tracker;account=github-account-token:github:<slug>",
+        "status": "active",
+        "purpose": "Store per-account GitHub tokens only in the reviewed macOS Keychain service and github-account-token:github:<slug> namespace."
+      },
+      {
+        "id": "service=Skill Repo Tracker;account=github-token",
+        "status": "active",
+        "purpose": "Read and retire the legacy GitHub token only through the reviewed macOS Keychain service and account."
+      }
+    ],
+    "runtimeInputs": [
+      {
+        "id": "frontend:src/App.tsx:query:demo#1",
+        "status": "active",
+        "purpose": "Reviewed demo-mode query input; additions require explicit hidden-configuration review."
+      },
+      {
+        "id": "frontend:src/App.tsx:query:density#1",
+        "status": "active",
+        "purpose": "Reviewed UI-density acceptance query input."
+      },
+      {
+        "id": "frontend:src/App.tsx:query:focus#1",
+        "status": "active",
+        "purpose": "Reviewed demo-focus query input."
+      },
+      {
+        "id": "frontend:src/App.tsx:query:inspectorRepo#1",
+        "status": "active",
+        "purpose": "Reviewed repository-inspector acceptance query input."
+      },
+      {
+        "id": "frontend:src/App.tsx:query:lang#1",
+        "status": "active",
+        "purpose": "Reviewed language acceptance query input."
+      },
+      {
+        "id": "frontend:src/App.tsx:query:pluginSearch#1",
+        "status": "active",
+        "purpose": "Reviewed plugin-search acceptance query input."
+      },
+      {
+        "id": "frontend:src/App.tsx:query:selectedPlugin#1",
+        "status": "active",
+        "purpose": "Reviewed selected-plugin acceptance query input."
+      },
+      {
+        "id": "frontend:src/App.tsx:query:selectedSkill#1",
+        "status": "active",
+        "purpose": "Reviewed selected-Skill acceptance query input."
+      },
+      {
+        "id": "frontend:src/App.tsx:query:tab#1",
+        "status": "active",
+        "purpose": "Reviewed initial-tab acceptance query input."
+      },
+      {
+        "id": "frontend:src/App.tsx:query:theme#1",
+        "status": "active",
+        "purpose": "Reviewed theme acceptance query input."
+      },
+      {
+        "id": "rust:src-tauri/src/lib.rs:env!:CARGO_PKG_VERSION#1",
+        "status": "active",
+        "purpose": "Compile the application version from Cargo package metadata."
+      },
+      {
+        "id": "rust:src-tauri/src/lib.rs:env!:CARGO_PKG_VERSION#2",
+        "status": "active",
+        "purpose": "Compile the GitHub User-Agent version from Cargo package metadata."
+      },
+      {
+        "id": "rust:src-tauri/src/lib.rs:std::env::temp_dir:<platform-temp>#1",
+        "status": "active",
+        "purpose": "Resolve the platform temporary root only while validating a debug database override."
+      },
+      {
+        "id": "rust:src-tauri/src/lib.rs:std::env::var_os:SRT_DEBUG_DATABASE_PATH#1",
+        "status": "active",
+        "purpose": "Debug-build-only database fixture path override."
+      },
+      {
+        "id": "rust:src-tauri/src/lib.rs:std::env::var:SRT_DEBUG_PROMPT_BYTES#1",
+        "status": "active",
+        "purpose": "Debug-build-only Prompt byte-limit fixture input."
+      },
+      {
+        "id": "rust:src-tauri/src/lib.rs:std::env::var:SRT_DEBUG_PROMPT_COUNT#1",
+        "status": "active",
+        "purpose": "Debug-build-only Prompt count fixture input."
+      },
+      {
+        "id": "rust:src-tauri/src/lib.rs:std::env::var:SRT_DEBUG_PROMPT_FIXTURE#1",
+        "status": "active",
+        "purpose": "Debug-build-only Prompt fixture enablement input."
+      },
+      {
+        "id": "rust:src-tauri/src/lib.rs:std::env::var:SRT_DEBUG_PROMPT_TAGS#1",
+        "status": "active",
+        "purpose": "Debug-build-only Prompt tag-count fixture input."
+      },
+      {
+        "id": "rust:src-tauri/src/lib.rs:std::env::var:SRT_DEBUG_WINDOW_HEIGHT#1",
+        "status": "active",
+        "purpose": "Debug-build-only acceptance window height input."
+      },
+      {
+        "id": "rust:src-tauri/src/lib.rs:std::env::var:SRT_DEBUG_WINDOW_WIDTH#1",
+        "status": "active",
+        "purpose": "Debug-build-only acceptance window width input."
+      }
+    ],
+    "tauriPlugins": [
+      {
+        "id": "src-tauri/src/lib.rs:builder=plugin>setup>invoke_handler>run>expect",
+        "status": "active",
+        "purpose": "The only Tauri Builder pipeline; URI schemes, initialization scripts, dynamic handlers, boxed plugins, navigation hooks, and extra managed state require an explicit budget change."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:hook=setup#1",
+        "status": "active",
+        "purpose": "Initialize local application state and optional debug window geometry without starting background work."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:plugin=tauri_plugin_dialog::init()",
+        "status": "active",
+        "purpose": "Provide user-mediated native file and directory selection dialogs."
+      }
+    ],
+    "recurringTimers": [
+      {
+        "id": "src/App.tsx:createForegroundSchedule:runScheduledBackup",
+        "status": "active",
+        "purpose": "Foreground-only backup schedule; rearms only after task settlement."
+      },
+      {
+        "id": "src/App.tsx:createForegroundSchedule:runScheduledCheck",
+        "status": "active",
+        "purpose": "Foreground-only repository check schedule; rearms only after task settlement."
+      }
+    ],
+    "timerCalls": [
+      {
+        "id": "src/App.tsx:setTimeout#1",
+        "status": "active",
+        "purpose": "Existing one-shot shell UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:requestAnimationFrame#1",
+        "status": "active",
+        "purpose": "Existing prompt UI frame callback; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#1",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#10",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#11",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#2",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#3",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#4",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#5",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#6",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#7",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#8",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/PromptsView.tsx:setTimeout#9",
+        "status": "active",
+        "purpose": "Existing one-shot prompt UI timer; additions require explicit state-cost review."
+      },
+      {
+        "id": "src/taskCoordinator.ts:setTimeout#1",
+        "status": "active",
+        "purpose": "Foreground schedule rearm primitive; recurring work must remain coordinator-owned."
+      }
+    ]
+  }
+}
