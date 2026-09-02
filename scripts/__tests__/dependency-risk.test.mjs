@@ -25,6 +25,7 @@ const NOW = new Date("2026-09-02T12:00:00Z");
 const SOURCE = "registry+https://github.com/rust-lang/crates.io-index";
 const ROOT_ID = "path+file:///workspace#skill-repo-tracker@1.2.6";
 const GLIB_ID = `${SOURCE}#glib@0.18.5`;
+const PREFLIGHT_STDERR = "Loaded 1239 security advisories\nUpdating crates.io index\nScanning src-tauri/Cargo.lock for vulnerabilities (2 crate dependencies)";
 
 function activeRisk(overrides = {}) {
   return {
@@ -510,6 +511,7 @@ test("dependency risk CLI boots in a fresh checkout without node_modules", () =>
   mkdirSync(join(root, "scripts"), { recursive: true });
   mkdirSync(join(root, "docs/engineering"), { recursive: true });
   copyFileSync(new URL("../dependency-risk.mjs", import.meta.url), join(root, "scripts/dependency-risk.mjs"));
+  copyFileSync(new URL("../dependency-risk-runtime.mjs", import.meta.url), join(root, "scripts/dependency-risk-runtime.mjs"));
   copyFileSync(new URL("../git-paths-core.mjs", import.meta.url), join(root, "scripts/git-paths-core.mjs"));
   writeFileSync(
     join(root, "docs/engineering/dependency-risk-ledger.json"),
@@ -533,6 +535,9 @@ function successfulSpawn(calls, auditReport = report(), metadataByTarget = targe
     calls.push({ command, args, options });
     if (command === "cargo-audit" && args[1] === "--version") {
       return { status: 0, signal: null, stdout: "cargo-audit-audit 0.22.2\n", stderr: "" };
+    }
+    if (command === "cargo-audit" && args.includes("terminal")) {
+      return { status: 0, signal: null, stdout: "", stderr: `${PREFLIGHT_STDERR}\n` };
     }
     if (command === "cargo-audit") {
       return { status: 0, signal: null, stdout: JSON.stringify(auditReport), stderr: "" };
@@ -562,11 +567,22 @@ test("audit runner proves every warning against the audited target graph", () =>
   assert.equal(code, 0);
   assert.deepEqual(stderr, []);
   assert.match(stdout.join("\n"), /PASS dependency risk ledger reconciles 1 active unsound warning/);
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 6);
   assert.equal(calls[0].command, "cargo-audit");
   assert.deepEqual(calls[0].args, ["audit", "--version"]);
   assert.equal(calls[1].command, "cargo-audit");
   assert.deepEqual(calls[1].args, [
+    "audit",
+    "--deny",
+    "yanked",
+    "--format",
+    "terminal",
+    "--color",
+    "never",
+    "--file",
+    "src-tauri/Cargo.lock",
+  ]);
+  assert.deepEqual(calls[2].args, [
     "audit",
     "--format",
     "json",
@@ -574,7 +590,7 @@ test("audit runner proves every warning against the audited target graph", () =>
     "src-tauri/Cargo.lock",
   ]);
   for (const [index, target] of AUDITED_TARGETS.entries()) {
-    assert.deepEqual(calls[index + 2].args, [
+    assert.deepEqual(calls[index + 3].args, [
       "metadata",
       "--locked",
       "--format-version",
@@ -585,9 +601,69 @@ test("audit runner proves every warning against the audited target graph", () =>
       "src-tauri/Cargo.toml",
     ]);
   }
-  assert.ok(calls.slice(2).every((call) => call.command === "cargo"));
+  assert.ok(calls.slice(3).every((call) => call.command === "cargo"));
+  const isolatedCargoHome = calls[1].options.env.CARGO_HOME;
+  assert.equal(calls[2].options.env, calls[1].options.env);
+  assert.equal(existsSync(isolatedCargoHome), false);
+  assert.ok(calls.slice(3).every((call) => call.options.env === undefined));
   assert.ok(calls.every((call) => call.options.shell === false));
   assert.ok(calls.every((call) => call.options.maxBuffer === 32 * 1024 * 1024));
+});
+
+test("registry preflight requires a fresh index marker and complete yanked checks", () => {
+  const cases = [
+    ["Scanning src-tauri/Cargo.lock for vulnerabilities", 0, /did not prove a crates.io index update/],
+    ["Updating crates.io index", 0, /did not prove the requested lockfile was scanned/],
+    [`${PREFLIGHT_STDERR}\ncouldn't update crates.io index`, 0, /could not complete every yanked-package check/],
+    [`${PREFLIGHT_STDERR}\ncouldn't open crates.io index`, 0, /could not complete every yanked-package check/],
+    [`${PREFLIGHT_STDERR}\ncouldn't check if package glib is yanked`, 0, /could not complete every yanked-package check/],
+    [`${PREFLIGHT_STDERR}\nyanked dependency found`, 2, /registry preflight exited with status 2/],
+  ];
+  for (const [terminalStderr, status, expected] of cases) {
+    const calls = [];
+    const normal = successfulSpawn(calls);
+    const errors = [];
+    assert.equal(runDependencyRiskAudit({
+      root: writeAuditRoot(), now: NOW,
+      spawnSyncImpl: (command, args, options) =>
+        command === "cargo-audit" && args.includes("terminal")
+          ? { status, signal: null, stdout: "", stderr: `${terminalStderr}\n` }
+          : normal(command, args, options),
+      stdout: () => {}, stderr: (line) => errors.push(line),
+    }), 1);
+    assert.match(errors.join("\n"), expected);
+    assert.equal(existsSync(calls.find((call) => call.args.includes("json")).options.env.CARGO_HOME), false);
+  }
+});
+
+test("report-only identities survive vulnerability, unknown-category, and nonzero failures", () => {
+  const cases = [
+    ["vulnerability", (value) => { value.vulnerabilities = { found: true, count: 1, list: [warning({ kind: "vulnerability", advisory: { id: "RUSTSEC-2026-9999" } })] }; }, false, /vulnerabilities are never allowlisted/],
+    ["unknown", (value) => { value.warnings.future_kind = []; }, false, /unknown cargo audit warning category/],
+    ["nonzero", () => {}, true, /cargo audit exited with status 2/],
+  ];
+  for (const [label, mutate, nonzero, expected] of cases) {
+    const auditReport = report();
+    auditReport.warnings.unmaintained.push(warning({
+      kind: "unmaintained", advisory: { id: "RUSTSEC-2025-0001" },
+      package: { name: "alpha", version: "1.0.0", source: SOURCE },
+    }));
+    mutate(auditReport);
+    const normal = successfulSpawn([], auditReport);
+    const output = [];
+    const errors = [];
+    assert.equal(runDependencyRiskAudit({
+      root: writeAuditRoot(), now: NOW,
+      spawnSyncImpl: (command, args, options) => {
+        const result = normal(command, args, options);
+        return nonzero && command === "cargo-audit" && args.includes("json")
+          ? { ...result, status: 2 } : result;
+      },
+      stdout: (line) => output.push(line), stderr: (line) => errors.push(line),
+    }), 1, label);
+    assert.ok(output.includes(`REPORT-ONLY unmaintained warning: alpha@1.0.0 / RUSTSEC-2025-0001 / ${SOURCE}`), label);
+    assert.match(errors.join("\n"), expected, label);
+  }
 });
 
 test("audit runner reports every unique unmaintained identity in stable order", () => {
@@ -632,7 +708,7 @@ test("audit runner rejects successful cargo audit output accompanied by stderr",
       now: NOW,
       spawnSyncImpl: (command, args, options) => {
         const result = normal(command, args, options);
-        return command === "cargo-audit" && args[1] !== "--version"
+        return command === "cargo-audit" && args.includes("json")
           ? { ...result, stderr: "warning: advisory registry scan was skipped\n" }
           : result;
       },

@@ -1,12 +1,17 @@
 #!/usr/bin/env node
 
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { gitPathExistsAtRef } from "./git-paths-core.mjs";
+import {
+  createIsolatedCargoAuditEnvironment,
+  MAX_OUTPUT_BYTES,
+  spawn,
+} from "./dependency-risk-runtime.mjs";
 
 export const DEPENDENCY_RISK_PATH = "docs/engineering/dependency-risk-ledger.json";
 export const AUDITED_TARGETS = Object.freeze([
@@ -44,9 +49,10 @@ const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 const TRIGGER = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_ACTIVE_DAYS = 90;
-const MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 const AUDIT_VERSION = "0.22.2";
 const KNOWN_WARNING_KINDS = new Set(["unsound", "unmaintained", "yanked", "notice"]);
+const REGISTRY_INDEX_UPDATE_MARKER = "Updating crates.io index";
+const REGISTRY_INDEX_FAILURE = /\bcouldn't\b/i;
 const AUDIT_SETTINGS_FIELDS = [
   "target_arch",
   "target_os",
@@ -600,18 +606,6 @@ export function reconcileCargoAuditReport(ledger, report, metadataByTarget, opti
   };
 }
 
-function spawn(command, args, root, spawnSyncImpl) {
-  const result = spawnSyncImpl(command, args, {
-    cwd: root,
-    encoding: "utf8",
-    maxBuffer: MAX_OUTPUT_BYTES,
-    shell: false,
-  });
-  const stdout = typeof result?.stdout === "string" ? result.stdout : String(result?.stdout ?? "");
-  const stderr = typeof result?.stderr === "string" ? result.stderr : String(result?.stderr ?? "");
-  return { ...result, stdout, stderr };
-}
-
 function commandFailure(result, label) {
   if (result?.error) return `could not execute ${label}: ${result.error.message}`;
   if (result?.signal) return `${label} terminated by ${result.signal}`;
@@ -642,7 +636,7 @@ export function runDependencyRiskAudit({
   now = new Date(),
   lockfile = "src-tauri/Cargo.lock",
   manifestPath = "src-tauri/Cargo.toml",
-  spawnSyncImpl = spawnSync,
+  spawnSyncImpl,
   stdout = console.log,
   stderr = console.error,
 } = {}) {
@@ -668,26 +662,57 @@ export function runDependencyRiskAudit({
     return 1;
   }
 
-  const audit = spawn(
-    "cargo-audit",
-    ["audit", "--format", "json", "--file", lockfile],
-    root,
-    spawnSyncImpl,
-  );
-  const auditFailure = commandFailure(audit, "cargo audit");
-  if (auditFailure) {
-    stderr(`Dependency risk audit failed: ${auditFailure}`);
-    return 1;
-  }
-  if (audit.stderr.trim().length > 0) {
-    failures.push("cargo audit wrote to stderr, so registry and advisory scan completeness cannot be proven");
-  }
+  const isolated = createIsolatedCargoAuditEnvironment();
+  let audit;
   let auditReport;
   try {
-    auditReport = parseJsonOutput(audit.stdout, "cargo audit JSON");
-  } catch (error) {
-    stderr(`Dependency risk audit failed: invalid cargo audit JSON: ${error.message}`);
-    return 1;
+    const registryPreflight = spawn(
+      "cargo-audit",
+      ["audit", "--deny", "yanked", "--format", "terminal", "--color", "never", "--file", lockfile],
+      root,
+      spawnSyncImpl,
+      isolated.env,
+    );
+    const registryFailure = commandFailure(registryPreflight, "cargo audit registry preflight");
+    const registryLines = registryPreflight.stderr.split(/\r?\n/u).map((line) => line.trim());
+    if (registryFailure || registryPreflight.status !== 0) {
+      failures.push(
+        registryFailure ?? `cargo audit registry preflight exited with status ${registryPreflight.status}`,
+      );
+    }
+    if (!registryLines.includes(REGISTRY_INDEX_UPDATE_MARKER)) {
+      failures.push("cargo audit registry preflight did not prove a crates.io index update");
+    }
+    if (!registryLines.some((line) => line.startsWith(`Scanning ${lockfile} for vulnerabilities`))) {
+      failures.push("cargo audit registry preflight did not prove the requested lockfile was scanned");
+    }
+    if (REGISTRY_INDEX_FAILURE.test(registryPreflight.stderr)) {
+      failures.push("cargo audit registry preflight could not complete every yanked-package check");
+    }
+
+    audit = spawn(
+      "cargo-audit",
+      ["audit", "--format", "json", "--file", lockfile],
+      root,
+      spawnSyncImpl,
+      isolated.env,
+    );
+    const auditFailure = commandFailure(audit, "cargo audit");
+    if (auditFailure) {
+      stderr(`Dependency risk audit failed: ${auditFailure}`);
+      return 1;
+    }
+    if (audit.stderr.trim().length > 0) {
+      failures.push("cargo audit wrote to stderr, so registry and advisory scan completeness cannot be proven");
+    }
+    try {
+      auditReport = parseJsonOutput(audit.stdout, "cargo audit JSON");
+    } catch (error) {
+      stderr(`Dependency risk audit failed: invalid cargo audit JSON: ${error.message}`);
+      return 1;
+    }
+  } finally {
+    isolated.cleanup();
   }
 
   const metadataByTarget = {};
@@ -723,13 +748,14 @@ export function runDependencyRiskAudit({
   failures.push(...reconciled.errors);
   if (audit.status !== 0) failures.push(`cargo audit exited with status ${audit.status}`);
 
+  for (const identity of reconciled.unmaintained.identities) {
+    stdout(`REPORT-ONLY unmaintained warning: ${identity}`);
+  }
+
   if (failures.length > 0) {
     stderr("Dependency risk audit failed:");
     [...new Set(failures)].forEach((error) => stderr(`- ${error}`));
     return 1;
-  }
-  for (const identity of reconciled.unmaintained.identities) {
-    stdout(`REPORT-ONLY unmaintained warning: ${identity}`);
   }
   const activeCount = ledger.risks.filter((entry) => entry.status === "active").length;
   stdout(`PASS dependency risk ledger reconciles ${activeCount} active unsound warning${activeCount === 1 ? "" : "s"}`);
