@@ -73,8 +73,16 @@ export function evaluateGitHubGovernance({
     const pullRequestRule = rules.find((rule) => rule.type === "pull_request");
     if (!pullRequestRule) {
       errors.push("main ruleset does not require pull requests");
-    } else if (pullRequestRule.parameters?.required_approving_review_count !== 0) {
-      errors.push("main ruleset pull request approvals must be exactly 0");
+    } else {
+      if (pullRequestRule.parameters?.required_approving_review_count !== 0) {
+        errors.push("main ruleset pull request approvals must be exactly 0");
+      }
+      if (
+        pullRequestRule.parameters
+          ?.require_extra_approval_for_unattributed_changes !== false
+      ) {
+        errors.push("main ruleset must disable extra approval for unattributed changes");
+      }
     }
     const statusRule = rules.find((rule) => rule.type === "required_status_checks");
     const configuredChecks = statusRule?.parameters?.required_status_checks ?? [];

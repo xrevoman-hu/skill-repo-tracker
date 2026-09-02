@@ -18,7 +18,13 @@ test("accepts an active main ruleset with every required protection", () => {
           conditions: { ref_name: { include: ["refs/heads/main"] } },
           bypass_actors: [],
           rules: [
-            { type: "pull_request", parameters: { required_approving_review_count: 0 } },
+            {
+              type: "pull_request",
+              parameters: {
+                required_approving_review_count: 0,
+                require_extra_approval_for_unattributed_changes: false,
+              },
+            },
             {
               type: "required_status_checks",
               parameters: {
@@ -152,7 +158,13 @@ function passingState(overrides = {}) {
         conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
         bypass_actors: [],
         rules: [
-          { type: "pull_request", parameters: { required_approving_review_count: 0 } },
+          {
+            type: "pull_request",
+            parameters: {
+              required_approving_review_count: 0,
+              require_extra_approval_for_unattributed_changes: false,
+            },
+          },
           {
             type: "required_status_checks",
             parameters: {
@@ -303,6 +315,26 @@ test("main remains mergeable for one maintainer and has no stale or duplicate re
     "main ruleset pull request approvals must be exactly 0",
     "main ruleset has unexpected required check: stale-never-produced",
     "main ruleset has duplicate required check: verify",
+  ]);
+});
+
+test("main ruleset cannot re-enable unattributed-change approval drift", () => {
+  const missing = passingState();
+  const missingRule = missing.rulesets[0].rules.find(
+    (rule) => rule.type === "pull_request",
+  );
+  delete missingRule.parameters.require_extra_approval_for_unattributed_changes;
+  assert.deepEqual(evaluateGitHubGovernance(missing), [
+    "main ruleset must disable extra approval for unattributed changes",
+  ]);
+
+  const enabled = passingState();
+  const enabledRule = enabled.rulesets[0].rules.find(
+    (rule) => rule.type === "pull_request",
+  );
+  enabledRule.parameters.require_extra_approval_for_unattributed_changes = true;
+  assert.deepEqual(evaluateGitHubGovernance(enabled), [
+    "main ruleset must disable extra approval for unattributed changes",
   ]);
 });
 

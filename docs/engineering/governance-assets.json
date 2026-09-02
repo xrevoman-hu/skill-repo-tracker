@@ -268,11 +268,19 @@
           },
           {
             "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+            "selector": "native job runner maps policy success and failure to fail-closed exit codes"
+          },
+          {
+            "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
             "selector": "governance evidence assertion changes require a fresh governance-reviewed label"
           },
           {
             "path": "scripts/__tests__/github-governance-check.test.mjs",
             "selector": "main remains mergeable for one maintainer and has no stale or duplicate required checks"
+          },
+          {
+            "path": "scripts/__tests__/github-governance-check.test.mjs",
+            "selector": "main ruleset cannot re-enable unattributed-change approval drift"
           },
           {
             "path": "scripts/__tests__/github-governance-check.test.mjs",
@@ -1139,6 +1147,47 @@
       "gates": ["verify", "github-governance", "ci", "trusted-policy"],
       "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
       "retireWhen": "GitHub is no longer the repository, CI, security update, or Release control plane"
+    },
+    {
+      "id": "TRUSTED-SUITE-001",
+      "status": "active",
+      "principles": [2, 3, 4, 6, 7],
+      "rule": "rule-testing-release",
+      "decisions": ["adr-0008-executable-governance"],
+      "protectedPaths": [
+        ".github/workflows/trusted-policy.yml",
+        "scripts/trusted-policy-guard.mjs",
+        "scripts/core-policy-contracts.mjs",
+        "scripts/github-governance-check.mjs",
+        "docs/engineering/github-governance.md",
+        "docs/engineering/maintainability-system.md",
+        "docs/rules/testing-release.md"
+      ],
+      "evidence": [
+        {
+          "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+          "selector": "trusted workflow executes only base code and grants only the required write scope"
+        },
+        {
+          "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+          "selector": "native job runner maps policy success and failure to fail-closed exit codes"
+        },
+        {
+          "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+          "selector": "API head drift fails before changed files are trusted"
+        },
+        {
+          "path": "scripts/__tests__/governance-workflows.test.mjs",
+          "selector": "trusted policy workflow is an exact base-only machine contract"
+        },
+        {
+          "path": "scripts/__tests__/github-governance-check.test.mjs",
+          "selector": "main ruleset cannot re-enable unattributed-change approval drift"
+        }
+      ],
+      "gates": ["verify", "github-governance", "ci", "trusted-policy"],
+      "introducedBy": "a9f08080bf7ed365fc5f6e84297ece691c9e1b0c",
+      "retireWhen": "Trusted policy no longer depends on a GitHub Actions job check bound to the pull request head"
     },
     {
       "id": "RELEASE-ART-001",

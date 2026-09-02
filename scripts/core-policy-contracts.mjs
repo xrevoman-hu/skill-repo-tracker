@@ -259,15 +259,15 @@ const EXPECTED_TRUSTED_POLICY_WORKFLOW = {
       types: ["opened", "reopened", "synchronize", "edited", "labeled", "unlabeled"],
     },
   },
-  permissions: { contents: "read", "pull-requests": "read", checks: "write" },
+  permissions: { contents: "read", "pull-requests": "read" },
   concurrency: {
     group: "trusted-policy-${{ github.repository }}-${{ github.event.pull_request.number }}",
     "cancel-in-progress": true,
   },
   env: { NODE_VERSION: "22.23.1" },
   jobs: {
-    dispatch: {
-      name: "dispatch",
+    guard: {
+      name: "Trusted policy / guard",
       "runs-on": "ubuntu-latest",
       "timeout-minutes": 10,
       steps: [
@@ -286,7 +286,7 @@ const EXPECTED_TRUSTED_POLICY_WORKFLOW = {
           with: { "node-version": "${{ env.NODE_VERSION }}" },
         },
         {
-          name: "Evaluate API data and report the PR-head check",
+          name: "Evaluate trusted base policy against the PR head",
           env: {
             GITHUB_TOKEN: "${{ github.token }}",
             PR_NUMBER: "${{ github.event.pull_request.number }}",

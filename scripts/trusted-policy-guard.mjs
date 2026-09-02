@@ -344,26 +344,22 @@ async function githubRequest({
   token,
   apiUrl,
   endpoint,
-  method = "GET",
-  body,
 }) {
   const response = await fetchImpl(githubUrl(apiUrl, endpoint), {
-    method,
+    method: "GET",
     headers: {
       accept: "application/vnd.github+json",
       authorization: `Bearer ${token}`,
       "x-github-api-version": API_VERSION,
-      ...(body == null ? {} : { "content-type": "application/json" }),
     },
-    ...(body == null ? {} : { body: JSON.stringify(body) }),
   });
   if (!response.ok) {
-    throw new Error(`GitHub API request failed: ${method} ${endpoint} returned ${response.status}`);
+    throw new Error(`GitHub API request failed: GET ${endpoint} returned ${response.status}`);
   }
   try {
     return await response.json();
   } catch {
-    throw new Error(`GitHub API request failed: ${method} ${endpoint} returned invalid JSON`);
+    throw new Error(`GitHub API request failed: GET ${endpoint} returned invalid JSON`);
   }
 }
 
@@ -426,72 +422,7 @@ async function loadPullRequestData({
   return { changedFiles: pull.changed_files, files, labels };
 }
 
-function formatCriticalPaths(paths) {
-  const shown = paths.slice(0, 20).map((path) => `- \`${path.replaceAll("`", "\\`")}\``);
-  if (paths.length > shown.length) shown.push(`- ... and ${paths.length - shown.length} more`);
-  return shown.join("\n");
-}
-
-function policyOutput({ errors, criticalPaths }) {
-  if (errors.length > 0) {
-    const sections = [errors.join("\n")];
-    if (criticalPaths.length > 0) {
-      sections.push(`Critical paths:\n${formatCriticalPaths(criticalPaths)}`);
-    }
-    return {
-      title: "Trusted policy failed",
-      summary: sections.join("\n\n").slice(0, 65_000),
-    };
-  }
-  if (criticalPaths.length === 0) {
-    return {
-      title: "Trusted policy passed",
-      summary: "No critical governance path requires additional review.",
-    };
-  }
-  return {
-    title: "Trusted policy passed",
-    summary: `${REVIEW_LABEL} covers ${criticalPaths.length} critical governance path(s).`,
-  };
-}
-
-async function publishCheckRun({
-  fetchImpl,
-  token,
-  apiUrl,
-  repository,
-  expectedHeadSha,
-  conclusion,
-  detailsUrl,
-  externalId,
-  output,
-  completedAt,
-}) {
-  const payload = {
-    name: CHECK_NAME,
-    head_sha: expectedHeadSha,
-    status: "completed",
-    conclusion,
-    ...(detailsUrl ? { details_url: detailsUrl } : {}),
-    ...(externalId ? { external_id: externalId } : {}),
-    completed_at: completedAt,
-    output,
-  };
-  const created = await githubRequest({
-    fetchImpl,
-    token,
-    apiUrl,
-    endpoint: `/repos/${repository}/check-runs`,
-    method: "POST",
-    body: payload,
-  });
-  if (!Number.isInteger(created?.id)) {
-    throw new Error("GitHub API did not return a check run id");
-  }
-  return created.id;
-}
-
-export async function runTrustedPolicyCheck({
+export async function runTrustedPolicy({
   fetchImpl = globalThis.fetch,
   token,
   apiUrl = "https://api.github.com",
@@ -501,9 +432,6 @@ export async function runTrustedPolicyCheck({
   expectedBaseRef,
   eventAction,
   eventLabel,
-  detailsUrl,
-  externalId,
-  now = () => new Date(),
   readTrustedCatalog = () => readFileSync(TRUSTED_CATALOG_PATH),
 }) {
   validateRuntimeInput({ token, repository, pullNumber, expectedHeadSha, expectedBaseRef });
@@ -534,53 +462,42 @@ export async function runTrustedPolicyCheck({
     };
   }
   const conclusion = decision.errors.length === 0 ? "success" : "failure";
-  const completedAt = now().toISOString();
-  const checkRunId = await publishCheckRun({
+  return { ...decision, conclusion };
+}
+
+export async function runTrustedPolicyCli({
+  env = process.env,
+  fetchImpl = globalThis.fetch,
+  readTrustedCatalog,
+  log = console.log,
+  error = console.error,
+} = {}) {
+  const result = await runTrustedPolicy({
     fetchImpl,
-    token,
-    apiUrl,
-    repository,
-    expectedHeadSha,
-    conclusion,
-    detailsUrl,
-    externalId,
-    output: policyOutput(decision),
-    completedAt,
+    token: env.GITHUB_TOKEN,
+    apiUrl: env.GITHUB_API_URL,
+    repository: env.GITHUB_REPOSITORY,
+    pullNumber: Number(env.PR_NUMBER),
+    expectedHeadSha: env.PR_HEAD_SHA,
+    expectedBaseRef: env.PR_BASE_REF,
+    eventAction: env.PR_EVENT_ACTION,
+    eventLabel: env.PR_EVENT_LABEL,
+    readTrustedCatalog,
   });
-  return { ...decision, conclusion, completedAt, checkRunId };
+  if (result.conclusion === "success") {
+    log(`PASS ${CHECK_NAME}`);
+    return 0;
+  }
+  error(`FAIL ${CHECK_NAME}`);
+  for (const message of result.errors) error(`- ${message}`);
+  for (const path of result.criticalPaths) error(`- critical path: ${path}`);
+  return 1;
 }
 
 async function main() {
-  const serverUrl = process.env.GITHUB_SERVER_URL ?? "https://github.com";
-  const repository = process.env.GITHUB_REPOSITORY;
-  const pullNumber = Number(process.env.PR_NUMBER);
-  const runId = process.env.GITHUB_RUN_ID;
-  const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
-  const result = await runTrustedPolicyCheck({
-    token: process.env.GITHUB_TOKEN,
-    apiUrl: process.env.GITHUB_API_URL,
-    repository,
-    pullNumber,
-    expectedHeadSha: process.env.PR_HEAD_SHA,
-    expectedBaseRef: process.env.PR_BASE_REF,
-    eventAction: process.env.PR_EVENT_ACTION,
-    eventLabel: process.env.PR_EVENT_LABEL,
-    detailsUrl:
-      serverUrl && repository && runId
-        ? `${serverUrl}/${repository}/actions/runs/${runId}`
-        : undefined,
-    externalId:
-      runId && Number.isInteger(pullNumber)
-        ? `trusted-policy:${runId}:${runAttempt}:${pullNumber}`
-        : undefined,
+  process.exitCode = await runTrustedPolicyCli({
+    env: process.env,
   });
-  if (result.conclusion === "success") {
-    console.log(`PASS ${CHECK_NAME}`);
-    return;
-  }
-  console.error(`FAIL ${CHECK_NAME}`);
-  for (const error of result.errors) console.error(`- ${error}`);
-  process.exitCode = 1;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

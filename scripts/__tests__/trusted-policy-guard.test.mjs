@@ -9,7 +9,8 @@ import {
   evaluateTrustedPolicy,
   extractTrustedGovernanceEvidencePaths,
   isCriticalGovernancePath,
-  runTrustedPolicyCheck,
+  runTrustedPolicy,
+  runTrustedPolicyCli,
 } from "../trusted-policy-guard.mjs";
 
 const ROOT = new URL("../../", import.meta.url);
@@ -20,10 +21,6 @@ function jsonResponse(body, status = 200) {
     status,
     headers: { "content-type": "application/json" },
   });
-}
-
-function requestBody(options) {
-  return options?.body ? JSON.parse(options.body) : undefined;
 }
 
 function trustedCatalog() {
@@ -397,6 +394,7 @@ test("editing PR metadata or retargeting a critical PR requires a fresh review e
   );
 });
 
+// The historical selector remains stable; the native Actions job now publishes the result.
 test("trusted default-branch script publishes success on the exact PR head", async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {
@@ -413,13 +411,10 @@ test("trusted default-branch script publishes success on the exact PR head", asy
     if (String(url).includes("/pulls/17/files?")) {
       return jsonResponse([{ filename: "src/App.tsx" }]);
     }
-    if (String(url).endsWith("/check-runs")) {
-      return jsonResponse({ id: 91 }, 201);
-    }
     throw new Error(`unexpected request: ${url}`);
   };
 
-  const result = await runTrustedPolicyCheck({
+  const result = await runTrustedPolicy({
     fetchImpl,
     token: "test-token",
     repository: "owner/repo",
@@ -427,28 +422,14 @@ test("trusted default-branch script publishes success on the exact PR head", asy
     expectedHeadSha: HEAD_SHA,
     expectedBaseRef: "main",
     eventAction: "opened",
-    detailsUrl: "https://github.com/owner/repo/actions/runs/123",
-    externalId: "trusted-policy:123:1:17",
   });
 
   assert.equal(result.conclusion, "success");
-  const create = calls.find(({ url }) => url.endsWith("/check-runs"));
-  assert.deepEqual(requestBody(create.options), {
-    name: CHECK_NAME,
-    head_sha: HEAD_SHA,
-    status: "completed",
-    conclusion: "success",
-    details_url: "https://github.com/owner/repo/actions/runs/123",
-    external_id: "trusted-policy:123:1:17",
-    completed_at: result.completedAt,
-    output: {
-      title: "Trusted policy passed",
-      summary: "No critical governance path requires additional review.",
-    },
-  });
+  assert.equal(calls.some(({ url }) => url.endsWith("/check-runs")), false);
+  assert.equal(calls.every(({ options }) => (options.method ?? "GET") === "GET"), true);
 });
 
-test("policy failures are published as a completed failure check", async () => {
+test("policy failures remain fail-closed without publishing a custom CheckRun", async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {
     calls.push({ url: String(url), options });
@@ -464,13 +445,10 @@ test("policy failures are published as a completed failure check", async () => {
     if (String(url).includes("/pulls/17/files?")) {
       return jsonResponse([{ filename: "scripts/verify.mjs" }]);
     }
-    if (String(url).endsWith("/check-runs")) {
-      return jsonResponse({ id: 92 }, 201);
-    }
     throw new Error(`unexpected request: ${url}`);
   };
 
-  const result = await runTrustedPolicyCheck({
+  const result = await runTrustedPolicy({
     fetchImpl,
     token: "test-token",
     repository: "owner/repo",
@@ -481,17 +459,14 @@ test("policy failures are published as a completed failure check", async () => {
   });
 
   assert.equal(result.conclusion, "failure");
-  const create = calls.find(({ url }) => url.endsWith("/check-runs"));
-  assert.equal(requestBody(create.options).conclusion, "failure");
-  assert.match(
-    requestBody(create.options).output.summary,
-    /governance-reviewed/,
-  );
+  assert.match(result.errors.join("\n"), /governance-reviewed/);
+  assert.equal(calls.some(({ url }) => url.endsWith("/check-runs")), false);
 });
 
 test("runner requires re-labeling after synchronize on the API-confirmed head", async () => {
-  const checkPayloads = [];
+  const calls = [];
   const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
     if (String(url).endsWith("/pulls/17")) {
       return jsonResponse({
         number: 17,
@@ -504,10 +479,6 @@ test("runner requires re-labeling after synchronize on the API-confirmed head", 
     if (String(url).includes("/pulls/17/files?")) {
       return jsonResponse([{ filename: "scripts/verify.mjs" }]);
     }
-    if (String(url).endsWith("/check-runs")) {
-      checkPayloads.push(requestBody(options));
-      return jsonResponse({ id: 100 + checkPayloads.length }, 201);
-    }
     throw new Error(`unexpected request: ${url}`);
   };
   const common = {
@@ -519,11 +490,11 @@ test("runner requires re-labeling after synchronize on the API-confirmed head", 
     expectedBaseRef: "main",
   };
 
-  const synchronized = await runTrustedPolicyCheck({
+  const synchronized = await runTrustedPolicy({
     ...common,
     eventAction: "synchronize",
   });
-  const relabeled = await runTrustedPolicyCheck({
+  const relabeled = await runTrustedPolicy({
     ...common,
     eventAction: "labeled",
     eventLabel: "governance-reviewed",
@@ -532,15 +503,10 @@ test("runner requires re-labeling after synchronize on the API-confirmed head", 
   assert.equal(synchronized.conclusion, "failure");
   assert.match(synchronized.errors.join("\n"), /remove and re-add/);
   assert.equal(relabeled.conclusion, "success");
-  assert.deepEqual(
-    checkPayloads.map(({ head_sha, conclusion }) => ({ head_sha, conclusion })),
-    [
-      { head_sha: HEAD_SHA, conclusion: "failure" },
-      { head_sha: HEAD_SHA, conclusion: "success" },
-    ],
-  );
+  assert.equal(calls.some(({ url }) => url.endsWith("/check-runs")), false);
 });
 
+// The CLI's nonzero exit makes the native Actions job publish the failure check.
 test("API failures also publish a failure check when the event head is valid", async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {
@@ -548,13 +514,10 @@ test("API failures also publish a failure check when the event head is valid", a
     if (String(url).endsWith("/pulls/17")) {
       return jsonResponse({ message: "temporary failure" }, 503);
     }
-    if (String(url).endsWith("/check-runs")) {
-      return jsonResponse({ id: 93 }, 201);
-    }
     throw new Error(`unexpected request: ${url}`);
   };
 
-  const result = await runTrustedPolicyCheck({
+  const result = await runTrustedPolicy({
     fetchImpl,
     token: "test-token",
     repository: "owner/repo",
@@ -565,22 +528,50 @@ test("API failures also publish a failure check when the event head is valid", a
   });
 
   assert.equal(result.conclusion, "failure");
-  const create = calls.find(({ url }) => url.endsWith("/check-runs"));
-  assert.equal(requestBody(create.options).head_sha, HEAD_SHA);
-  assert.match(requestBody(create.options).output.summary, /GitHub API request failed/);
+  assert.match(result.errors.join("\n"), /GitHub API request failed/);
+  assert.equal(calls.some(({ url }) => url.endsWith("/check-runs")), false);
 });
 
-test("a missing trusted base catalog publishes failure without reading PR contents", async () => {
+test("API head drift fails before changed files are trusted", async () => {
   const calls = [];
   const fetchImpl = async (url, options = {}) => {
     calls.push({ url: String(url), options });
-    if (String(url).endsWith("/check-runs")) {
-      return jsonResponse({ id: 94 }, 201);
+    if (String(url).endsWith("/pulls/17")) {
+      return jsonResponse({
+        number: 17,
+        changed_files: 1,
+        head: { sha: "b".repeat(40) },
+        base: { ref: "main" },
+        labels: [],
+      });
     }
     throw new Error(`unexpected request: ${url}`);
   };
 
-  const result = await runTrustedPolicyCheck({
+  const result = await runTrustedPolicy({
+    fetchImpl,
+    token: "test-token",
+    repository: "owner/repo",
+    pullNumber: 17,
+    expectedHeadSha: HEAD_SHA,
+    expectedBaseRef: "main",
+    eventAction: "opened",
+  });
+
+  assert.equal(result.conclusion, "failure");
+  assert.match(result.errors.join("\n"), /head changed/);
+  assert.equal(calls.some(({ url }) => url.includes("/pulls/17/files?")), false);
+  assert.equal(calls.some(({ url }) => url.endsWith("/check-runs")), false);
+});
+
+test("a missing trusted base catalog fails without reading PR contents", async () => {
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    throw new Error(`unexpected request: ${url}`);
+  };
+
+  const result = await runTrustedPolicy({
     fetchImpl,
     token: "test-token",
     repository: "owner/repo",
@@ -598,14 +589,70 @@ test("a missing trusted base catalog publishes failure without reading PR conten
     "trusted governance catalog is missing or unreadable",
   ]);
   assert.equal(calls.some(({ url }) => url.includes("/pulls/17")), false);
-  const create = calls.find(({ url }) => url.endsWith("/check-runs"));
-  assert.equal(requestBody(create.options).head_sha, HEAD_SHA);
-  assert.equal(requestBody(create.options).conclusion, "failure");
+  assert.equal(calls.some(({ url }) => url.endsWith("/check-runs")), false);
+});
+
+test("native job runner maps policy success and failure to fail-closed exit codes", async () => {
+  const messages = [];
+  const env = {
+    GITHUB_TOKEN: "test-token",
+    GITHUB_REPOSITORY: "owner/repo",
+    PR_NUMBER: "17",
+    PR_HEAD_SHA: HEAD_SHA,
+    PR_BASE_REF: "main",
+    PR_EVENT_ACTION: "opened",
+  };
+  const fetchImpl = async (url) => {
+    if (String(url).endsWith("/pulls/17")) {
+      return jsonResponse({
+        number: 17,
+        changed_files: 1,
+        head: { sha: HEAD_SHA },
+        base: { ref: "main" },
+        labels: [],
+      });
+    }
+    if (String(url).includes("/pulls/17/files?")) {
+      return jsonResponse([{ filename: "src/App.tsx" }]);
+    }
+    throw new Error(`unexpected request: ${url}`);
+  };
+
+  assert.equal(
+    await runTrustedPolicyCli({
+      env,
+      fetchImpl,
+      log: (message) => messages.push(message),
+      error: (message) => messages.push(message),
+    }),
+    0,
+  );
+  assert.match(messages.join("\n"), /PASS Trusted policy \/ guard/);
+
+  messages.length = 0;
+  assert.equal(
+    await runTrustedPolicyCli({
+      env,
+      fetchImpl,
+      readTrustedCatalog() {
+        throw new Error("trusted governance catalog is missing or unreadable");
+      },
+      log: (message) => messages.push(message),
+      error: (message) => messages.push(message),
+    }),
+    1,
+  );
+  assert.match(messages.join("\n"), /FAIL Trusted policy \/ guard/);
+  assert.match(messages.join("\n"), /catalog is missing or unreadable/);
 });
 
 test("trusted workflow executes only base code and grants only the required write scope", () => {
   const contents = readFileSync(
     new URL(".github/workflows/trusted-policy.yml", ROOT),
+    "utf8",
+  );
+  const guardScript = readFileSync(
+    new URL("scripts/trusted-policy-guard.mjs", ROOT),
     "utf8",
   );
   const workflow = parseYaml(contents, { uniqueKeys: true });
@@ -626,11 +673,10 @@ test("trusted workflow executes only base code and grants only the required writ
   assert.deepEqual(workflow.permissions, {
     contents: "read",
     "pull-requests": "read",
-    checks: "write",
   });
   assert.equal(workflow.concurrency["cancel-in-progress"], true);
-  assert.equal(workflow.jobs.dispatch.name, "dispatch");
-  const checkout = workflow.jobs.dispatch.steps.find((step) =>
+  assert.equal(workflow.jobs.guard.name, CHECK_NAME);
+  const checkout = workflow.jobs.guard.steps.find((step) =>
     String(step.uses ?? "").startsWith("actions/checkout@"),
   );
   assert.equal(checkout.with.ref, "${{ github.event.pull_request.base.sha }}");
@@ -641,6 +687,8 @@ test("trusted workflow executes only base code and grants only the required writ
   }
   assert.doesNotMatch(contents, /pull_request\.head\.(?:ref|repo)/);
   assert.doesNotMatch(contents, /github\.head_ref|refs\/pull|checkout[^\n]*head/i);
+  assert.doesNotMatch(contents, /checks:\s*write|\/check-runs/);
+  assert.doesNotMatch(guardScript, /publishCheckRun|\/check-runs/);
   assert.match(contents, /node scripts\/trusted-policy-guard\.mjs/);
   assert.match(contents, /PR_EVENT_ACTION:\s*\$\{\{ github\.event\.action \}\}/);
   assert.match(contents, /PR_EVENT_LABEL:\s*\$\{\{ github\.event\.label\.name \}\}/);

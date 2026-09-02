@@ -72,15 +72,15 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
 - Trusted policy：`pull_request_target` 只执行 default-branch/base SHA 中的 trusted guard，
   通过 GitHub API读取 changed filenames、rename 旧路径与 labels；绝不 checkout 或执行 PR
   head。所有 `scripts/`、workflow 和机器治理事实源的变更必须带
-  `governance-reviewed`，并由只具备 `checks: write` 的 base script 在 PR head 上发布精确
-  Check Run `Trusted policy / guard`。critical PR 的 `synchronize`、`edited`、`reopened` 与
-  `unlabeled` 都会重新评估并尝试发布 failure；只有 API 复核过的当前 head 上精确
-  `governance-reviewed` labeled event 才发布 success，无关 label 不能代替复审。它是独立远端
+  `governance-reviewed`。原生 job 精确命名 `Trusted policy / guard` 并关联 PR head，脚本只有
+  `contents: read`、`pull-requests: read`，以退出码决定 job；不得通过 `/check-runs` 自建同名
+  检查，因为其 suite 归属不可控。critical PR 的 `synchronize`、`edited`、`reopened` 与
+  `unlabeled` 都会重新评估；只有 API 复核过的当前 head 上精确
+  `governance-reviewed` labeled event 才成功，无关 label 不能代替复审。它是独立远端
   lane，不属于本地 `npm run verify`；首次合入后还要让 ruleset 把 context 绑定到明确
-  integration。由于 GitHub required check 按 commit 记录，同一 head 上已有 success 时，后续
-  failure 若因 API/权限故障无法写入，旧 success 不能由仓库脚本原子撤销；GitHub Actions
-  integration 也不是隔离同仓恶意 workflow 的独立身份。因此当前机制是有限信任的流程加固，
-  不能称为不可绕过的信任根。强边界需要专用 GitHub App 或独立受控的组织级 required
+  integration。GitHub Actions integration 不是隔离同仓恶意同名 workflow 的独立身份，因此
+  当前机制是有限信任的流程加固，不能称为不可绕过的信任根。强边界需要专用 GitHub App 或
+  独立受控的组织级 required
   workflow，并将 ruleset 绑定到那个隔离 integration。
 - MSRV：CI 用 Rust 1.88.0 `cargo check --locked`。
 - 性能：weekly 与 Release 跑 10,000 prompts / 100 MiB ignored test。
