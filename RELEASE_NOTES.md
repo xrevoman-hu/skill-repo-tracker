@@ -1,5 +1,18 @@
 # Release Notes
 
+## v1.2.6 - 发布门禁与 RustSec 依赖收口
+
+这个补丁版不新增产品功能，而是把 v1.2.5 发布后已合入 `main` 的治理与依赖安全修复交付到新的 Apple Silicon DMG。
+
+- `Trusted policy / guard` 改为由默认分支代码驱动、与当前 PR head 正确关联的原生 job；不再申请 `checks: write` 或手工创建同名 Check Run。
+- `cargo-audit` 固定为 `0.22.2`，恢复对当前 RustSec advisory schema 的解析和稳定执行。
+- 锁文件将 `plist` 升级到 `1.10.0`、`quick-xml` 升级到 `0.41.0`，消除已识别的 high-severity RustSec 公告；本版不声称这些问题已被实际利用。
+- Browserslist 的传递 lock 已刷新，避免安全审计被过时的浏览器数据阻断。
+- 本版不改变 SQLite schema、外部网络 API、设置、后台状态、系统权限或 v1.2.4 的 Skill hash/源码 ZIP 兼容边界。
+- Apple Silicon 安装包继续采用 ad-hoc 签名，不是 Developer ID 签名，也没有经过 Apple notarization；首次打开若被 macOS 拦截，请在 Finder 中按住 Control 点击 App 并选择“打开”，或在“系统设置 -> 隐私与安全性”中选择“仍要打开”。
+
+English summary: v1.2.6 adds no product feature. It delivers the governance and dependency-security fixes merged after v1.2.5 in a newly built Apple Silicon DMG. `Trusted policy / guard` is now a native, default-branch-driven job associated with the current PR head, without `checks: write` or a manually created Check Run. The security lane pins `cargo-audit 0.22.2`, and the lockfile updates `plist` to `1.10.0` and `quick-xml` to `0.41.0` to address the identified high-severity RustSec advisories; this release does not claim those issues were exploited. The Browserslist transitive lock is refreshed. SQLite, external APIs, settings, background state, system permissions, and the v1.2.4 Skill digest/source-ZIP compatibility boundaries are unchanged. The package remains ad-hoc signed, not Developer ID signed, and not Apple notarized. If macOS blocks first launch, Control-click the app in Finder and choose Open, or use System Settings -> Privacy & Security -> Open Anyway.
+
 ## v1.2.5 - 可执行治理与安全边界收口
 
 这个补丁版不新增产品功能，而是把架构、Rules、ADR、高风险不变量和发布实物合同收敛成可跟随 Git 演进、可在本地与 GitHub 上自动执行的治理体系。
