@@ -50,7 +50,7 @@ const EXPECTED_SECURITY_AUDIT_WORKFLOW = {
         },
         {
           name: "Install pinned cargo-audit",
-          run: "cargo install cargo-audit --locked --version 0.21.2",
+          run: "cargo install cargo-audit --locked --version 0.22.2",
         },
         { name: "Audit Cargo.lock", run: "cargo audit --file src-tauri/Cargo.lock" },
       ],

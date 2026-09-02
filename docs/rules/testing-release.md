@@ -86,7 +86,9 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
 - 性能：weekly 与 Release 跑 10,000 prompts / 100 MiB ignored test。
 - Test waiver：`npm run verify` 与 weekly 都执行 tracked ledger checker；active selector 必须指向
   仓库中真实测试文本，过期、幽灵 selector、主 lane waiver 或 tombstone 改写都会失败。
-- 安全审计：独立 schedule，网络失败不改变本地确定性结果。
+- 安全审计：独立 schedule，网络失败不改变本地确定性结果。`cargo-audit` 必须固定到已验证且能
+  解析当前 RustSec advisory schema 的版本；数据库 schema 演进导致的解析失败视为门禁故障，
+  修复时同步更新 workflow exact contract，不能用忽略 advisory 或允许失败绕过。
 
 ## 发布
 
