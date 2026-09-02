@@ -151,14 +151,14 @@ const EXPECTED_CI_WORKFLOW = {
       steps: [
         {
           name: "Checkout full history",
-          uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
           with: { "fetch-depth": 0, "persist-credentials": false },
         },
         TRACKED_DEPENDENCY_OVERRIDE_STEP,
         TOOLCHAIN_OVERRIDE_STEP,
         {
           name: "Set up Node.js",
-          uses: "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
           with: { "node-version": "${{ env.NODE_VERSION }}", cache: "npm" },
         },
         {
@@ -197,14 +197,14 @@ const EXPECTED_CI_WORKFLOW = {
       steps: [
         {
           name: "Checkout full history",
-          uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
           with: { "fetch-depth": 0, "persist-credentials": false },
         },
         TRACKED_DEPENDENCY_OVERRIDE_STEP,
         TOOLCHAIN_OVERRIDE_STEP,
         {
           name: "Set up Node.js",
-          uses: "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
           with: { "node-version": "${{ env.NODE_VERSION }}", cache: "npm" },
         },
         {
@@ -233,7 +233,7 @@ const EXPECTED_CI_WORKFLOW = {
       steps: [
         {
           name: "Checkout",
-          uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
           with: { "persist-credentials": false },
         },
         TRACKED_DEPENDENCY_OVERRIDE_STEP,
@@ -273,7 +273,7 @@ const EXPECTED_TRUSTED_POLICY_WORKFLOW = {
       steps: [
         {
           name: "Checkout trusted base code only",
-          uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
           with: {
             ref: "${{ github.event.pull_request.base.sha }}",
             "fetch-depth": 1,
@@ -282,8 +282,11 @@ const EXPECTED_TRUSTED_POLICY_WORKFLOW = {
         },
         {
           name: "Set up pinned Node.js",
-          uses: "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
-          with: { "node-version": "${{ env.NODE_VERSION }}" },
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+          with: {
+            "node-version": "${{ env.NODE_VERSION }}",
+            "package-manager-cache": false,
+          },
         },
         {
           name: "Evaluate trusted base policy against the PR head",
@@ -300,6 +303,26 @@ const EXPECTED_TRUSTED_POLICY_WORKFLOW = {
       ],
     },
   },
+};
+
+const EXPECTED_GITHUB_ACTIONS_DEPENDABOT_ENTRY = {
+  "package-ecosystem": "github-actions",
+  directory: "/",
+  schedule: { interval: "weekly", day: "monday" },
+  "open-pull-requests-limit": 2,
+  labels: ["dependencies", "ci"],
+  groups: {
+    "minor-and-patch": {
+      patterns: ["*"],
+      "update-types": ["minor", "patch"],
+    },
+  },
+  ignore: [
+    {
+      "dependency-name": "*",
+      "update-types": ["version-update:semver-major"],
+    },
+  ],
 };
 
 function validateExactWorkflowPolicy(contents, label, expectedWorkflow) {
@@ -488,6 +511,9 @@ export function validateRepositoryAutomationPolicy({ workflowPaths, dependabotCo
     );
     return errors;
   }
+  if (dependabot?.version !== 2) {
+    errors.push("Dependabot config version must be exactly 2");
+  }
   const updates = Array.isArray(dependabot?.updates) ? dependabot.updates : [];
   for (const [ecosystem, directory, label] of [
     ["npm", "/", "npm / weekly"],
@@ -500,6 +526,17 @@ export function validateRepositoryAutomationPolicy({ workflowPaths, dependabotCo
         entry?.schedule?.interval === "weekly",
     );
     if (!configured) errors.push(`Dependabot is missing ${label} updates`);
+  }
+  const githubActionsEntries = updates.filter(
+    (entry) => entry?.["package-ecosystem"] === "github-actions",
+  );
+  if (
+    githubActionsEntries.length !== 1 ||
+    !isDeepStrictEqual(githubActionsEntries[0], EXPECTED_GITHUB_ACTIONS_DEPENDABOT_ENTRY)
+  ) {
+    errors.push(
+      "Dependabot github-actions / weekly updates must match the complete bounded minor-and-patch contract",
+    );
   }
   return errors;
 }

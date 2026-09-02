@@ -38,7 +38,11 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   repo-controlled workflow 或本地 Action 会失败，避免普通 push 发布、扩大写权限或用同名
   Check Run 冒充 required check。仅精确登记 GitHub 托管的 Dependabot Updates 动态 workflow，
   并由对应 GitHub 功能的独立设置校验；workflow state 缺失/未知，或 active tuple 字段缺失，
-  均 fail closed。仓库内
+  均 fail closed。所有 workflow 的 `actions/checkout` 与 `actions/setup-node` 必须固定为已审查的
+  Node 24-native 完整 commit SHA；普通 CI 明确启用 npm cache，执行 trusted base code 的
+  Trusted policy 必须显式设置 `package-manager-cache: false`，不能让 package manager 字段隐式
+  创建或读取 cache。Dependabot 每周检查 GitHub Actions，最多保留两个 PR，只分组 minor/patch；
+  major 由人工审查和迁移。仓库内
   JavaScript/TypeScript 可执行代码只允许位于 `src/`、`scripts/`、`e2e/` 与三份精确根配置，
   治理工具的本地 module import 也不得逃出 `scripts/` 的预算和 trusted-review 范围。
   治理脚本只允许沿 canonical 顶层静态 import/export 执行图可达；`eval`、`Function`、VM、

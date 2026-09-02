@@ -31,13 +31,13 @@ const EXPECTED_SECURITY_AUDIT_WORKFLOW = {
       steps: [
         {
           name: "Checkout",
-          uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
           with: { "persist-credentials": false },
         },
         TRACKED_DEPENDENCY_OVERRIDE_STEP,
         {
           name: "Set up Node.js",
-          uses: "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
           with: { "node-version-file": ".node-version", cache: "npm" },
         },
         {
@@ -73,13 +73,13 @@ const EXPECTED_WEEKLY_RESILIENCE_WORKFLOW = {
       steps: [
         {
           name: "Checkout",
-          uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
           with: { "persist-credentials": false },
         },
         TRACKED_DEPENDENCY_OVERRIDE_STEP,
         {
           name: "Set up Node.js",
-          uses: "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
           with: { "node-version-file": ".node-version", cache: "npm" },
         },
         {
@@ -217,13 +217,13 @@ npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --p
         steps: [
           {
             name: "Checkout full history and tags",
-            uses: "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
+            uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
             with: { "fetch-depth": 0, "persist-credentials": false },
           },
           TRACKED_DEPENDENCY_OVERRIDE_STEP,
           {
             name: "Set up Node.js",
-            uses: "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
+            uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
             with: { "node-version-file": ".node-version", cache: "npm" },
           },
           {

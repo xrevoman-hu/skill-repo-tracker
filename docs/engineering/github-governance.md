@@ -37,6 +37,18 @@ GET，退出码直接决定原生 job 成败，权限严格为 `contents: read` 
 的专用 GitHub App，或组织级、从独立受控仓库提供的 required workflow，并把 ruleset 的
 `integration_id` 绑定到该独立主体。
 
+## Action 运行时与 cache 边界
+
+五个仓库 workflow 只允许使用完整 commit SHA 固定的 Node 24-native
+`actions/checkout@v7.0.1` 与 `actions/setup-node@v7.0.0`；tag 名只作为注释，机器合同核对实际
+SHA。普通 CI、Release、Security audit 和 Weekly lane 都显式声明 npm cache。Trusted policy
+执行的是受信任 base code，但其输入来自不可信 PR 元数据，因此显式设置
+`package-manager-cache: false`，不自动恢复或保存 package-manager cache。
+
+Dependabot 每周检查仓库内 GitHub Actions，最多同时打开两个 PR；minor/patch 可以分组，major
+更新被忽略并由维护者按独立迁移计划处理。Action pin、cache 语义和 Dependabot 策略都属于
+`GH-GATE-001` 的机器证据，不能只改 workflow 而不同步合同测试。
+
 上述设计依据 GitHub 官方说明：[`pull_request_target` 在默认分支上下文运行且不能执行不可信
 head](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target)、
 [不可信 checkout 的安全风险](https://docs.github.com/en/actions/reference/security/secure-use)、

@@ -72,6 +72,33 @@ const CRITICAL_PACKAGE_SCRIPTS = {
   "tauri:build": "tauri build",
 };
 
+const CHECKOUT_NODE24_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1";
+const SETUP_NODE_NODE24_SHA = "820762786026740c76f36085b0efc47a31fe5020";
+const WORKFLOW_PATHS = [
+  ".github/workflows/ci.yml",
+  ".github/workflows/release-gate.yml",
+  ".github/workflows/security-audit.yml",
+  ".github/workflows/trusted-policy.yml",
+  ".github/workflows/weekly-resilience.yml",
+];
+
+test("every GitHub workflow pins the approved Node 24-native actions", () => {
+  for (const path of WORKFLOW_PATHS) {
+    const contents = readFileSync(new URL(`../../${path}`, import.meta.url), "utf8");
+    const workflow = parseYaml(contents, { uniqueKeys: true });
+    for (const job of Object.values(workflow.jobs)) {
+      for (const step of job.steps ?? []) {
+        if (String(step.uses ?? "").startsWith("actions/checkout@")) {
+          assert.equal(step.uses, `actions/checkout@${CHECKOUT_NODE24_SHA}`, path);
+        }
+        if (String(step.uses ?? "").startsWith("actions/setup-node@")) {
+          assert.equal(step.uses, `actions/setup-node@${SETUP_NODE_NODE24_SHA}`, path);
+        }
+      }
+    }
+  }
+});
+
 test("release workflow is manual, read-only, approved, and runs on Apple Silicon", () => {
   const valid = readFileSync(
     new URL("../../.github/workflows/release-gate.yml", import.meta.url),
@@ -265,6 +292,7 @@ test("trusted policy workflow is an exact base-only machine contract", () => {
     new URL("../../.github/workflows/trusted-policy.yml", import.meta.url),
     "utf8",
   );
+  assert.match(valid, /package-manager-cache: false/);
   assert.deepEqual(validateTrustedPolicyWorkflowPolicy(valid), []);
 
   for (const [label, mutation] of [
@@ -275,6 +303,7 @@ test("trusted policy workflow is an exact base-only machine contract", () => {
     ["remove edited trigger", valid.replace(", edited,", ",")],
     ["restore Checks API write access", valid.replace("  pull-requests: read", "  pull-requests: read\n  checks: write")],
     ["rename the native required job", valid.replace("    name: Trusted policy / guard", "    name: dispatch")],
+    ["restore implicit package-manager caching", valid.replace("          package-manager-cache: false\n", "")],
   ]) {
     assert.ok(
       validateTrustedPolicyWorkflowPolicy(mutation).includes(
@@ -425,14 +454,8 @@ test("every dependency-consuming workflow rejects shrinkwrap and nested Cargo co
   }
 });
 
-test("repository automation policy requires both scheduled workflows and weekly npm/Cargo updates", () => {
-  const workflowPaths = [
-    ".github/workflows/ci.yml",
-    ".github/workflows/release-gate.yml",
-    ".github/workflows/security-audit.yml",
-    ".github/workflows/trusted-policy.yml",
-    ".github/workflows/weekly-resilience.yml",
-  ];
+test("repository automation policy requires scheduled workflows and bounded weekly dependency updates", () => {
+  const workflowPaths = WORKFLOW_PATHS;
   const dependabot = `
 version: 2
 updates:
@@ -442,6 +465,20 @@ updates:
   - package-ecosystem: cargo
     directory: /src-tauri
     schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 2
+    labels: [dependencies, ci]
+    groups:
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: [version-update:semver-major]
 `;
   assert.deepEqual(
     validateRepositoryAutomationPolicy({ workflowPaths, dependabotContents: dependabot }),
@@ -455,6 +492,7 @@ updates:
   assert.ok(errors.some((error) => error.includes("weekly-resilience.yml")));
   assert.ok(errors.some((error) => error.includes("npm / weekly")));
   assert.ok(errors.some((error) => error.includes("cargo /src-tauri weekly")));
+  assert.ok(errors.some((error) => error.includes("github-actions / weekly")));
   assert.deepEqual(
     validateRepositoryAutomationPolicy({
       workflowPaths: [...workflowPaths, ".github/workflows/backdoor.yml"],
@@ -462,4 +500,28 @@ updates:
     }),
     ["unregistered automation file is forbidden: .github/workflows/backdoor.yml"],
   );
+
+  const actualDependabot = readFileSync(
+    new URL("../../.github/dependabot.yml", import.meta.url),
+    "utf8",
+  );
+  assert.deepEqual(
+    validateRepositoryAutomationPolicy({ workflowPaths, dependabotContents: actualDependabot }),
+    [],
+  );
+  for (const mutation of [
+    dependabot.replace("open-pull-requests-limit: 2", "open-pull-requests-limit: 3"),
+    dependabot.replace("labels: [dependencies, ci]", "labels: [dependencies]"),
+    dependabot.replace("update-types: [minor, patch]", "update-types: [major, minor, patch]"),
+    dependabot.replace(
+      "        update-types: [version-update:semver-major]\n",
+      "",
+    ),
+  ]) {
+    assert.ok(
+      validateRepositoryAutomationPolicy({ workflowPaths, dependabotContents: mutation }).some(
+        (error) => error.includes("github-actions / weekly"),
+      ),
+    );
+  }
 });
