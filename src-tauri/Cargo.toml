@@ -25,7 +25,7 @@ dirs = "6"
 hex = "0.4"
 keyring = { version = "3", features = ["apple-native"] }
 libc = "0.2"
-opener = "0.7"
+opener = "0.8"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 rusqlite = { version = "0.32", features = ["bundled", "chrono"] }
 serde = { version = "1", features = ["derive"] }
