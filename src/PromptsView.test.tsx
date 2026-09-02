@@ -213,7 +213,11 @@ describe("PromptsView", () => {
 
   it("keeps card actions isolated and opens details read-only before editing", async () => {
     const user = userEvent.setup();
-    const client = api();
+    const refresh = deferred<PromptPage>();
+    const listPrompts = vi.fn()
+      .mockResolvedValueOnce(page())
+      .mockImplementationOnce(() => refresh.promise);
+    const client = api({ listPrompts });
     const copyText = vi.fn().mockResolvedValue(undefined);
     render(<PromptsView api={client} copyText={copyText} language="zh" />);
 
@@ -228,7 +232,17 @@ describe("PromptsView", () => {
     expect(client.setPromptPinned).toHaveBeenCalledWith("prompt-one", 3, false);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
-    await user.click(card);
+    await waitFor(() => expect(listPrompts).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(card).not.toBeInTheDocument());
+    await act(async () => {
+      refresh.resolve(page([
+        { ...summaries[0], pinned: false, revision: 4 },
+        summaries[1],
+      ]));
+    });
+
+    const refreshedCard = await screen.findByRole("article", { name: "深度研究问题拆解" });
+    await user.click(refreshedCard);
     const drawer = await screen.findByRole("dialog", { name: "深度研究问题拆解" });
     expect(within(drawer).queryByRole("textbox", { name: "正文" })).not.toBeInTheDocument();
     expect(within(drawer).getByText("工作步骤")).toBeInTheDocument();
