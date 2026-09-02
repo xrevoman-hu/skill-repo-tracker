@@ -82,6 +82,7 @@ test("governance tools cannot regress to newline-delimited Git path inventories"
     "../governance-assets-check.mjs",
     "../check-coverage.mjs",
     "../governance-context.mjs",
+    "../git-paths-core.mjs",
   ]) {
     const source = readFileSync(new URL(pathname, import.meta.url), "utf8");
     assert.deepEqual(findUnsafeGitPathInventory(pathname, source), [], pathname);

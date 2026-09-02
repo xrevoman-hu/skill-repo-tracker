@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "risks": [
+    {
+      "id": "RISK-2026-001",
+      "status": "active",
+      "ecosystem": "cargo",
+      "package": {
+        "name": "glib",
+        "version": "0.18.5",
+        "source": "registry+https://github.com/rust-lang/crates.io-index"
+      },
+      "advisory": "RUSTSEC-2024-0429",
+      "warningKind": "unsound",
+      "affectedTargets": [
+        "aarch64-unknown-linux-gnu",
+        "x86_64-unknown-linux-gnu"
+      ],
+      "owner": "xrevoman-hu",
+      "createdOn": "2026-09-02",
+      "reviewOn": "2026-12-01",
+      "reason": "The affected glib release is reachable only through the existing Linux GTK and WebKitGTK dependency graph, which is not distributed by the Apple Silicon product.",
+      "exitCondition": "Upgrade the Tauri, wry, and GTK dependency graph so glib is absent or at least 0.20.0 on every audited target.",
+      "reviewTriggers": [
+        "linux-distribution-support",
+        "tauri-wry-gtk-dependency-change"
+      ]
+    }
+  ]
+}

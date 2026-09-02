@@ -134,7 +134,8 @@ PR 只声明实际验证过的层；Release 继续通过 local manifest 与 remo
 - published fixture 只允许追加新版本，不重写历史版本。
 - 产品表面积按 active -> retiring(reason) -> 后续 PR 删除，新增实体必须从 active 开始。
 - 临时 test waiver 只允许 tracked ledger 中最长 30 天的 active ID，并且只能隔离独立 lane；
-  active scope 不可改写，过期即失败，retired tombstone 永久保留，主测试仍禁止 skip。
+  active scope 不可改写，过期即失败，retired tombstone 永久保留，主测试仍禁止 skip；依赖风险
+  active 最长 90 天且不可延期，只能退休后另建 ID。
 - 删除兼容逻辑时同步删除对应状态、分支、测试和文档；测试若仍保护跨实现不变量则保留。
 - 防腐工具也属于代码：新治理模块上限 800 行，既有热点只能拆分和下降。
 

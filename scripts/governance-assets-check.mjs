@@ -18,6 +18,7 @@ import {
 import { checkRepositorySurfaceBudget } from "./surface-budget.mjs";
 import { checkRepositoryModuleMap, MODULE_MAP_PATH } from "./module-map.mjs";
 import { gitPathExistsAtRef, listRepositoryFiles } from "./git-paths.mjs";
+import { checkRepositoryDependencyRisks } from "./dependency-risk.mjs";
 
 export const GOVERNANCE_ASSET_PATH = "docs/engineering/governance-assets.json";
 const SURFACE_BUDGET_PATH = "docs/engineering/surface-budget.json";
@@ -71,6 +72,7 @@ export function checkGovernanceAssets(
       }
     },
   });
+  errors.push(...checkRepositoryDependencyRisks(root, { baseRef }));
   const pullRequestTemplate = join(root, ".github/pull_request_template.md");
   errors.push(
     ...(existsSync(pullRequestTemplate)

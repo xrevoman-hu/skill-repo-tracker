@@ -341,10 +341,17 @@ test("security audit workflow keeps registry and Cargo audits fail-closed and sc
       ),
     ],
     [
-      "mask Cargo audit failure",
+      "mask dependency risk audit failure",
       valid.replace(
+        "run: node scripts/dependency-risk.mjs audit",
+        "run: node scripts/dependency-risk.mjs audit || true",
+      ),
+    ],
+    [
+      "bypass the ledger with raw cargo audit",
+      valid.replace(
+        "run: node scripts/dependency-risk.mjs audit",
         "run: cargo audit --file src-tauri/Cargo.lock",
-        "run: cargo audit --file src-tauri/Cargo.lock || true",
       ),
     ],
     [
