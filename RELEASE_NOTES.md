@@ -1,5 +1,19 @@
 # Release Notes
 
+## v1.2.5 - 可执行治理与安全边界收口
+
+这个补丁版不新增产品功能，而是把架构、Rules、ADR、高风险不变量和发布实物合同收敛成可跟随 Git 演进、可在本地与 GitHub 上自动执行的治理体系。
+
+- `npm run verify` 继续作为唯一确定性入口；变更路径会选出应复审的 Rule、ADR 和 Invariant，架构、模块、表面积与验证计划预算会阻止新腐化。
+- `main` 现在精确要求 `verify`、`coverage`、`msrv` 和 `Trusted policy / guard` 四项检查；治理关键路径必须在当前 PR head 上完成审查，新 push 会使旧标签证据失效。
+- GitHub 治理检查器只精确识别 GitHub 托管的 `Dependabot Updates` 动态 workflow；未知动态 workflow、缺失路径或未知状态仍然 fail closed。
+- Keychain service/account 限定在既有 namespace；CSP 固定 `form-action 'none'`，Tauri capability 只保留实际使用的 event/window 权限，外部导航只允许无凭据、无端口的 `https://github.com` URL，GitHub HTTP 只允许 HTTPS 且不继承环境代理。
+- 统一发布事实链分别核对本地 commit、annotated tag、GitHub Release、远程 digest 和重新下载的 DMG，绿色源码检查不再被误当作已发布完成。
+- 本版不改变 SQLite schema、设置、后台状态或系统权限；v1.2.4 的 Skill canonical/legacy hash 与源码 ZIP 120 秒修复保持原样，不作为本版新功能重复计入。
+- Apple Silicon 安装包继续采用 ad-hoc 签名，不是 Developer ID 签名，也没有经过 Apple notarization；首次打开若被 macOS 拦截，请在 Finder 中按住 Control 点击 App 并选择“打开”，或在“系统设置 -> 隐私与安全性”中选择“仍要打开”。
+
+English summary: v1.2.5 adds no product feature. It makes the tracked architecture, Rules, ADRs, invariants, budgets, and release artifact contract executable; activates four exact `main` checks (`verify`, `coverage`, `msrv`, and `Trusted policy / guard`); recognizes only GitHub's exact managed Dependabot workflow tuple while unknown workflows still fail closed; and tightens the existing Keychain namespace, CSP, minimal Tauri capability, external GitHub navigation, and HTTPS-only transport boundaries. The release chain now verifies the exact commit, annotated tag, GitHub Release metadata, digest, and freshly downloaded DMG. The v1.2.4 Skill digest and 120-second source-ZIP fixes remain unchanged and are not presented as v1.2.5 features. The Apple Silicon package remains ad-hoc signed, not Developer ID signed, and not Apple notarized. If macOS blocks the first launch, Control-click the app in Finder and choose Open, or use System Settings -> Privacy & Security -> Open Anyway.
+
 ## v1.2.4 - Skill 更新哈希兼容与大 ZIP 读取修复
 
 这个补丁版修复了少数 Skill 在远端目录同时包含同名词干的文件和子目录时，下载 ZIP 与临时落盘目录会采用不同排序语义、从而导致更新校验失败的问题；同时修复较大源码 ZIP 被普通 GitHub API 的 30 秒预算过早中断的问题。
