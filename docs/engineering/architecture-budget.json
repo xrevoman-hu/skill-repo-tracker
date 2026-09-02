@@ -1,40 +1,99 @@
 {
   "newModuleMaxLines": 800,
+  "maxLineBytes": 800,
+  "newModuleMaxBytes": 65536,
   "hotSpots": {
     "src/App.tsx": {
+      "status": "active",
       "maxLines": 6679,
+      "maxBytes": 249254,
       "targetLines": 700,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
     "src/PromptsView.tsx": {
+      "status": "active",
       "maxLines": 2646,
+      "maxBytes": 110831,
       "targetLines": 800,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
+    "src/styles.css": {
+      "status": "active",
+      "maxLines": 2870,
+      "maxBytes": 51179,
+      "targetLines": 800,
+      "adr": "docs/adr/0008-executable-governance-assets.md"
+    },
+    "src/prompts.css": {
+      "status": "active",
+      "maxLines": 1592,
+      "maxBytes": 32384,
+      "targetLines": 800,
+      "adr": "docs/adr/0008-executable-governance-assets.md"
+    },
     "src-tauri/src/lib.rs": {
+      "status": "active",
       "maxLines": 10604,
+      "maxBytes": 359880,
       "targetLines": 500,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
     "src-tauri/src/prompts.rs": {
+      "status": "active",
       "maxLines": 3689,
+      "maxBytes": 129446,
       "targetLines": 800,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
     "src-tauri/src/prompt_zip.rs": {
+      "status": "active",
       "maxLines": 3399,
+      "maxBytes": 119699,
       "targetLines": 800,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
     "src-tauri/src/prompt_migration.rs": {
+      "status": "active",
       "maxLines": 3153,
+      "maxBytes": 109364,
       "targetLines": 800,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
     "src-tauri/src/temp_artifacts.rs": {
+      "status": "active",
       "maxLines": 1860,
+      "maxBytes": 67088,
       "targetLines": 800,
       "adr": "docs/adr/0007-staged-modularization.md"
+    }
+  },
+  "tooling": {
+    "newModuleMaxLines": 800,
+    "maxLineBytes": 800,
+    "newModuleMaxBytes": 65536,
+    "standalone": {},
+    "hotSpots": {
+      "scripts/governance.mjs": {
+        "status": "active",
+      "maxLines": 1382,
+      "maxBytes": 49139,
+        "targetLines": 1200,
+        "adr": "docs/adr/0008-executable-governance-assets.md"
+      }
+    },
+    "tests": {
+      "newModuleMaxLines": 800,
+      "maxLineBytes": 800,
+      "newModuleMaxBytes": 65536,
+      "hotSpots": {},
+      "runner": {
+        "rustAllowedCfg": [
+          "debug_assertions",
+          "target_os=\"macos\"",
+          "test",
+          "unix"
+        ]
+      }
     }
   },
   "bundle": {

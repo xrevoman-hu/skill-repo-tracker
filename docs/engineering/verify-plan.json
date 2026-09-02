@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 1,
+  "steps": [
+    {
+      "id": "scripts",
+      "label": "治理脚本测试",
+      "command": "npm",
+      "args": ["run", "test:scripts"],
+      "capabilities": ["governance-script-regressions"],
+      "status": "active"
+    },
+    {
+      "id": "governance",
+      "label": "版本、边界、治理资产与架构预算",
+      "command": "node",
+      "args": ["scripts/governance.mjs", "all"],
+      "capabilities": ["repository-governance"],
+      "status": "active"
+    },
+    {
+      "id": "typecheck",
+      "label": "TypeScript 全量检查",
+      "command": "npm",
+      "args": ["run", "typecheck"],
+      "capabilities": ["typescript-type-safety"],
+      "status": "active"
+    },
+    {
+      "id": "strict-islands",
+      "label": "TypeScript strict islands",
+      "command": "npm",
+      "args": ["run", "typecheck:strict-islands"],
+      "capabilities": ["typescript-strict-safety"],
+      "status": "active"
+    },
+    {
+      "id": "vitest",
+      "label": "Vitest 全量测试",
+      "command": "npm",
+      "args": ["test"],
+      "capabilities": ["frontend-unit-regressions"],
+      "status": "active"
+    },
+    {
+      "id": "vite-build",
+      "label": "Vite 生产构建",
+      "command": "npm",
+      "args": ["run", "build"],
+      "capabilities": ["frontend-production-build"],
+      "status": "active"
+    },
+    {
+      "id": "bundle-budget",
+      "label": "前端包体预算",
+      "command": "node",
+      "args": ["scripts/governance.mjs", "bundle"],
+      "capabilities": ["frontend-bundle-budget"],
+      "status": "active"
+    },
+    {
+      "id": "rust-fmt",
+      "label": "Rust 格式",
+      "command": "cargo",
+      "args": ["fmt", "--check", "--manifest-path", "src-tauri/Cargo.toml"],
+      "capabilities": ["rust-format"],
+      "status": "active"
+    },
+    {
+      "id": "rust-clippy",
+      "label": "Rust Clippy",
+      "command": "cargo",
+      "args": [
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "capabilities": ["rust-lint"],
+      "status": "active"
+    },
+    {
+      "id": "rust-tests",
+      "label": "Rust 全量测试",
+      "command": "cargo",
+      "args": [
+        "test",
+        "--locked",
+        "--manifest-path",
+        "src-tauri/Cargo.toml",
+        "--all-features"
+      ],
+      "capabilities": ["rust-regressions"],
+      "status": "active"
+    },
+    {
+      "id": "git-diff",
+      "label": "Git 空白错误",
+      "command": "node",
+      "args": ["scripts/check-diff.mjs"],
+      "capabilities": ["whitespace-integrity"],
+      "status": "active"
+    }
+  ]
+}

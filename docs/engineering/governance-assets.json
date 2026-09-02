@@ -1,0 +1,1147 @@
+{
+  "schemaVersion": 1,
+  "contextBudgets": {
+    "default": { "maxLines": 180, "maxBytes": 14000 },
+    "alwaysLoad": { "maxLines": 160, "maxBytes": 12000 },
+    "hotspots": [
+      {
+        "path": "docs/engineering/maintainability-system.md",
+        "maxLines": 163,
+        "maxBytes": 11241,
+        "reason": "initial executable-governance playbook baseline; split by concern before adding more guidance"
+      }
+    ]
+  },
+  "principles": [
+    { "id": 1, "name": "架构、分层与依赖方向" },
+    { "id": 2, "name": "高风险不变量与回归测试" },
+    { "id": 3, "name": "Bug 复现、根因、同类扫描与沉淀" },
+    { "id": 4, "name": "模块化 Rules、ADR 与上下文选择" },
+    { "id": 5, "name": "功能、状态、权限与常驻成本克制" },
+    { "id": 6, "name": "GitHub 自动化与远端保护" },
+    { "id": 7, "name": "AI 自动验证、分层验收与资产退休" }
+  ],
+  "gates": [
+    { "id": "verify", "status": "active", "kind": "package-script", "ref": "verify", "capabilities": ["deterministic-repository-verification"] },
+    { "id": "coverage", "status": "active", "kind": "package-script", "ref": "coverage:check", "capabilities": ["frontend-coverage-non-regression", "rust-coverage-non-regression"] },
+    { "id": "e2e", "status": "active", "kind": "package-script", "ref": "test:e2e", "capabilities": ["browser-ui-regressions"] },
+    { "id": "github-governance", "status": "active", "kind": "package-script", "ref": "github:governance:check", "capabilities": ["remote-governance-state"] },
+    { "id": "release", "status": "active", "kind": "package-script", "ref": "release:verify", "capabilities": ["local-artifact-contract", "remote-artifact-contract"] },
+    { "id": "ci", "status": "active", "kind": "workflow", "ref": ".github/workflows/ci.yml", "capabilities": ["clean-runner-verify", "clean-runner-coverage", "clean-runner-msrv"] },
+    { "id": "trusted-policy", "status": "active", "kind": "workflow", "ref": ".github/workflows/trusted-policy.yml", "capabilities": ["base-sourced-policy-review"] },
+    { "id": "weekly", "status": "active", "kind": "workflow", "ref": ".github/workflows/weekly-resilience.yml", "capabilities": ["flaky-repetition", "release-performance"] },
+    { "id": "security", "status": "active", "kind": "workflow", "ref": ".github/workflows/security-audit.yml", "capabilities": ["npm-security-audit", "cargo-security-audit"] }
+  ],
+  "assets": [
+    {
+      "id": "shared-glossary",
+      "kind": "glossary",
+      "path": "CONTEXT.md",
+      "status": "active",
+      "principles": [1, 3, 4, 7],
+      "alwaysLoad": true,
+      "enforcement": { "mode": "review", "gates": [], "evidence": [] }
+    },
+    {
+      "id": "maintainability-system",
+      "kind": "playbook",
+      "path": "docs/engineering/maintainability-system.md",
+      "status": "active",
+      "principles": [1, 2, 3, 4, 5, 6, 7],
+      "alwaysLoad": true,
+      "enforcement": { "mode": "review", "gates": [], "evidence": [] }
+    },
+    {
+      "id": "governance-catalog",
+      "kind": "policy",
+      "path": "docs/engineering/governance-assets.json",
+      "status": "active",
+      "principles": [1, 2, 3, 4, 5, 6, 7],
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/governance-assets.test.mjs",
+            "selector": "every tracked Rule and ADR must be indexed exactly once"
+          },
+          {
+            "path": "scripts/__tests__/governance-assets.test.mjs",
+            "selector": "principle names and required global context assets cannot be rewritten or weakened"
+          },
+          {
+            "path": "scripts/__tests__/governance-assets-lifecycle.test.mjs",
+            "selector": "retiring invariants remain append-only tombstones across path moves and replacements"
+          },
+          {
+            "path": "scripts/__tests__/governance-assets-lifecycle.test.mjs",
+            "selector": "asset replacement chains are acyclic, terminate active, and cover every old asset"
+          },
+          {
+            "path": "scripts/__tests__/governance-assets-lifecycle.test.mjs",
+            "selector": "superseded records are immutable while a later replacement may extend the complete chain"
+          },
+          {
+            "path": "scripts/__tests__/governance-assets.test.mjs",
+            "selector": "fixture checksums hash raw bytes before any UTF-8 evidence decoding"
+          },
+          {
+            "path": "scripts/__tests__/governance-assets.test.mjs",
+            "selector": "human context budgets are executable, globally tighter, and cannot grow against base"
+          },
+          {
+            "path": "scripts/__tests__/governance-assets.test.mjs",
+            "selector": "declared gates must transitively execute each evidence runner"
+          }
+        ]
+      }
+    },
+    {
+      "id": "architecture-fact-source",
+      "kind": "architecture",
+      "path": "docs/engineering/architecture.md",
+      "status": "active",
+      "principles": [1, 4, 5, 7],
+      "alwaysLoad": true,
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/governance-security.test.mjs",
+            "selector": "architecture snapshot is exact for hotspots and enforces the 800-line new-module cap"
+          }
+        ]
+      }
+    },
+    {
+      "id": "architecture-budget",
+      "kind": "budget",
+      "path": "docs/engineering/architecture-budget.json",
+      "status": "active",
+      "principles": [1, 5, 7],
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/governance-security.test.mjs",
+            "selector": "architecture hotspot targets cannot be raised or silently removed"
+          },
+          {
+            "path": "scripts/__tests__/line-budgets.test.mjs",
+            "selector": "tooling budgets cannot grow, disappear, or bless a new hotspot"
+          }
+        ]
+      }
+    },
+    {
+      "id": "module-map",
+      "kind": "architecture",
+      "path": "docs/engineering/module-map.json",
+      "status": "active",
+      "principles": [1, 3, 4, 5, 7],
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/module-map.test.mjs",
+            "selector": "a new unowned production file fails closed"
+          },
+          {
+            "path": "scripts/__tests__/module-map.test.mjs",
+            "selector": "a forbidden dependency edge fails with the source and target modules"
+          }
+        ]
+      }
+    },
+    {
+      "id": "verify-plan",
+      "kind": "policy",
+      "path": "docs/engineering/verify-plan.json",
+      "status": "active",
+      "principles": [2, 3, 4, 6, 7],
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/verify-plan.test.mjs",
+            "selector": "a base verify step cannot be deleted, reordered, or silently rewritten"
+          }
+        ]
+      }
+    },
+    {
+      "id": "surface-budget",
+      "kind": "budget",
+      "path": "docs/engineering/surface-budget.json",
+      "status": "active",
+      "principles": [1, 3, 4, 5, 7],
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["verify", "security", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/surface-budget.test.mjs",
+            "selector": "the checked-in surface budget matches the production repository"
+          },
+          {
+            "path": "scripts/__tests__/surface-budget-keychain.test.mjs",
+            "selector": "the checked-in Keychain adapter matches the exact namespace contract"
+          },
+          {
+            "path": "scripts/__tests__/surface-budget-runtime-inputs.test.mjs",
+            "selector": "the checked-in runtime input surface matches every live query and environment key"
+          }
+        ]
+      }
+    },
+    {
+      "id": "test-waiver-ledger",
+      "kind": "budget",
+      "path": "docs/engineering/test-waivers.json",
+      "status": "active",
+      "principles": [2, 3, 5, 7],
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/test-waivers.test.mjs",
+            "selector": "test waiver ledger rejects unknown fields, main lanes, and expired active entries"
+          },
+          {
+            "path": "scripts/__tests__/test-waivers.test.mjs",
+            "selector": "active test waivers may retire without weakening their immutable scope"
+          },
+          {
+            "path": "scripts/__tests__/test-waivers.test.mjs",
+            "selector": "retired test waiver tombstones cannot be deleted, reactivated, or rewritten"
+          },
+          {
+            "path": "scripts/__tests__/test-waivers.test.mjs",
+            "selector": "repository waiver checker validates the current tracked ledger"
+          }
+        ]
+      }
+    },
+    {
+      "id": "coverage-baseline",
+      "kind": "budget",
+      "path": "docs/engineering/coverage-baseline.json",
+      "status": "active",
+      "principles": [2, 3, 7],
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["coverage", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/coverage-policy.test.mjs",
+            "selector": "coverage baseline documents fail closed when a metric is absent"
+          }
+        ]
+      }
+    },
+    {
+      "id": "github-governance-policy",
+      "kind": "policy",
+      "path": "docs/engineering/github-governance.md",
+      "status": "active",
+      "principles": [6, 7],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["github-governance", "ci", "trusted-policy"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/github-governance-check.test.mjs",
+            "selector": "accepts an active main ruleset with every required protection"
+          },
+          {
+            "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+            "selector": "trusted default-branch script publishes success on the exact PR head"
+          },
+          {
+            "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+            "selector": "trusted workflow executes only base code and grants only the required write scope"
+          },
+          {
+            "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+            "selector": "governance evidence assertion changes require a fresh governance-reviewed label"
+          },
+          {
+            "path": "scripts/__tests__/github-governance-check.test.mjs",
+            "selector": "main remains mergeable for one maintainer and has no stale or duplicate required checks"
+          },
+          {
+            "path": "scripts/__tests__/github-governance-check.test.mjs",
+            "selector": "unregistered active workflows cannot publish releases or spoof required checks"
+          }
+        ]
+      }
+    },
+    {
+      "id": "contribution-contract",
+      "kind": "policy",
+      "path": "CONTRIBUTING.md",
+      "status": "active",
+      "principles": [3, 4, 5, 7],
+      "alwaysLoad": true,
+      "enforcement": { "mode": "review", "gates": [], "evidence": [] }
+    },
+    {
+      "id": "security-policy",
+      "kind": "policy",
+      "path": "SECURITY.md",
+      "status": "active",
+      "principles": [4, 5, 7],
+      "enforcement": { "mode": "review", "gates": ["security"], "evidence": [] }
+    },
+    {
+      "id": "pr-evidence-template",
+      "kind": "template",
+      "path": ".github/pull_request_template.md",
+      "status": "active",
+      "principles": [3, 4, 5, 7],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/governance-assets.test.mjs",
+            "selector": "the PR template keeps the Bug learning and cost-budget evidence fields"
+          },
+          {
+            "path": "scripts/__tests__/pr-evidence.test.mjs",
+            "selector": "Bug classification requires regression, root cause, scan paths, and conclusion"
+          },
+          {
+            "path": "scripts/__tests__/pr-evidence.test.mjs",
+            "selector": "every owning Rule and ADR asset selected from changed paths must be named by stable ID"
+          },
+          {
+            "path": "scripts/__tests__/pr-evidence.test.mjs",
+            "selector": "independent lane evidence is mutually exclusive and sensitive material confirmation is required"
+          },
+          {
+            "path": "scripts/__tests__/pr-evidence.test.mjs",
+            "selector": "skip or flaky debt accepts only one active tracked waiver ID"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rule-data-security",
+      "kind": "rule",
+      "path": "docs/rules/data-security.md",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "reviewOnChange": [
+        "src-tauri/src/database.rs",
+        "src-tauri/src/github_accounts.rs",
+        "src-tauri/src/prompt_migration.rs",
+        "src-tauri/src/prompt_zip.rs",
+        "src-tauri/src/backups.rs",
+        "src-tauri/src/backup_fs.rs"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "coverage", "ci"],
+        "evidence": [
+          {
+            "path": "src-tauri/src/github_accounts_tests.rs",
+            "selector": "save_database_late_failure_restores_the_previous_secret_and_database"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rule-permissions",
+      "kind": "rule",
+      "path": "docs/rules/permissions.md",
+      "status": "active",
+      "principles": [1, 4, 5, 7],
+      "reviewOnChange": [
+        "src/api.ts",
+        "src/appService.ts",
+        "src-tauri/Cargo.toml",
+        "src-tauri/src/",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/adapters.rs",
+        "src-tauri/src/github_transport.rs",
+        "src-tauri/capabilities/",
+        "src-tauri/entitlements.plist",
+        "src-tauri/tauri.conf.json",
+        "docs/engineering/surface-budget.json",
+        "scripts/surface-budget.mjs",
+        "scripts/surface-budget-cargo.mjs",
+        "scripts/surface-budget-entitlements.mjs",
+        "scripts/surface-budget-keychain.mjs",
+        "scripts/surface-budget-runtime-inputs.mjs",
+        "scripts/surface-budget-rust.mjs",
+        "scripts/surface-budget-tauri.mjs",
+        "scripts/surface-budget-typescript.mjs"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "security", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/governance-security.test.mjs",
+            "selector": "frontend runtime policy keeps network and Tauri invoke behind governed adapters"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rule-prompts",
+      "kind": "rule",
+      "path": "docs/rules/prompts.md",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "reviewOnChange": [
+        "src/PromptsView.tsx",
+        "src/promptLibraryAdapter.ts",
+        "src-tauri/src/prompts.rs",
+        "src-tauri/src/prompt_search.rs",
+        "src-tauri/src/prompt_zip.rs",
+        "src-tauri/src/prompt_migration.rs"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "coverage", "weekly", "release"],
+        "evidence": [
+          {
+            "path": "src-tauri/src/lib_tests.rs",
+            "selector": "production_v2_import_rolls_back_embedded_v1_when_prompt_write_fails"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rule-scheduling",
+      "kind": "rule",
+      "path": "docs/rules/scheduling.md",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "reviewOnChange": [
+        "docs/engineering/surface-budget.json",
+        "scripts/surface-budget-rust.mjs",
+        "scripts/surface-budget.mjs",
+        "src/taskCoordinator.ts",
+        "src/workspaceController.ts",
+        "src/App.tsx",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/prompt_search.rs"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "coverage", "weekly", "ci", "release"],
+        "evidence": [
+          {
+            "path": "src/taskCoordinator.test.ts",
+            "selector": "does not publish a late result after its generation is invalidated"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rule-sync-filesystem",
+      "kind": "rule",
+      "path": "docs/rules/sync-filesystem.md",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "reviewOnChange": [
+        "src/skillConflictRefresh.ts",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/skill_hash.rs",
+        "src-tauri/src/backups.rs",
+        "src-tauri/src/backup_fs.rs",
+        "src-tauri/src/backup_paths.rs",
+        "src-tauri/src/temp_artifacts.rs"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "coverage", "weekly", "release"],
+        "evidence": [
+          {
+            "path": "src-tauri/src/backups_tests.rs",
+            "selector": "ownership_drift_never_writes_to_or_deletes_a_replacement_directory"
+          }
+        ]
+      }
+    },
+    {
+      "id": "rule-testing-release",
+      "kind": "rule",
+      "path": "docs/rules/testing-release.md",
+      "status": "active",
+      "principles": [2, 3, 4, 6, 7],
+      "reviewOnChange": [
+        "scripts/",
+        ".github/workflows/",
+        "e2e/",
+        "playwright.config.ts",
+        "package.json",
+        "package-lock.json",
+        "index.html",
+        "tsconfig.json",
+        "vite.config.mjs",
+        "vitest.config.ts",
+        "src-tauri/Cargo.toml",
+        "src-tauri/Cargo.lock",
+        "docs/engineering/test-waivers.json",
+        "docs/macos-release-checklist.md"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "coverage", "e2e", "weekly", "release", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/release-verify.test.mjs",
+            "selector": "remote verification isolates the authoritative annotated tag and rejects rewrites"
+          },
+          {
+            "path": "e2e/demo-governance.spec.ts",
+            "selector": "DemoAppService 支撑设置与仓库只读关键流且不访问外部服务"
+          }
+        ]
+      }
+    },
+    {
+      "id": "adr-0001-sqlite-keychain",
+      "kind": "decision",
+      "path": "docs/adr/0001-sqlite-keychain-boundary.md",
+      "status": "active",
+      "checksum": "sha256:3f787ebf7d120a26f72a95e67552557013a628ed556d5c2974229f6097d4ec19",
+      "principles": [1, 2, 4, 5, 7],
+      "reviewOnChange": ["src-tauri/src/database.rs", "src-tauri/src/github_accounts.rs"],
+      "enforcement": { "mode": "review", "gates": [], "evidence": [] }
+    },
+    {
+      "id": "adr-0002-skill-library",
+      "kind": "decision",
+      "path": "docs/adr/0002-skill-library-and-safe-deletion.md",
+      "status": "active",
+      "checksum": "sha256:50601b44e47abcfe200e6f547a24e98803911a4ab21db333015792d02aa65333",
+      "principles": [1, 2, 4, 5],
+      "reviewOnChange": ["src-tauri/src/lib.rs", "src/skillConflictRefresh.ts"],
+      "enforcement": { "mode": "review", "gates": [], "evidence": [] }
+    },
+    {
+      "id": "adr-0003-atomic-replacement",
+      "kind": "decision",
+      "path": "docs/adr/0003-locking-and-atomic-replacement.md",
+      "status": "active",
+      "checksum": "sha256:72cd794ce5f985a305bb0afe0e34b473948a82a56593a583df910dcb7b1781f9",
+      "principles": [1, 2, 3, 4, 5, 7],
+      "reviewOnChange": [
+        "src-tauri/src/backups.rs",
+        "src-tauri/src/backup_fs.rs",
+        "src-tauri/src/backup_paths.rs",
+        "src-tauri/src/temp_artifacts.rs"
+      ],
+      "enforcement": { "mode": "review", "gates": [], "evidence": [] }
+    },
+    {
+      "id": "adr-0004-foreground-scheduling",
+      "kind": "decision",
+      "path": "docs/adr/0004-foreground-scheduling.md",
+      "status": "active",
+      "checksum": "sha256:9b32038254db899747a172fe7994cb626bd792e66781c8a773a93c2761bb9354",
+      "principles": [1, 2, 4, 5],
+      "reviewOnChange": ["src/taskCoordinator.ts", "src/workspaceController.ts", "src/App.tsx"],
+      "enforcement": { "mode": "review", "gates": [], "evidence": [] }
+    },
+    {
+      "id": "adr-0005-prompt-domains",
+      "kind": "decision",
+      "path": "docs/adr/0005-prompt-export-and-migration.md",
+      "status": "active",
+      "checksum": "sha256:b646895b95ca40386c09a4c0dab97f74889fdddbb9cb1c8ef794e2fbc0157bb9",
+      "principles": [1, 2, 4, 5],
+      "reviewOnChange": [
+        "src-tauri/src/prompts.rs",
+        "src-tauri/src/prompt_zip.rs",
+        "src-tauri/src/prompt_migration.rs"
+      ],
+      "enforcement": { "mode": "review", "gates": [], "evidence": [] }
+    },
+    {
+      "id": "adr-0006-permission-budget",
+      "kind": "decision",
+      "path": "docs/adr/0006-path-and-permission-budget.md",
+      "status": "active",
+      "checksum": "sha256:f75964b30ab7b418bb85ac1ace36a41ed15cca2d9b7b2caa7efc4a9e5193abfc",
+      "principles": [1, 2, 4, 5],
+      "reviewOnChange": [
+        "src/api.ts",
+        "src-tauri/src/lib.rs",
+        "src-tauri/capabilities/",
+        "src-tauri/entitlements.plist",
+        "src-tauri/tauri.conf.json"
+      ],
+      "enforcement": { "mode": "review", "gates": [], "evidence": [] }
+    },
+    {
+      "id": "adr-0007-modularization",
+      "kind": "decision",
+      "path": "docs/adr/0007-staged-modularization.md",
+      "status": "active",
+      "checksum": "sha256:d119e952d23e05cd05d27df0b9278d9a3c6bd5c506ef6f829c91f82e9d7b025b",
+      "principles": [1, 2, 4, 5, 7],
+      "reviewOnChange": [
+        "src/App.tsx",
+        "src/PromptsView.tsx",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/prompts.rs",
+        "docs/engineering/architecture-budget.json"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/governance-security.test.mjs",
+            "selector": "architecture budgets cannot bless a new oversized module as a hotspot"
+          }
+        ]
+      }
+    },
+    {
+      "id": "adr-0008-executable-governance",
+      "kind": "decision",
+      "path": "docs/adr/0008-executable-governance-assets.md",
+      "status": "active",
+      "checksum": "sha256:4c1c1b277e777964c2e96dff7a7d1a06c7a82b60dc9ffa48692876fd7b21b7d0",
+      "principles": [1, 2, 3, 4, 5, 6, 7],
+      "reviewOnChange": [
+        "CONTEXT.md",
+        "docs/engineering/governance-assets.json",
+        "docs/engineering/maintainability-system.md",
+        "docs/engineering/surface-budget.json",
+        "docs/engineering/verify-plan.json",
+        "scripts/architecture-budget-checks.mjs",
+        "scripts/governance-assets-check.mjs",
+        "scripts/governance-assets.mjs",
+        "scripts/line-budgets.mjs",
+        "scripts/pr-evidence.mjs",
+        "scripts/surface-budget.mjs",
+        "scripts/verify-plan.mjs",
+        "scripts/verify.mjs",
+        "scripts/governance.mjs"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/verify-plan.test.mjs",
+            "selector": "the deterministic verify plan keeps every fail-closed step in order"
+          }
+        ]
+      }
+    },
+    {
+      "id": "core-schema-v1-1-12",
+      "kind": "fixture",
+      "path": "src-tauri/tests/fixtures/core-schema/v1.1.12.sql",
+      "status": "active",
+      "principles": [2, 3, 7],
+      "checksum": "sha256:6aee3b68f8f2de06f5b5d2e109adb9a4e61b598cd14fe16acd1d245dc5183e18",
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "src-tauri/src/database.rs",
+            "selector": "published_core_schema_fixtures_upgrade_without_data_loss"
+          }
+        ]
+      }
+    },
+    {
+      "id": "core-schema-v1-2-0",
+      "kind": "fixture",
+      "path": "src-tauri/tests/fixtures/core-schema/v1.2.0.sql",
+      "status": "active",
+      "principles": [2, 3, 7],
+      "checksum": "sha256:3b791de55803f1ea7074ac7941418e5cd3970bdbacc07cd7b069cad37e9725e0",
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "src-tauri/src/database.rs",
+            "selector": "published_core_schema_fixtures_upgrade_without_data_loss"
+          }
+        ]
+      }
+    },
+    {
+      "id": "core-schema-v1-2-2",
+      "kind": "fixture",
+      "path": "src-tauri/tests/fixtures/core-schema/v1.2.2.sql",
+      "status": "active",
+      "principles": [2, 3, 7],
+      "checksum": "sha256:c4fe65b93340697c7f686537ddbda34e8c99595220e99b746e6bd3fdd36f1552",
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "src-tauri/src/database.rs",
+            "selector": "published_core_schema_fixtures_upgrade_without_data_loss"
+          }
+        ]
+      }
+    }
+  ],
+  "invariants": [
+    {
+      "id": "CRED-ATOMIC-001",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "rule": "rule-data-security",
+      "decisions": ["adr-0001-sqlite-keychain"],
+      "protectedPaths": ["src-tauri/src/github_accounts.rs", "src-tauri/src/database.rs"],
+      "evidence": [
+        {
+          "path": "src-tauri/src/github_accounts_tests.rs",
+          "selector": "save_database_late_failure_restores_the_previous_secret_and_database"
+        }
+      ],
+      "gates": ["verify", "coverage", "ci"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "GitHub credentials and account metadata no longer span Keychain and SQLite"
+    },
+    {
+      "id": "SCHEMA-MIG-001",
+      "status": "active",
+      "principles": [2, 3, 4, 7],
+      "rule": "rule-data-security",
+      "decisions": ["adr-0001-sqlite-keychain"],
+      "protectedPaths": ["src-tauri/src/database.rs", "src-tauri/tests/fixtures/core-schema/"],
+      "evidence": [
+        {
+          "path": "src-tauri/src/database.rs",
+          "selector": "published_core_schema_fixtures_upgrade_without_data_loss"
+        }
+      ],
+      "gates": ["verify", "coverage", "ci"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "the product no longer opens or upgrades a local SQLite database"
+    },
+    {
+      "id": "FS-ATOMIC-001",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "rule": "rule-sync-filesystem",
+      "decisions": ["adr-0003-atomic-replacement"],
+      "protectedPaths": [
+        "src-tauri/src/backups.rs",
+        "src-tauri/src/backup_fs.rs",
+        "src-tauri/src/backup_paths.rs",
+        "src-tauri/src/temp_artifacts.rs"
+      ],
+      "evidence": [
+        {
+          "path": "src-tauri/src/backups_tests.rs",
+          "selector": "database_late_failure_rolls_back_every_backup_row_and_removes_new_directory"
+        }
+      ],
+      "gates": ["verify", "coverage", "weekly", "release"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "the application no longer writes, restores, or publishes filesystem artifacts"
+    },
+    {
+      "id": "SKILL-OWN-001",
+      "status": "active",
+      "principles": [2, 3, 4, 5],
+      "rule": "rule-sync-filesystem",
+      "decisions": ["adr-0002-skill-library"],
+      "protectedPaths": ["src-tauri/src/lib.rs", "src/skillConflictRefresh.ts"],
+      "evidence": [
+        {
+          "path": "src-tauri/src/lib_tests.rs",
+          "selector": "sync_replace_preserves_same_source_symlink_and_rejects_other_or_broken_links_pre_temp"
+        }
+      ],
+      "gates": ["verify", "coverage", "weekly"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "Skill publication targets and application-owned sync records are removed"
+    },
+    {
+      "id": "SKILL-HASH-001",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "rule": "rule-sync-filesystem",
+      "decisions": ["adr-0002-skill-library"],
+      "protectedPaths": ["src-tauri/src/skill_hash.rs", "src-tauri/src/lib.rs"],
+      "evidence": [
+        {
+          "path": "src-tauri/src/lib_tests.rs",
+          "selector": "user_can_update_an_existing_skill_when_a_remote_file_and_directory_share_a_stem"
+        },
+        {
+          "path": "src-tauri/src/lib_tests.rs",
+          "selector": "update_skill_rejects_an_unrelated_stored_hash_without_changing_metadata_or_files"
+        },
+        {
+          "path": "src-tauri/src/lib_tests.rs",
+          "selector": "check_repositories_canonicalizes_same_sha_legacy_metadata_without_reopening_handled_customization"
+        },
+        {
+          "path": "src-tauri/src/lib_tests.rs",
+          "selector": "check_repositories_preserves_a_pending_conflict_when_only_hash_encoding_changes"
+        }
+      ],
+      "gates": ["verify", "coverage", "weekly", "release"],
+      "introducedBy": "d40e750c3ba06d79db98ca0858e6c53d1a145a13",
+      "retireWhen": "Skill update identity no longer depends on canonical and legacy-compatible content digests"
+    },
+    {
+      "id": "TASK-GEN-001",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "rule": "rule-scheduling",
+      "decisions": ["adr-0004-foreground-scheduling"],
+      "protectedPaths": [
+        "docs/engineering/surface-budget.json",
+        "scripts/surface-budget-rust.mjs",
+        "scripts/surface-budget.mjs",
+        "src/taskCoordinator.ts",
+        "src/workspaceController.ts",
+        "src/App.tsx",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/prompt_search.rs"
+      ],
+      "evidence": [
+        {
+          "path": "src/taskCoordinator.test.ts",
+          "selector": "does not publish a late result after its generation is invalidated"
+        }
+      ],
+      "gates": ["verify", "coverage", "weekly", "ci", "release"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "checks, backups, retries, and timers no longer share asynchronous product state"
+    },
+    {
+      "id": "PROMPT-TXN-001",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "rule": "rule-prompts",
+      "decisions": ["adr-0005-prompt-domains"],
+      "protectedPaths": [
+        "src-tauri/src/prompts.rs",
+        "src-tauri/src/prompt_zip.rs",
+        "src-tauri/src/prompt_migration.rs",
+        "src-tauri/src/prompt_search.rs"
+      ],
+      "evidence": [
+        {
+          "path": "src-tauri/src/lib_tests.rs",
+          "selector": "production_v2_import_rolls_back_embedded_v1_when_prompt_write_fails"
+        }
+      ],
+      "gates": ["verify", "coverage", "weekly", "release"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "Prompt ZIP and migration imports are removed from the product"
+    },
+    {
+      "id": "PATH-PERM-001",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "rule": "rule-permissions",
+      "decisions": ["adr-0006-permission-budget"],
+      "protectedPaths": [
+        "src/api.ts",
+        "src-tauri/src/",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/backup_paths.rs",
+        "src-tauri/capabilities/",
+        "src-tauri/entitlements.plist",
+        "docs/engineering/surface-budget.json",
+        "scripts/surface-budget.mjs",
+        "scripts/surface-budget-cargo.mjs",
+        "scripts/surface-budget-entitlements.mjs",
+        "scripts/surface-budget-keychain.mjs",
+        "scripts/surface-budget-runtime-inputs.mjs",
+        "scripts/surface-budget-rust.mjs",
+        "scripts/surface-budget-tauri.mjs"
+      ],
+      "evidence": [
+        {
+          "path": "src/api.governance.test.ts",
+          "selector": "opens backup locations by stable repository identity, never a frontend path"
+        }
+      ],
+      "gates": ["verify", "coverage", "security", "ci", "release"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "the desktop application no longer exposes privileged local paths or Tauri capabilities"
+    },
+    {
+      "id": "GITHUB-ARCHIVE-TIMEOUT-001",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 7],
+      "rule": "rule-permissions",
+      "decisions": ["adr-0006-permission-budget"],
+      "protectedPaths": [
+        "src-tauri/src/adapters.rs",
+        "src-tauri/src/github_transport.rs"
+      ],
+      "evidence": [
+        {
+          "path": "src-tauri/src/github_transport_tests.rs",
+          "selector": "archive_download_extends_only_the_archive_request_timeout"
+        }
+      ],
+      "gates": ["verify", "coverage", "weekly", "ci", "release"],
+      "introducedBy": "16deea39d7ae0cf1506e6213e4fc6c157604dbfa",
+      "retireWhen": "GitHub source archives no longer share a transport with bounded regular API requests"
+    },
+    {
+      "id": "SURFACE-BUDGET-001",
+      "status": "active",
+      "principles": [1, 3, 4, 5, 7],
+      "rule": "rule-permissions",
+      "decisions": ["adr-0006-permission-budget", "adr-0008-executable-governance"],
+      "protectedPaths": [
+        "docs/engineering/surface-budget.json",
+        "scripts/surface-budget.mjs",
+        "scripts/surface-budget-cargo.mjs",
+        "scripts/surface-budget-entitlements.mjs",
+        "scripts/surface-budget-keychain.mjs",
+        "scripts/surface-budget-runtime-inputs.mjs",
+        "scripts/surface-budget-rust.mjs",
+        "scripts/surface-budget-tauri.mjs",
+        "scripts/surface-budget-typescript.mjs",
+        "src/App.tsx",
+        "src-tauri/Cargo.toml",
+        "src-tauri/src/",
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/adapters.rs",
+        "src-tauri/capabilities/",
+        "src-tauri/entitlements.plist",
+        "src-tauri/tauri.conf.json"
+      ],
+      "evidence": [
+        {
+          "path": "scripts/__tests__/surface-budget.test.mjs",
+          "selector": "new surfaces start active and active semantics cannot be rewritten in place"
+        },
+        {
+          "path": "scripts/__tests__/surface-budget-keychain.test.mjs",
+          "selector": "only the canonical adapters.rs Entry constructor seam may touch keyring"
+        },
+        {
+          "path": "scripts/__tests__/surface-budget-runtime-inputs.test.mjs",
+          "selector": "production browser storage APIs remain forbidden until an adapter and key budget exist"
+        }
+      ],
+      "gates": ["verify", "security", "ci"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "the product no longer exposes settings, Tauri commands, capabilities, entitlements, external hosts, CSP, or recurring work"
+    },
+    {
+      "id": "ARCH-BUDGET-001",
+      "status": "active",
+      "principles": [1, 3, 4, 5, 7],
+      "rule": "rule-testing-release",
+      "decisions": ["adr-0007-modularization", "adr-0008-executable-governance"],
+      "protectedPaths": [
+        "scripts/",
+        "docs/engineering/architecture-budget.json",
+        "docs/engineering/module-map.json",
+        "index.html",
+        "src/",
+        "src-tauri/src/"
+      ],
+      "evidence": [
+        {
+          "path": "scripts/__tests__/governance-security.test.mjs",
+          "selector": "architecture hotspot targets cannot be raised or silently removed"
+        },
+        {
+          "path": "scripts/__tests__/line-budgets.test.mjs",
+          "selector": "new governance tools share the production 800-line cap"
+        },
+        {
+          "path": "scripts/__tests__/module-map.test.mjs",
+          "selector": "a new unowned production file fails closed"
+        },
+        {
+          "path": "scripts/__tests__/governance.test.mjs",
+          "selector": "Vite public files and unregistered frontend asset types cannot bypass governance"
+        },
+        {
+          "path": "scripts/__tests__/governance-security.test.mjs",
+          "selector": "production frontend cannot dynamically execute ungoverned payloads"
+        }
+      ],
+      "gates": ["verify", "ci"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "the repository no longer contains production or governance source modules"
+    },
+    {
+      "id": "VERIFY-PLAN-001",
+      "status": "active",
+      "principles": [2, 3, 4, 6, 7],
+      "rule": "rule-testing-release",
+      "decisions": ["adr-0008-executable-governance"],
+      "protectedPaths": [
+        "scripts/verify.mjs",
+        "scripts/verify-plan.mjs",
+        "scripts/governance.mjs",
+        "package.json",
+        ".github/workflows/ci.yml"
+      ],
+      "evidence": [
+        {
+          "path": "scripts/__tests__/verify-plan.test.mjs",
+          "selector": "Rust locked inputs and Clippy warning denial cannot be weakened"
+        },
+        {
+          "path": "scripts/__tests__/verify-plan.test.mjs",
+          "selector": "the verify runner validates its plan before executing any step"
+        }
+      ],
+      "gates": ["verify", "ci"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "the repository replaces npm run verify with a formally accepted single deterministic gate"
+    },
+    {
+      "id": "PR-EVIDENCE-001",
+      "status": "active",
+      "principles": [3, 4, 5, 6, 7],
+      "rule": "rule-testing-release",
+      "decisions": ["adr-0008-executable-governance"],
+      "protectedPaths": [
+        ".github/pull_request_template.md",
+        ".github/workflows/ci.yml",
+        ".github/workflows/weekly-resilience.yml",
+        "docs/engineering/test-waivers.json",
+        "scripts/test-waivers.mjs",
+        "scripts/pr-evidence.mjs",
+        "scripts/governance-context.mjs",
+        "docs/engineering/governance-assets.json"
+      ],
+      "evidence": [
+        {
+          "path": "scripts/__tests__/pr-evidence.test.mjs",
+          "selector": "every invariant selected from the changed paths must be named in the invariant section"
+        },
+        {
+          "path": "scripts/__tests__/pr-evidence.test.mjs",
+          "selector": "required governance IDs include module owning Rule and ADR assets"
+        },
+        {
+          "path": "scripts/__tests__/pr-evidence.test.mjs",
+          "selector": "the CLI derives and enforces owning Rule and ADR asset IDs"
+        },
+          {
+            "path": "scripts/__tests__/pr-evidence.test.mjs",
+            "selector": "independent lane evidence is mutually exclusive and sensitive material confirmation is required"
+          },
+          {
+            "path": "scripts/__tests__/pr-evidence.test.mjs",
+            "selector": "skip or flaky debt accepts only one active tracked waiver ID"
+          },
+          {
+            "path": "scripts/__tests__/test-waivers.test.mjs",
+            "selector": "retired test waiver tombstones cannot be deleted, reactivated, or rewritten"
+          },
+        {
+          "path": "scripts/__tests__/governance-workflows.test.mjs",
+          "selector": "CI workflow keeps every required gate fail-closed and exact"
+        }
+      ],
+      "gates": ["verify", "ci"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "GitHub pull requests no longer carry repository change review evidence"
+    },
+    {
+      "id": "GH-GATE-001",
+      "status": "active",
+      "principles": [3, 4, 6, 7],
+      "rule": "rule-testing-release",
+      "decisions": ["adr-0008-executable-governance"],
+      "protectedPaths": [
+        ".github/workflows/",
+        ".github/dependabot.yml",
+        "scripts/github-governance-check.mjs",
+        "scripts/trusted-policy-guard.mjs",
+        "docs/engineering/github-governance.md"
+      ],
+      "evidence": [
+        {
+          "path": "scripts/__tests__/github-governance-check.test.mjs",
+          "selector": "reports every missing remote control"
+        },
+        {
+          "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+          "selector": "critical changes fail closed until governance-reviewed is present"
+        },
+        {
+          "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+          "selector": "API failures also publish a failure check when the event head is valid"
+        },
+        {
+          "path": "scripts/__tests__/github-governance-check.test.mjs",
+          "selector": "main remains mergeable for one maintainer and has no stale or duplicate required checks"
+        },
+        {
+          "path": "scripts/__tests__/github-governance-check.test.mjs",
+          "selector": "unregistered active workflows cannot publish releases or spoof required checks"
+        }
+      ],
+      "gates": ["verify", "github-governance", "ci", "trusted-policy"],
+      "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
+      "retireWhen": "GitHub is no longer the repository, CI, security update, or Release control plane"
+    },
+    {
+      "id": "RELEASE-ART-001",
+      "status": "active",
+      "principles": [2, 3, 4, 6, 7],
+      "rule": "rule-testing-release",
+      "decisions": ["adr-0008-executable-governance"],
+      "protectedPaths": [
+        "scripts/release-verify.mjs",
+        ".github/workflows/release-gate.yml",
+        "docs/rules/testing-release.md",
+        "docs/macos-release-checklist.md"
+      ],
+      "evidence": [
+        {
+          "path": "scripts/__tests__/release-verify.test.mjs",
+          "selector": "operator-carried manifest and remote digest form one artifact identity chain"
+        }
+      ],
+      "gates": ["verify", "release", "ci"],
+      "introducedBy": "e452c31e2d5d757509737a57192b1c21ae92905a",
+      "retireWhen": "the product no longer distributes a signed macOS DMG through GitHub Releases"
+    },
+    {
+      "id": "RELEASE-TAG-001",
+      "status": "active",
+      "principles": [2, 3, 4, 6, 7],
+      "rule": "rule-testing-release",
+      "decisions": ["adr-0008-executable-governance"],
+      "protectedPaths": [
+        "scripts/release-verify.mjs",
+        ".github/workflows/release-gate.yml",
+        "docs/rules/testing-release.md"
+      ],
+      "evidence": [
+        {
+          "path": "scripts/__tests__/release-verify.test.mjs",
+          "selector": "remote verification isolates the authoritative annotated tag and rejects rewrites"
+        }
+      ],
+      "gates": ["verify", "release", "ci"],
+      "introducedBy": "d85b4f149442cd55c7b91e9cda708df72d7e1d97",
+      "retireWhen": "release identity no longer depends on immutable annotated Git tags"
+    }
+  ]
+}

@@ -1,0 +1,400 @@
+{
+  "schemaVersion": 1,
+  "sourceRoots": [
+    {
+      "path": "src",
+      "runtime": "frontend",
+      "extensions": [".ts", ".tsx", ".mts", ".cts", ".css"]
+    },
+    {
+      "path": "src-tauri/src",
+      "runtime": "rust",
+      "extensions": [".rs"]
+    }
+  ],
+  "layers": [
+    {
+      "id": "frontend-entry",
+      "runtime": "frontend",
+      "forbiddenDependencies": []
+    },
+    {
+      "id": "frontend-shell",
+      "runtime": "frontend",
+      "forbiddenDependencies": ["frontend-entry"]
+    },
+    {
+      "id": "frontend-feature-view",
+      "runtime": "frontend",
+      "forbiddenDependencies": [
+        "frontend-entry",
+        "frontend-shell",
+        "frontend-app-service",
+        "frontend-controller",
+        "frontend-feature-adapter",
+        "frontend-fixture"
+      ]
+    },
+    {
+      "id": "frontend-app-service",
+      "runtime": "frontend",
+      "forbiddenDependencies": [
+        "frontend-entry",
+        "frontend-shell",
+        "frontend-feature-view",
+        "frontend-controller",
+        "frontend-feature-adapter"
+      ]
+    },
+    {
+      "id": "frontend-tauri-adapter",
+      "runtime": "frontend",
+      "forbiddenDependencies": [
+        "frontend-entry",
+        "frontend-shell",
+        "frontend-feature-view",
+        "frontend-app-service",
+        "frontend-controller",
+        "frontend-feature-adapter",
+        "frontend-fixture",
+        "frontend-shared"
+      ]
+    },
+    {
+      "id": "frontend-feature-adapter",
+      "runtime": "frontend",
+      "forbiddenDependencies": [
+        "frontend-entry",
+        "frontend-shell",
+        "frontend-feature-view",
+        "frontend-app-service",
+        "frontend-controller",
+        "frontend-fixture"
+      ]
+    },
+    {
+      "id": "frontend-controller",
+      "runtime": "frontend",
+      "forbiddenDependencies": [
+        "frontend-entry",
+        "frontend-shell",
+        "frontend-feature-view",
+        "frontend-feature-adapter",
+        "frontend-fixture"
+      ]
+    },
+    {
+      "id": "frontend-fixture",
+      "runtime": "frontend",
+      "forbiddenDependencies": [
+        "frontend-entry",
+        "frontend-shell",
+        "frontend-feature-view",
+        "frontend-app-service",
+        "frontend-controller",
+        "frontend-feature-adapter",
+        "frontend-shared"
+      ]
+    },
+    {
+      "id": "frontend-shared",
+      "runtime": "frontend",
+      "forbiddenDependencies": [
+        "frontend-entry",
+        "frontend-shell",
+        "frontend-feature-view",
+        "frontend-app-service",
+        "frontend-tauri-adapter",
+        "frontend-controller",
+        "frontend-feature-adapter",
+        "frontend-fixture"
+      ]
+    },
+    {
+      "id": "rust-entry",
+      "runtime": "rust",
+      "forbiddenDependencies": []
+    },
+    {
+      "id": "rust-composition",
+      "runtime": "rust",
+      "forbiddenDependencies": ["rust-entry"]
+    },
+    {
+      "id": "rust-domain",
+      "runtime": "rust",
+      "forbiddenDependencies": ["rust-entry", "rust-composition"]
+    },
+    {
+      "id": "rust-adapter",
+      "runtime": "rust",
+      "forbiddenDependencies": ["rust-entry", "rust-composition", "rust-domain"]
+    }
+  ],
+  "modules": [
+    {
+      "id": "frontend-entry",
+      "runtime": "frontend",
+      "layer": "frontend-entry",
+      "ownerRule": "docs/rules/testing-release.md",
+      "decisions": ["docs/adr/0007-staged-modularization.md"],
+      "paths": ["src/main.tsx"]
+    },
+    {
+      "id": "frontend-app-shell",
+      "runtime": "frontend",
+      "layer": "frontend-shell",
+      "ownerRule": "docs/rules/scheduling.md",
+      "decisions": [
+        "docs/adr/0004-foreground-scheduling.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src/App.tsx", "src/styles.css"]
+    },
+    {
+      "id": "frontend-github-view",
+      "runtime": "frontend",
+      "layer": "frontend-feature-view",
+      "ownerRule": "docs/rules/permissions.md",
+      "decisions": [
+        "docs/adr/0001-sqlite-keychain-boundary.md",
+        "docs/adr/0006-path-and-permission-budget.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src/GitHubWorkbench.tsx"]
+    },
+    {
+      "id": "frontend-plugins-view",
+      "runtime": "frontend",
+      "layer": "frontend-feature-view",
+      "ownerRule": "docs/rules/sync-filesystem.md",
+      "decisions": [
+        "docs/adr/0002-skill-library-and-safe-deletion.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src/PluginsView.tsx"]
+    },
+    {
+      "id": "frontend-prompts-view",
+      "runtime": "frontend",
+      "layer": "frontend-feature-view",
+      "ownerRule": "docs/rules/prompts.md",
+      "decisions": [
+        "docs/adr/0005-prompt-export-and-migration.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src/PromptsView.tsx", "src/prompts.css"]
+    },
+    {
+      "id": "frontend-app-service",
+      "runtime": "frontend",
+      "layer": "frontend-app-service",
+      "ownerRule": "docs/rules/permissions.md",
+      "decisions": [
+        "docs/adr/0006-path-and-permission-budget.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src/appService.ts"]
+    },
+    {
+      "id": "frontend-tauri-adapter",
+      "runtime": "frontend",
+      "layer": "frontend-tauri-adapter",
+      "ownerRule": "docs/rules/permissions.md",
+      "decisions": [
+        "docs/adr/0001-sqlite-keychain-boundary.md",
+        "docs/adr/0006-path-and-permission-budget.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src/api.ts"]
+    },
+    {
+      "id": "frontend-prompt-adapter",
+      "runtime": "frontend",
+      "layer": "frontend-feature-adapter",
+      "ownerRule": "docs/rules/prompts.md",
+      "decisions": [
+        "docs/adr/0005-prompt-export-and-migration.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src/promptLibraryAdapter.ts"]
+    },
+    {
+      "id": "frontend-workspace-controller",
+      "runtime": "frontend",
+      "layer": "frontend-controller",
+      "ownerRule": "docs/rules/scheduling.md",
+      "decisions": [
+        "docs/adr/0004-foreground-scheduling.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": [
+        "src/repositoryFreshness.ts",
+        "src/repositoryPagination.ts",
+        "src/skillConflictRefresh.ts",
+        "src/taskCoordinator.ts",
+        "src/workspaceController.ts"
+      ]
+    },
+    {
+      "id": "frontend-demo-fixtures",
+      "runtime": "frontend",
+      "layer": "frontend-fixture",
+      "ownerRule": "docs/rules/testing-release.md",
+      "decisions": ["docs/adr/0007-staged-modularization.md"],
+      "paths": ["src/demoFixtures.ts"]
+    },
+    {
+      "id": "frontend-shared-ui",
+      "runtime": "frontend",
+      "layer": "frontend-shared",
+      "ownerRule": "docs/rules/testing-release.md",
+      "decisions": ["docs/adr/0007-staged-modularization.md"],
+      "paths": ["src/inspectorDismiss.ts"]
+    },
+    {
+      "id": "frontend-external-navigation",
+      "runtime": "frontend",
+      "layer": "frontend-shared",
+      "ownerRule": "docs/rules/permissions.md",
+      "decisions": [
+        "docs/adr/0006-path-and-permission-budget.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src/externalNavigation.ts"]
+    },
+    {
+      "id": "rust-entry",
+      "runtime": "rust",
+      "layer": "rust-entry",
+      "ownerRule": "docs/rules/testing-release.md",
+      "decisions": ["docs/adr/0007-staged-modularization.md"],
+      "paths": ["src-tauri/src/main.rs"]
+    },
+    {
+      "id": "rust-composition",
+      "runtime": "rust",
+      "layer": "rust-composition",
+      "ownerRule": "docs/rules/testing-release.md",
+      "decisions": ["docs/adr/0007-staged-modularization.md"],
+      "paths": ["src-tauri/src/lib.rs"]
+    },
+    {
+      "id": "rust-network-adapters",
+      "runtime": "rust",
+      "layer": "rust-adapter",
+      "ownerRule": "docs/rules/permissions.md",
+      "decisions": [
+        "docs/adr/0001-sqlite-keychain-boundary.md",
+        "docs/adr/0006-path-and-permission-budget.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src-tauri/src/adapters.rs", "src-tauri/src/github_transport.rs"]
+    },
+    {
+      "id": "rust-persistence-adapter",
+      "runtime": "rust",
+      "layer": "rust-adapter",
+      "ownerRule": "docs/rules/data-security.md",
+      "decisions": [
+        "docs/adr/0001-sqlite-keychain-boundary.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src-tauri/src/database.rs"]
+    },
+    {
+      "id": "rust-filesystem-adapters",
+      "runtime": "rust",
+      "layer": "rust-adapter",
+      "ownerRule": "docs/rules/sync-filesystem.md",
+      "decisions": [
+        "docs/adr/0002-skill-library-and-safe-deletion.md",
+        "docs/adr/0003-locking-and-atomic-replacement.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src-tauri/src/backup_fs.rs", "src-tauri/src/temp_artifacts.rs"]
+    },
+    {
+      "id": "rust-prompt-search-adapter",
+      "runtime": "rust",
+      "layer": "rust-adapter",
+      "ownerRule": "docs/rules/prompts.md",
+      "decisions": [
+        "docs/adr/0005-prompt-export-and-migration.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src-tauri/src/prompt_search.rs"]
+    },
+    {
+      "id": "rust-github-domain",
+      "runtime": "rust",
+      "layer": "rust-domain",
+      "ownerRule": "docs/rules/permissions.md",
+      "decisions": [
+        "docs/adr/0001-sqlite-keychain-boundary.md",
+        "docs/adr/0006-path-and-permission-budget.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": [
+        "src-tauri/src/app_update.rs",
+        "src-tauri/src/github_accounts.rs",
+        "src-tauri/src/github_auth.rs",
+        "src-tauri/src/github_response.rs"
+      ]
+    },
+    {
+      "id": "rust-backup-domain",
+      "runtime": "rust",
+      "layer": "rust-domain",
+      "ownerRule": "docs/rules/sync-filesystem.md",
+      "decisions": [
+        "docs/adr/0002-skill-library-and-safe-deletion.md",
+        "docs/adr/0003-locking-and-atomic-replacement.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": [
+        "src-tauri/src/backup_paths.rs",
+        "src-tauri/src/backups.rs",
+        "src-tauri/src/settings_directories.rs"
+      ]
+    },
+    {
+      "id": "rust-plugin-domain",
+      "runtime": "rust",
+      "layer": "rust-domain",
+      "ownerRule": "docs/rules/sync-filesystem.md",
+      "decisions": [
+        "docs/adr/0002-skill-library-and-safe-deletion.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src-tauri/src/plugins.rs", "src-tauri/src/skill_hash.rs"]
+    },
+    {
+      "id": "rust-prompt-domain",
+      "runtime": "rust",
+      "layer": "rust-domain",
+      "ownerRule": "docs/rules/prompts.md",
+      "decisions": [
+        "docs/adr/0003-locking-and-atomic-replacement.md",
+        "docs/adr/0005-prompt-export-and-migration.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": [
+        "src-tauri/src/prompt_migration.rs",
+        "src-tauri/src/prompt_zip.rs",
+        "src-tauri/src/prompts.rs"
+      ]
+    }
+  ],
+  "dependencyExceptions": [
+    {
+      "from": "src/promptLibraryAdapter.ts",
+      "to": "src/PromptsView.tsx",
+      "reason": "PromptLibraryApi is still declared beside the legacy view while staged modularization extracts shared contracts.",
+      "retireWhen": "PromptLibraryApi moves to a view-independent contracts module.",
+      "adr": "docs/adr/0007-staged-modularization.md"
+    }
+  ],
+  "moves": [],
+  "policyChanges": []
+}
