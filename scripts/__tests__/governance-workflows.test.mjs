@@ -273,6 +273,8 @@ test("trusted policy workflow is an exact base-only machine contract", () => {
     ["checkout PR head", valid.replace("github.event.pull_request.base.sha", "github.event.pull_request.head.sha")],
     ["execute another command", valid.replace("        run: node scripts/trusted-policy-guard.mjs", "        run: node scripts/trusted-policy-guard.mjs\n      - run: true")],
     ["remove edited trigger", valid.replace(", edited,", ",")],
+    ["restore Checks API write access", valid.replace("  pull-requests: read", "  pull-requests: read\n  checks: write")],
+    ["rename the native required job", valid.replace("    name: Trusted policy / guard", "    name: dispatch")],
   ]) {
     assert.ok(
       validateTrustedPolicyWorkflowPolicy(mutation).includes(

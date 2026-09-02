@@ -26,7 +26,7 @@ MSRV 1.88.0、coverage、网络审计、性能与 Release 是独立 CI lane，�
 - 不 force-push/删除 main。单维护者阶段不强制他人审批，但不能绕过检查。
 - 修改 `.github/workflows/`、治理脚本或机器事实源时，必须经过治理审查并添加
   `governance-reviewed` 标签；标签只表示人工完成了策略审查，不能替代其余检查，也不是独立
-  信任根。GitHub Checks 的同-head撤销与 integration 隔离边界见
+  信任根。原生 job 的 Check Suite 归属与 integration 隔离边界见
   `docs/engineering/github-governance.md`。
 - 每个 PR 必须且只能勾选一种变更类型。选择“Bug 修复”时按“失败复现 -> 根因 ->
   同类扫描 -> 修复 -> Rule/ADR/Invariant”提交证据；标题包含 `fix`、`bug`、`hotfix` 或

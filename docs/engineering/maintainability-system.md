@@ -74,13 +74,12 @@ npm run governance:context -- --base-ref origin/main
 当作数据，不 checkout、import 或执行 PR 代码。它从同一 trusted base 严格解析治理 catalog，
 把 active asset 与 active/retiring Invariant 的 evidence 路径动态纳入 critical；catalog 缺失、
 非法、路径危险或 evidence 文件被改名/弱化都失败并要求当前 head 上重新发生明确的
-`governance-reviewed` label event。guard 再把 Check Run 写到该 PR 的 head SHA。CI 同时订阅
-`pull_request.edited`，PR title/body 修改后会重新检查 evidence。
+`governance-reviewed` label event。原生 job `Trusted policy / guard` 关联 PR head；脚本只读
+API，退出码决定 job，且 checkout/执行始终来自 base SHA。CI 也订阅 `pull_request.edited`。
 
-这是仓库内的防篡改加固，不是密码学意义上的独立信任根：Check Run 绑定 commit，同一 head
-上的旧 success 在后续 failure 无法发布时不能可靠撤销；而把 required check 绑定到 GitHub
-Actions integration 也不能隔离同仓库内另一份拥有 `checks: write` 的 workflow。仓库的远端
-checker 会要求 required checks 显式绑定 integration，并把 workflow 的 job/step/权限锁成精确
+这是仓库内的防篡改加固，不是密码学意义上的独立信任根：共享的 GitHub Actions
+integration 不能隔离同仓库内另一份同名 job。手工 POST CheckRun 还可能落入其他已取消
+suite，因此被禁止。远端 checker 会要求 required checks 显式绑定 integration，并锁定 job/权限
 合同，但不能把 GitHub Actions 自己变成独立安全主体。需要“PR 无法给自己开绿灯”的强边界
 时，必须改用凭据隔离的专用 GitHub App，或组织级、从独立受控仓库提供的 required workflow，
 再让 ruleset 绑定该专用 integration。远端规则尚未激活时，只能称为机制已实现；在当前
