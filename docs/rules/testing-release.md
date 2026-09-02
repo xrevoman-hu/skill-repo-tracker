@@ -34,8 +34,11 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   Cargo 的真实 target 由 `cargo metadata` 复核为唯一 lib/bin/build 入口；Cargo manifest 不得
   自定义 lint level，Rust 源码不得 `allow/expect(warnings)`，因此 Clippy `-D warnings` 保持
   最高优先级。
-  仓库只允许五个已登记且整份精确校验的 GitHub workflows；新增 workflow 或本地 Action
-  会失败，避免普通 push 发布、扩大写权限或用同名 Check Run 冒充 required check。仓库内
+  仓库的 `.github/workflows/` 只允许五个已登记且整份精确校验的 GitHub workflows；新增
+  repo-controlled workflow 或本地 Action 会失败，避免普通 push 发布、扩大写权限或用同名
+  Check Run 冒充 required check。仅精确登记 GitHub 托管的 Dependabot Updates 动态 workflow，
+  并由对应 GitHub 功能的独立设置校验；workflow state 缺失/未知，或 active tuple 字段缺失，
+  均 fail closed。仓库内
   JavaScript/TypeScript 可执行代码只允许位于 `src/`、`scripts/`、`e2e/` 与三份精确根配置，
   治理工具的本地 module import 也不得逃出 `scripts/` 的预算和 trusted-review 范围。
   治理脚本只允许沿 canonical 顶层静态 import/export 执行图可达；`eval`、`Function`、VM、

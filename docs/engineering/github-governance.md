@@ -110,8 +110,10 @@ target=Branch 的 active ruleset，且该 ruleset 保护 `main`、`bypass_actors
 陈旧 context，因此即使它表面只针对其他分支也必须先合并进唯一事实源或停用。检查器还要求
 strict/up-to-date、force/delete 禁用、两项 Dependabot 设置、active `CI`、`Release gate`、
 `Security audit`、`Weekly resilience`、`Trusted policy` workflows，以及 main ruleset 中
-精确 required context `Trusted policy / guard`。任何额外 active workflow、重复 context 或
-永不产生的 required context 都会失败，避免旁路发布/冒充检查或把单维护者永久锁死。最后再核对
+精确 required context `Trusted policy / guard`。任何额外 active repo workflow、未知
+`dynamic/` workflow、缺失/未知 workflow state、重复 context 或永不产生的 required context
+都会失败，避免旁路发布、冒充检查或把单维护者永久锁死；仅精确登记 GitHub 托管的
+Dependabot Updates 动态 workflow，其功能状态仍由独立远端设置校验。最后再核对
 `release` Environment 的唯一 required
 reviewer 为 `xrevoman-hu` 且
 `can_admins_bypass=false`。字段缺失、权限不足或无法核验都失败，不会把未知状态当成通过。
