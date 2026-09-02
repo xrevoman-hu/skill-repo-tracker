@@ -90,9 +90,13 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
 - 性能：weekly 与 Release 跑 10,000 prompts / 100 MiB ignored test。
 - Test waiver：`npm run verify` 与 weekly 都执行 tracked ledger checker；active selector 必须指向
   仓库中真实测试文本，过期、幽灵 selector、主 lane waiver 或 tombstone 改写都会失败。
-- 安全审计：独立 schedule，网络失败不改变本地确定性结果。`cargo-audit` 必须固定到已验证且能
-  解析当前 RustSec advisory schema 的版本；数据库 schema 演进导致的解析失败视为门禁故障，
-  修复时同步更新 workflow exact contract，不能用忽略 advisory 或允许失败绕过。
+- 依赖风险：`npm run verify` 校验 `dependency-risk-ledger.json` 的 schema、90 天复查期限与
+  append-only 生命周期；active scope 不可延期或改写，只能先退休旧 ID 再建立新 ID。
+- 安全审计：独立 schedule 固定 `cargo-audit` 版本，并用三个 audited target 的
+  `cargo metadata --filter-platform` resolve graph 对账。vulnerability、yanked、未知类别及未登记
+  或失联的 unsound warning 均失败；unmaintained 只完整报告，不冒充已接受或已解决。数据库、
+  命令、JSON 或 target graph 解析失败同样失败；禁止 `--ignore`、`--no-yanked`、`|| true` 或用
+  raw `cargo audit` 绕过账本。网络失败只影响独立 Security audit，不改变本地确定性验证结论。
 
 ## 发布
 

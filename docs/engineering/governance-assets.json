@@ -228,6 +228,35 @@
       }
     },
     {
+      "id": "dependency-risk-ledger",
+      "kind": "budget",
+      "path": "docs/engineering/dependency-risk-ledger.json",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 6, 7],
+      "enforcement": {
+        "mode": "automated",
+        "gates": ["verify", "security", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/dependency-risk.test.mjs",
+            "selector": "dependency risk ledger rejects stale and malformed active entries"
+          },
+          {
+            "path": "scripts/__tests__/dependency-risk.test.mjs",
+            "selector": "dependency risk lifecycle is append-only and active scope cannot be extended"
+          },
+          {
+            "path": "scripts/__tests__/dependency-risk.test.mjs",
+            "selector": "cargo audit reconciliation fails closed outside the exact active unsound set"
+          },
+          {
+            "path": "scripts/__tests__/dependency-risk.test.mjs",
+            "selector": "audit runner proves every warning against the audited target graph"
+          }
+        ]
+      }
+    },
+    {
       "id": "coverage-baseline",
       "kind": "budget",
       "path": "docs/engineering/coverage-baseline.json",
@@ -519,6 +548,7 @@
         "vitest.config.ts",
         "src-tauri/Cargo.toml",
         "src-tauri/Cargo.lock",
+        "docs/engineering/dependency-risk-ledger.json",
         "docs/engineering/test-waivers.json",
         "docs/macos-release-checklist.md"
       ],
@@ -928,6 +958,44 @@
       "gates": ["verify", "coverage", "weekly", "ci", "release"],
       "introducedBy": "16deea39d7ae0cf1506e6213e4fc6c157604dbfa",
       "retireWhen": "GitHub source archives no longer share a transport with bounded regular API requests"
+    },
+    {
+      "id": "DEPENDENCY-RISK-001",
+      "status": "active",
+      "principles": [2, 3, 4, 5, 6, 7],
+      "rule": "rule-testing-release",
+      "decisions": ["adr-0008-executable-governance"],
+      "protectedPaths": [
+        ".github/workflows/security-audit.yml",
+        "docs/engineering/dependency-risk-ledger.json",
+        "scripts/__tests__/dependency-risk.test.mjs",
+        "scripts/dependency-risk.mjs",
+        "scripts/governance-assets-check.mjs",
+        "scripts/workflow-policy-contracts.mjs",
+        "src-tauri/Cargo.toml",
+        "src-tauri/Cargo.lock"
+      ],
+      "evidence": [
+        {
+          "path": "scripts/__tests__/dependency-risk.test.mjs",
+          "selector": "dependency risk ledger rejects stale and malformed active entries"
+        },
+        {
+          "path": "scripts/__tests__/dependency-risk.test.mjs",
+          "selector": "dependency risk lifecycle is append-only and active scope cannot be extended"
+        },
+        {
+          "path": "scripts/__tests__/dependency-risk.test.mjs",
+          "selector": "cargo audit reconciliation fails closed outside the exact active unsound set"
+        },
+        {
+          "path": "scripts/__tests__/dependency-risk.test.mjs",
+          "selector": "audit runner proves every warning against the audited target graph"
+        }
+      ],
+      "gates": ["verify", "security", "ci"],
+      "introducedBy": "a828543236ae99f7359fd8cd61a7f2766d09e124",
+      "retireWhen": "the repository no longer manages or distributes Rust dependencies through Cargo.lock and RustSec"
     },
     {
       "id": "SURFACE-BUDGET-001",
