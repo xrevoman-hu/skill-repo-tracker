@@ -1,5 +1,7 @@
 # GitHub 远端治理
 
+<!-- trusted-native-suite-probe: temporary critical-path change; do not merge -->
+
 仓库内 workflow 和 Dependabot 配置不能自动证明 GitHub 远端保护已经启用。首次将本批
 治理代码通过 PR 合入、且 `CI / verify`、`CI / coverage`、`CI / msrv` 全绿后，仓库
 管理员需要在 GitHub Settings 完成一次显式设置。仓库内文件只能定义候选策略；远端
