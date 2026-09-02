@@ -5,6 +5,7 @@ import {
   buildCoverageDiffArguments,
   calculateChangedCoverage,
   calculateChangedCoverageWithDetails,
+  findRustConditionalLineRanges,
   findRustCfgTestLineRanges,
   findMissingCoverageFiles,
   isCoverageProductionPath,
@@ -41,6 +42,8 @@ test("changed coverage excludes tests and declarations but includes the app entr
   assert.equal(isCoverageProductionPath("frontend", "src/main.tsx"), true);
   assert.equal(isCoverageProductionPath("rust", "src-tauri/src/backups.rs"), true);
   assert.equal(isCoverageProductionPath("rust", "src-tauri/src/backups_tests.rs"), false);
+  assert.equal(isCoverageProductionPath("rust", "src-tauri/src/test.rs"), true);
+  assert.equal(isCoverageProductionPath("rust", "src-tauri/src/tests.rs"), true);
   assert.equal(isCoverageProductionPath("rust", "src-tauri/tests/schema.rs"), false);
 });
 
@@ -56,10 +59,14 @@ test("coverage inventory fails closed when a production module disappears from L
   assert.deepEqual(
     findMissingCoverageFiles({
       mode: "rust",
-      sourcePaths: ["src-tauri/src/lib.rs", "src-tauri/src/lib_tests.rs"],
+      sourcePaths: [
+        "src-tauri/src/lib.rs",
+        "src-tauri/src/tests.rs",
+        "src-tauri/src/lib_tests.rs",
+      ],
       lcovPaths: [],
     }),
-    ["src-tauri/src/lib.rs"],
+    ["src-tauri/src/lib.rs", "src-tauri/src/tests.rs"],
   );
 });
 
@@ -139,6 +146,39 @@ test("Rust cfg(any(test)) cannot inflate production LCOV", () => {
     "fn production() {}",
   ].join("\n");
   assert.deepEqual(findRustCfgTestLineRanges(contents), [{ start: 1, end: 4 }]);
+});
+
+test("non-test cfg items remain visible when the active coverage build omits them", () => {
+  const contents = [
+    '#[cfg(not(feature = "coverage-skip"))]',
+    "fn default_feature_runtime() {",
+    "  release_only_side_effect();",
+    "}",
+    "#[cfg(not(debug_assertions))]",
+    "fn release_only_runtime() {",
+    "  release_only_side_effect();",
+    "}",
+    "#[cfg_attr(coverage_nightly, coverage(off))]",
+    "fn instrumentation_hidden() {",
+    "  release_only_side_effect();",
+    "}",
+    "#[cfg(test)]",
+    "fn test_helper() {}",
+  ].join("\n");
+  assert.deepEqual(findRustConditionalLineRanges(contents), [
+    { start: 1, end: 4 },
+    { start: 5, end: 8 },
+    { start: 9, end: 12 },
+  ]);
+  assert.equal(
+    isOmittedCoverageLineExecutable({
+      mode: "rust",
+      filePresentInLcov: true,
+      sourceExecutable: true,
+      conditionallyCompiled: true,
+    }),
+    true,
+  );
 });
 
 test("LCOV summaries use only the records retained by production filtering", () => {

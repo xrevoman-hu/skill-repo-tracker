@@ -1,92 +1,33 @@
 # macOS Release Checklist
 
-当前唯一支持的发布产物是 Apple Silicon ad-hoc 测试分发包。它不是 Developer ID signed，
-也不是 Apple notarized；首次启动可能需要 Control-click Open、Privacy & Security ->
-Open Anyway 或 `xattr -cr`。本清单不引入 Developer ID、notarization 或新的系统权限。
+本清单是人工验收视图，不是第二套发布脚本。唯一可执行合同、local/remote phase 和 manifest
+交接命令只维护在 [testing-release Rule](rules/testing-release.md)；这里不得复制命令。
 
-## 0. 授权边界
+## 1. 授权与来源
 
-- 只有用户明确要求“发布/发版/GitHub Release”才进入正式发布。
-- 普通 push 不发布；GitHub `Release gate` 只允许 `workflow_dispatch`，且绑定
-  `release` Environment 人工批准。
-- 本地验证包不等于正式发布；不得顺手改版本、tag、push 或创建 Release。
-- 上传结果不明时先查询远端，禁止盲目重试。
+- 只有用户明确要求发布时才进入正式发布；普通 push 不发布。
+- 发布必须来自受保护 PR 合入后的最终干净 `main`，tag 为 annotated tag。
+- GitHub `release` Environment 必须人工批准；上传结果不明时先查询，禁止盲目重试。
 
-## 1. 本地实物门
+## 2. 本地实物验收
 
-在 Apple Silicon macOS 上运行唯一接口：
+- 使用 Rule 中唯一接口，不拆分、不替换步骤。
+- 证明测试、coverage、MSRV、E2E、性能门以及版本/仓库/架构治理全部通过。
+- 完整签名 App 后重新封装并签名 DMG；旧 DMG 不得复用。
+- 证明只读挂载内 App 的签名、版本、arm64、bytes 与 SHA-256。
+- manifest generation 目录只用于操作者交接，不是凭据或 Release 资产，不进入日志。
 
-```bash
-npm run release:verify -- --lane adhoc --version X.Y.Z --phase local
-```
+## 3. 远端实物验收
 
-该命令不可拆分替代，固定执行：
+- 证明 `HEAD == origin/main == annotated tag commit == manifest.commit`。
+- Release 必须 final，标题与 tracked `docs/releases/vX.Y.Z.md` 正文精确一致。
+- 公开资产名、GitHub digest/size、下载后 bytes/SHA-256 与 manifest 一致。
+- 下载后的 DMG 再做签名、`hdiutil verify`、只读挂载、版本与 arm64 检查。
+- 只有 remote phase 通过，才可声称用户实际收到的线上文件已验证。
 
-1. `npm run verify` 的全部确定性门禁；
-2. frontend/Rust coverage 与 Rust 1.88.0 MSRV lane，以及 Playwright E2E 浏览器验收；
-3. 10,000 prompts / 100 MiB 性能门；
-4. 构建 Apple Silicon `.app` 和 DMG；
-5. 完整 ad-hoc 签名 `.app`；
-6. 删除签名前的旧 DMG，并从已签名 App 重新封装；
-7. 签名并校验最终 DMG；
-8. `hdiutil verify`、只读挂载、挂载内 App 签名/版本/arm64 校验；
-9. 输出 bytes、SHA-256、当前 commit，并在 DMG 旁通过单次目录 rename 原子发布不可变的
-   `Skill Repo Tracker_X.Y.Z_aarch64.release-<MANIFEST-ID>/` generation 目录。该目录权限为
-   `0700`，只包含权限均为 `0600` 的 `manifest.json` 与 `manifest.token`。终端只显示
-   文件路径，不显示 token 内容。token 是承载 version/commit/name/bytes/SHA 字段的
-   unsigned artifact-field carrier，只防止逐字段混用；它不是凭据，也不能作为 local gate
-   provenance 或生成者身份证明。若同名 generation 已存在但内容或权限不完全一致，必须
-   fail closed，不得原地改写。
+## 4. 分发边界与停止条件
 
-generation 目录、`manifest.json` 和 `manifest.token` 均不得上传为 Release 资产、写入
-Release notes 或复制到终端/CI 日志。
-GitHub 上的 local gate 只在临时 runner 内验证本次构建，不导出 token artifact；正式发布与
-remote phase 仍使用操作者在最终干净 `main` 上本地生成的不可变 `0700` generation 目录
-及其中的 `0600` 交接文件。
-
-“签名 loose App 后直接签旧 DMG”不是有效流程，因为旧 DMG 内仍是签名前的 App。
-
-## 2. 发布动作
-
-只有用户显式授权后，发布者才可执行以下动作：同步
-`package.json`/`package-lock.json`/`Cargo.toml`/`Cargo.lock`/`tauri.conf.json` 的版本，
-通过受保护 PR squash merge 进入 `main`，在本地以 fast-forward 同步该最终提交，创建并只推送
-annotated `vX.Y.Z` tag，再用 `gh release create` 创建非 draft、非 prerelease Release。发布阶段
-不得直接推送 `main`。本仓库中的 gate 只验证，不自动执行这些动作，也不会在未知上传结果下
-重试。创建 tag 前必须确认本地 `HEAD == origin/main`；完成后必须由 remote phase 证明
-`HEAD == origin/main == tag commit` 和线上资产 digest 一致。
-
-Release notes 必须中英文说明 ad-hoc 边界与首次打开方法。公开资产名固定为
-`Skill.Repo.Tracker_X.Y.Z_aarch64.dmg`；本地产物名保留空格形式。
-
-## 3. 远端实物门
-
-发布动作返回明确结果后，从 local phase 输出的不可变 generation 目录内 `0600`
-`manifest.token` 文件读取单一
-manifest token，作为不可省略的字段载体传给 remote phase；不要拆开复制 commit/SHA，
-以免混用不同构建。把读取和验证隔离在 fail-closed 子 shell 中，关闭 shell xtrace，并使用
-`--silent` 避免 npm 把调用命令写入日志；子 shell 退出时变量自动消失，同时保留 verifier
-的失败状态。这个 unsigned artifact-field carrier 不是凭据，也不构成 local gate provenance：
-
-```bash
-(
-  set -euo pipefail
-  set +x
-  RELEASE_MANIFEST_TOKEN="$(<"/absolute/path/Skill Repo Tracker_X.Y.Z_aarch64.release-<MANIFEST-ID>/manifest.token")"
-  npm run --silent release:verify -- \
-    --lane adhoc --version X.Y.Z --phase remote \
-    --manifest-token "$RELEASE_MANIFEST_TOKEN"
-)
-```
-
-remote phase 从 token 还原并验证 manifest，再只读核对
-`manifest.commit == HEAD == origin/main == tag commit`、Release 非 draft/non-prerelease、
-资产名和 GitHub digest；随后下载 DMG，重新执行 `hdiutil verify`、只读挂载、签名、版本和
-arm64 检查，并要求下载文件的 bytes/SHA-256、GitHub size/digest 与 manifest 完全一致。
-只有 remote phase 也通过，才可以说“用户实际收到的线上文件已验证”。
-
-## 4. 停止条件
-
-任一门禁、性能、签名、重封装、挂载、版本、架构、digest 或远端 ref 不一致都必须停止。
-若未来需要普通用户无警告分发，应另立 ADR、凭据管理和 notarization 流程，不能把
-ad-hoc lane 改名冒充。
+当前只支持 Apple Silicon ad-hoc 测试包：不是 Developer ID signed，也未 notarized。Release notes
+必须中英文说明首次打开需 Control-click Open 或 Privacy & Security -> Open Anyway。任一门禁、
+签名、挂载、版本、架构、digest、远端 ref 或正文不一致都必须停止。若未来引入 Developer ID、
+notarization 或新系统权限，须另立 ADR，不能把 ad-hoc lane 改名冒充。

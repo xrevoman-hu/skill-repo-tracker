@@ -9,12 +9,16 @@ const REQUIRED_CHECKS = [
   { context: "verify", label: "CI / verify" },
   { context: "coverage", label: "CI / coverage" },
   { context: "msrv", label: "CI / msrv" },
+  { context: "Trusted policy / guard", label: "Trusted policy / guard" },
 ];
+const EXPECTED_CHECK_INTEGRATION_ID = 15368;
+const EXPECTED_RELEASE_REVIEWER = "xrevoman-hu";
 const REQUIRED_WORKFLOWS = [
   ["CI", ".github/workflows/ci.yml"],
   ["Release gate", ".github/workflows/release-gate.yml"],
   ["Security audit", ".github/workflows/security-audit.yml"],
   ["Weekly resilience", ".github/workflows/weekly-resilience.yml"],
+  ["Trusted policy", ".github/workflows/trusted-policy.yml"],
 ];
 
 function protectsMain(ruleset, defaultBranch) {
@@ -40,24 +44,53 @@ export function evaluateGitHubGovernance({
   releaseEnvironment,
 }) {
   const errors = [];
-  const ruleset = (Array.isArray(rulesets) ? rulesets : []).find((candidate) =>
-    protectsMain(candidate, defaultBranch),
+  if (defaultBranch !== "main") {
+    errors.push("repository default branch must be exactly main");
+  }
+  const activeBranchRulesets = (Array.isArray(rulesets) ? rulesets : []).filter(
+    (candidate) => candidate.target === "branch" && candidate.enforcement === "active",
   );
-  if (!ruleset) {
+  const hasSingleActiveBranchRuleset = activeBranchRulesets.length === 1;
+  if (activeBranchRulesets.length > 1) {
+    errors.push(
+      `repository must have exactly one active branch ruleset; found ${activeBranchRulesets.length}`,
+    );
+  }
+  const ruleset = hasSingleActiveBranchRuleset ? activeBranchRulesets[0] : undefined;
+  if (activeBranchRulesets.length === 0 || (ruleset && !protectsMain(ruleset, defaultBranch))) {
     errors.push("no active ruleset protects main");
-  } else {
+  } else if (ruleset) {
     const rules = ruleset.rules ?? [];
-    if (!rules.some((rule) => rule.type === "pull_request")) {
+    const pullRequestRule = rules.find((rule) => rule.type === "pull_request");
+    if (!pullRequestRule) {
       errors.push("main ruleset does not require pull requests");
+    } else if (pullRequestRule.parameters?.required_approving_review_count !== 0) {
+      errors.push("main ruleset pull request approvals must be exactly 0");
     }
     const statusRule = rules.find((rule) => rule.type === "required_status_checks");
-    const contexts = new Set(
-      statusRule?.parameters?.required_status_checks?.map((check) => check.context) ?? [],
+    const configuredChecks = statusRule?.parameters?.required_status_checks ?? [];
+    const checksByContext = new Map(
+      configuredChecks.map((check) => [check.context, check]),
     );
     for (const check of REQUIRED_CHECKS) {
-      if (!contexts.has(check.context)) {
+      const configured = checksByContext.get(check.context);
+      if (!configured) {
         errors.push(`main ruleset is missing required check: ${check.label}`);
+      } else if (configured.integration_id !== EXPECTED_CHECK_INTEGRATION_ID) {
+        errors.push(
+          `main ruleset required check ${check.label} must be bound to GitHub Actions integration ${EXPECTED_CHECK_INTEGRATION_ID}`,
+        );
       }
+    }
+    const requiredContexts = new Set(REQUIRED_CHECKS.map((check) => check.context));
+    const seenContexts = new Set();
+    for (const configured of configuredChecks) {
+      if (seenContexts.has(configured.context)) {
+        errors.push(`main ruleset has duplicate required check: ${configured.context}`);
+      } else if (!requiredContexts.has(configured.context)) {
+        errors.push(`main ruleset has unexpected required check: ${configured.context}`);
+      }
+      seenContexts.add(configured.context);
     }
     if (!statusRule?.parameters?.strict_required_status_checks_policy) {
       errors.push("main ruleset does not require branches to be up to date");
@@ -87,11 +120,32 @@ export function evaluateGitHubGovernance({
   for (const [name, path] of REQUIRED_WORKFLOWS) {
     if (!activeWorkflow(name, path)) errors.push(`active ${name} workflow is missing`);
   }
+  const registeredWorkflows = new Set(
+    REQUIRED_WORKFLOWS.map(([name, path]) => `${name}\0${path}`),
+  );
+  for (const workflow of workflows ?? []) {
+    if (
+      workflow.state === "active" &&
+      !registeredWorkflows.has(`${workflow.name}\0${workflow.path}`)
+    ) {
+      errors.push(
+        `unregistered active workflow can bypass governance: ${workflow.name ?? "missing-name"} (${workflow.path ?? "missing-path"})`,
+      );
+    }
+  }
   const requiredReviewerRule = releaseEnvironment?.protection_rules?.find(
     (rule) => rule.type === "required_reviewers",
   );
-  if (!requiredReviewerRule || (requiredReviewerRule.reviewers ?? []).length === 0) {
-    errors.push("release Environment has no required reviewer or cannot be verified");
+  const reviewers = requiredReviewerRule?.reviewers;
+  const hasExactReviewer =
+    Array.isArray(reviewers) &&
+    reviewers.length === 1 &&
+    reviewers[0]?.type === "User" &&
+    reviewers[0]?.reviewer?.login === EXPECTED_RELEASE_REVIEWER;
+  if (!hasExactReviewer) {
+    errors.push(
+      `release Environment required reviewer must be exactly ${EXPECTED_RELEASE_REVIEWER}`,
+    );
   }
   if (releaseEnvironment?.can_admins_bypass !== false) {
     errors.push("release Environment allows admin bypass or cannot be verified");
@@ -104,6 +158,32 @@ function gh(args, options = {}) {
     cwd: ROOT,
     encoding: "utf8",
     stdio: ["ignore", "pipe", options.quiet ? "ignore" : "inherit"],
+  });
+}
+
+export function loadPaginatedCollection(
+  endpoint,
+  { itemKey, runGh = gh } = {},
+) {
+  if (typeof endpoint !== "string" || !endpoint) {
+    throw new Error("paginated GitHub endpoint must be a non-empty string");
+  }
+  const separator = endpoint.includes("?") ? "&" : "?";
+  const paginatedEndpoint = `${endpoint}${separator}per_page=100`;
+  const pages = JSON.parse(
+    runGh(["api", "--paginate", "--slurp", paginatedEndpoint], { quiet: true }),
+  );
+  if (!Array.isArray(pages)) {
+    throw new Error(`paginated GitHub response must be an array: ${endpoint}`);
+  }
+  return pages.flatMap((page, index) => {
+    const items = itemKey === undefined ? page : page?.[itemKey];
+    if (!Array.isArray(items)) {
+      throw new Error(
+        `paginated GitHub response page ${index + 1} has no ${itemKey ?? "array"}: ${endpoint}`,
+      );
+    }
+    return items;
   });
 }
 
@@ -130,7 +210,7 @@ function loadRemoteState() {
   );
   const nameWithOwner = repository.nameWithOwner;
   if (!/^[^/]+\/[^/]+$/.test(nameWithOwner)) throw new Error("cannot resolve GitHub repository");
-  const summaries = JSON.parse(gh(["api", `repos/${nameWithOwner}/rulesets`]));
+  const summaries = loadPaginatedCollection(`repos/${nameWithOwner}/rulesets`);
   const rulesets = summaries.map((summary) =>
     JSON.parse(gh(["api", `repos/${nameWithOwner}/rulesets/${summary.id}`])),
   );
@@ -140,8 +220,9 @@ function loadRemoteState() {
     rulesets,
     dependabotAlerts: endpointEnabled(`repos/${nameWithOwner}/vulnerability-alerts`),
     securityUpdates: endpointEnabled(`repos/${nameWithOwner}/automated-security-fixes`),
-    workflows:
-      optionalJson(`repos/${nameWithOwner}/actions/workflows?per_page=100`)?.workflows ?? [],
+    workflows: loadPaginatedCollection(`repos/${nameWithOwner}/actions/workflows`, {
+      itemKey: "workflows",
+    }),
     releaseEnvironment: optionalJson(`repos/${nameWithOwner}/environments/release`),
   };
 }
