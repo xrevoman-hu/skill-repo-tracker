@@ -1098,11 +1098,21 @@
       "protectedPaths": [
         ".github/workflows/",
         ".github/dependabot.yml",
+        "scripts/core-policy-contracts.mjs",
+        "scripts/workflow-policy-contracts.mjs",
         "scripts/github-governance-check.mjs",
         "scripts/trusted-policy-guard.mjs",
         "docs/engineering/github-governance.md"
       ],
       "evidence": [
+        {
+          "path": "scripts/__tests__/governance-workflows.test.mjs",
+          "selector": "every GitHub workflow pins the approved Node 24-native actions"
+        },
+        {
+          "path": "scripts/__tests__/governance-workflows.test.mjs",
+          "selector": "repository automation policy requires scheduled workflows and bounded weekly dependency updates"
+        },
         {
           "path": "scripts/__tests__/github-governance-check.test.mjs",
           "selector": "reports every missing remote control"
