@@ -396,6 +396,81 @@ test("unregistered active workflows cannot publish releases or spoof required ch
   ]);
 });
 
+test("GitHub-managed Dependabot workflow is outside the repository workflow allowlist", () => {
+  const state = passingState();
+  state.workflows.push({
+    name: "Dependabot Updates",
+    path: "dynamic/dependabot/dependabot-updates",
+    state: "active",
+  });
+
+  assert.deepEqual(evaluateGitHubGovernance(state), []);
+});
+
+test("an unknown dynamic workflow cannot hide outside the repository workflow allowlist", () => {
+  const state = passingState();
+  state.workflows.push({
+    name: "Unknown managed workflow",
+    path: "dynamic/unknown/workflow",
+    state: "active",
+  });
+
+  assert.deepEqual(evaluateGitHubGovernance(state), [
+    "unregistered active workflow can bypass governance: Unknown managed workflow (dynamic/unknown/workflow)",
+  ]);
+});
+
+test("an active workflow with an unverifiable path fails closed", () => {
+  const state = passingState();
+  state.workflows.push({
+    name: "Malformed workflow",
+    state: "active",
+  });
+
+  assert.deepEqual(evaluateGitHubGovernance(state), [
+    "unregistered active workflow can bypass governance: Malformed workflow (missing-path)",
+  ]);
+});
+
+test("a workflow with a missing or unknown state fails closed", () => {
+  const missing = passingState();
+  missing.workflows.push({
+    name: "Missing state workflow",
+    path: "dynamic/unknown/missing-state",
+  });
+  assert.deepEqual(evaluateGitHubGovernance(missing), [
+    "workflow state cannot be verified: Missing state workflow (missing-state)",
+  ]);
+
+  const unknown = passingState();
+  unknown.workflows.push({
+    name: "Unknown state workflow",
+    path: "dynamic/unknown/future-state",
+    state: "disabled_future",
+  });
+  assert.deepEqual(evaluateGitHubGovernance(unknown), [
+    "workflow state cannot be verified: Unknown state workflow (disabled_future)",
+  ]);
+});
+
+test("known inactive workflows remain outside the active workflow allowlist", () => {
+  const state = passingState();
+  for (const inactiveState of [
+    "deleted",
+    "disabled_fork",
+    "disabled_inactivity",
+    "disabled_manually",
+  ]) {
+    state.workflows.push({
+      name: `Inactive ${inactiveState}`,
+      path: `.github/workflows/${inactiveState}.yml`,
+      state: inactiveState,
+    });
+  }
+
+  assert.deepEqual(evaluateGitHubGovernance(state), []);
+});
+
 test("remote rulesets and workflows are flattened across every GitHub API page", () => {
   const calls = [];
   const pagesByEndpoint = new Map([

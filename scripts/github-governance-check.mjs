@@ -20,6 +20,15 @@ const REQUIRED_WORKFLOWS = [
   ["Weekly resilience", ".github/workflows/weekly-resilience.yml"],
   ["Trusted policy", ".github/workflows/trusted-policy.yml"],
 ];
+const ALLOWED_GITHUB_MANAGED_WORKFLOWS = [
+  ["Dependabot Updates", "dynamic/dependabot/dependabot-updates"],
+];
+const KNOWN_INACTIVE_WORKFLOW_STATES = new Set([
+  "deleted",
+  "disabled_fork",
+  "disabled_inactivity",
+  "disabled_manually",
+]);
 
 function protectsMain(ruleset, defaultBranch) {
   const includes = ruleset.conditions?.ref_name?.include ?? [];
@@ -121,15 +130,22 @@ export function evaluateGitHubGovernance({
     if (!activeWorkflow(name, path)) errors.push(`active ${name} workflow is missing`);
   }
   const registeredWorkflows = new Set(
-    REQUIRED_WORKFLOWS.map(([name, path]) => `${name}\0${path}`),
+    [...REQUIRED_WORKFLOWS, ...ALLOWED_GITHUB_MANAGED_WORKFLOWS].map(
+      ([name, path]) => `${name}\0${path}`,
+    ),
   );
   for (const workflow of workflows ?? []) {
-    if (
-      workflow.state === "active" &&
-      !registeredWorkflows.has(`${workflow.name}\0${workflow.path}`)
+    const state = workflow?.state;
+    if (state !== "active" && !KNOWN_INACTIVE_WORKFLOW_STATES.has(state)) {
+      errors.push(
+        `workflow state cannot be verified: ${workflow?.name ?? "missing-name"} (${state ?? "missing-state"})`,
+      );
+    } else if (
+      state === "active" &&
+      !registeredWorkflows.has(`${workflow?.name}\0${workflow?.path}`)
     ) {
       errors.push(
-        `unregistered active workflow can bypass governance: ${workflow.name ?? "missing-name"} (${workflow.path ?? "missing-path"})`,
+        `unregistered active workflow can bypass governance: ${workflow?.name ?? "missing-name"} (${workflow?.path ?? "missing-path"})`,
       );
     }
   }

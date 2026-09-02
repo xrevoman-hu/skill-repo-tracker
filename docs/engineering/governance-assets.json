@@ -277,6 +277,26 @@
           {
             "path": "scripts/__tests__/github-governance-check.test.mjs",
             "selector": "unregistered active workflows cannot publish releases or spoof required checks"
+          },
+          {
+            "path": "scripts/__tests__/github-governance-check.test.mjs",
+            "selector": "GitHub-managed Dependabot workflow is outside the repository workflow allowlist"
+          },
+          {
+            "path": "scripts/__tests__/github-governance-check.test.mjs",
+            "selector": "an unknown dynamic workflow cannot hide outside the repository workflow allowlist"
+          },
+          {
+            "path": "scripts/__tests__/github-governance-check.test.mjs",
+            "selector": "an active workflow with an unverifiable path fails closed"
+          },
+          {
+            "path": "scripts/__tests__/github-governance-check.test.mjs",
+            "selector": "a workflow with a missing or unknown state fails closed"
+          },
+          {
+            "path": "scripts/__tests__/github-governance-check.test.mjs",
+            "selector": "known inactive workflows remain outside the active workflow allowlist"
           }
         ]
       }
@@ -1094,6 +1114,26 @@
         {
           "path": "scripts/__tests__/github-governance-check.test.mjs",
           "selector": "unregistered active workflows cannot publish releases or spoof required checks"
+        },
+        {
+          "path": "scripts/__tests__/github-governance-check.test.mjs",
+          "selector": "GitHub-managed Dependabot workflow is outside the repository workflow allowlist"
+        },
+        {
+          "path": "scripts/__tests__/github-governance-check.test.mjs",
+          "selector": "an unknown dynamic workflow cannot hide outside the repository workflow allowlist"
+        },
+        {
+          "path": "scripts/__tests__/github-governance-check.test.mjs",
+          "selector": "an active workflow with an unverifiable path fails closed"
+        },
+        {
+          "path": "scripts/__tests__/github-governance-check.test.mjs",
+          "selector": "a workflow with a missing or unknown state fails closed"
+        },
+        {
+          "path": "scripts/__tests__/github-governance-check.test.mjs",
+          "selector": "known inactive workflows remain outside the active workflow allowlist"
         }
       ],
       "gates": ["verify", "github-governance", "ci", "trusted-policy"],
