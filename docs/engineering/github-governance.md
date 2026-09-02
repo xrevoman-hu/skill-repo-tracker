@@ -132,3 +132,5 @@ Dependabot Updates 动态 workflow，其功能状态仍由独立远端设置校�
 `release` Environment 的唯一 required
 reviewer 为 `xrevoman-hu` 且
 `can_admins_bypass=false`。字段缺失、权限不足或无法核验都失败，不会把未知状态当成通过。
+
+<!-- Node 24 Trusted policy probe only; this comment must never merge. -->
