@@ -2,6 +2,12 @@
 
 [中文](#中文) | [English](#english)
 
+本地管理 Skills、提示词和 GitHub 仓库。Local-first Skills, prompts, and GitHub repository management for macOS.
+
+**[下载 v1.2.8 · Apple Silicon DMG](https://github.com/xrevoman-hu/skill-repo-tracker/releases/download/v1.2.8/Skill.Repo.Tracker_1.2.8_aarch64.dmg)** · [版本说明 / Release notes](docs/releases/v1.2.8.md) · [贡献指南 / Contributing](CONTRIBUTING.md)
+
+macOS 12+ · Apple Silicon（arm64）。安装包为 **ad-hoc 签名测试分发，未经过 Apple notarization**；首次打开方式见下文。The installer is ad-hoc signed and not Apple notarized; first-launch instructions are below.
+
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![Tauri](https://img.shields.io/badge/Tauri-v2-blue)
 ![React](https://img.shields.io/badge/React-19-61dafb)
@@ -13,37 +19,27 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/v1.1.8/01-github-workbench.png" alt="Skill Repo Tracker v1.1.8 GitHub 实机界面" width="820" />
+  <img src="docs/images/v1.2.8/repositories-demo.png" alt="v1.2.8 仓库管理演示：全部为虚构仓库与示例路径" width="1000" />
 </p>
 
 ## 界面预览 / Interface Preview
 
-提示词库为 v1.2.1 的脱敏演示库实机截图；其余界面为 v1.1.8 实机截图。The prompt library uses a sanitized v1.2.1 demo database; the remaining screens are real v1.1.8 app screenshots.
+以下截图来自 v1.2.8 前端在本机浏览器中的实际运行，使用自带 `DemoAppService` 虚构数据。账号、仓库、数量、时间、提示词和路径均为演示内容，不来自维护者的真实账号或数据库；这些是 Web 演示截图，不是原生 macOS 窗口截图。
 
-<p align="center">
-  <img src="docs/images/v1.2.1/01-prompt-library.png" alt="Skill Repo Tracker v1.2.1 Prompt Library" width="820" />
-</p>
+These screenshots capture the locally running v1.2.8 frontend with built-in fictional `DemoAppService` data. Accounts, repositories, counts, dates, prompts, and paths are examples, not maintainer data. They show the web demo, not a native macOS window.
 
 <table>
   <tr>
-    <td><strong>GitHub</strong><br /><img src="docs/images/v1.1.8/01-github-workbench.png" alt="GitHub page" width="420" /></td>
-    <td><strong>仓库 / Repositories</strong><br /><img src="docs/images/v1.1.8/02-repositories-note.png" alt="Repositories page" width="420" /></td>
-  </tr>
-  <tr>
-    <td><strong>技能 / Skills</strong><br /><img src="docs/images/v1.1.8/03-skills.png" alt="Skills page" width="420" /></td>
-    <td><strong>插件 / Plugins</strong><br /><img src="docs/images/v1.1.8/04-plugins.png" alt="Plugins page" width="420" /></td>
-  </tr>
-  <tr>
-    <td><strong>任务 / Tasks</strong><br /><img src="docs/images/v1.1.8/05-tasks.png" alt="Tasks page" width="420" /></td>
-    <td><strong>设置 / Settings</strong><br /><img src="docs/images/v1.1.8/06-settings-migration.png" alt="Settings page" width="420" /></td>
+    <td><strong>技能 / Skills</strong><br /><img src="docs/images/v1.2.8/skills-demo.png" alt="v1.2.8 Skills with fictional repository data" width="480" /></td>
+    <td><strong>提示词库 / Prompts</strong><br /><img src="docs/images/v1.2.8/prompts-demo.png" alt="v1.2.8 prompt library with fictional example prompts" width="480" /></td>
   </tr>
 </table>
 
 ## 中文
 
-Skill Repo Tracker 是一个给 AI Skill 使用者准备的本地桌面工具。它解决的不是“再做一个仓库列表”，而是把散落在 GitHub、Claude Code、Codex、本机目录和 README 插件入口里的线索收回来，变成一个能看清来源、能安全更新、能随时回退的本地工作台。
+Skill Repo Tracker 是一个 local-first macOS 桌面工具，用于追踪 GitHub 仓库、备份源码快照、管理本地 Skills 和提示词。Skills 先进入独立主库，再发布到选定的工具目录，来源、更新状态与备份记录集中管理。
 
-如果你经常从多个仓库安装 Skills，最容易遇到三类麻烦：
+如果你经常从多个仓库安装 Skills，最容易遇到这些麻烦：
 
 - 不知道哪个 Skill 来自哪个仓库、哪个路径、哪个版本。
 - README 里有 `/plugin install`、CLI 或单 Skill 安装命令，但不知道它从哪里来、关联哪些 Skill。
@@ -53,6 +49,12 @@ Skill Repo Tracker 是一个给 AI Skill 使用者准备的本地桌面工具。
 Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再按你的选择发布到工具目录。主库默认在 `~/SkillRepoTracker/skills`，当前默认发布到 Claude Code 和 Codex。Gemini、OpenCode、OpenClaw、Hermes 可以手动勾选，但不会默认打开。
 
 当前版本：`v1.2.8`
+
+### v1.2.8 更新
+
+- Vite 8 / Rolldown 构建迁移，保留 Safari 15 兼容目标与 CSS 回退。
+- 更新 Tauri CLI、serde 和目录选择插件，加强覆盖率、浏览器与发布产物验证。
+- 仓库新增三个实验性开发 Skills，供贡献者参考；它们不是应用内新增功能，也不授予自动发布权限。完整范围与限制见[版本说明](docs/releases/v1.2.8.md)。
 
 ### 它帮你完成什么
 
@@ -67,7 +69,14 @@ Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再
 - **一份主库，多处发布**：Skill 永远先写入独立主库，再复制到 Claude Code、Codex 等目标目录。
 - **取消同步可追溯**：取消某个目标后，应用只会处理自己发布过的副本；执行取消同步时会先备份，再从目标工具目录移除。
 - **源码快照备份**：仓库更新可以保存 ZIP、manifest 和任务日志，方便以后审计或回滚。
-- **隐私友好**：GitHub token 存在 macOS Keychain，不写入 SQLite、manifest 或任务日志。
+- **凭据存储**：应用托管的 GitHub token 存在 macOS Keychain，不写入 SQLite、manifest 或任务日志。用户自行粘贴到提示词和备注中的秘密不属于这一保证。
+
+### 隐私与分享
+
+- local-first 不等于全部内容都可公开：仓库列表、私仓数量、账号来源、备注、任务日志和完整本机路径都可能识别使用者或暴露工作内容。
+- 截图和报错请使用虚构数据；检查表格、状态栏、弹窗、日志、文件选择器和图片元数据。只给头像或账号按钮打码并不足够。
+- 提示词、Markdown、ZIP 和迁移包可能包含你输入的明文内容；分享前检查正文与路径，不上传真实数据库、token 或私密导出包。
+- 安全问题请按 [SECURITY.md](SECURITY.md) 私密报告，不在公开 Issue 中粘贴凭据或真实用户数据。
 
 ### 同步到底是什么意思
 
@@ -99,7 +108,7 @@ Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再
 - 默认同步目标：`~/.claude/skills`、`~/.codex/skills`
 - 可选同步目标：`~/.gemini/skills`、`~/.config/opencode/skills`、`~/.openclaw/skills`、`~/.hermes/skills`
 - SQLite 数据库：macOS 应用数据目录下的 `skill-repo-tracker.sqlite`
-- 提示词正文：保存在同一 SQLite 中；bundled SQLite 默认单值理论上限约 953.7 MiB，产品限制为每篇最多 `5,242,880` UTF-8 bytes（5 MiB）
+- 提示词正文：保存在同一 SQLite 中，每篇最多 5 MiB（`5,242,880` UTF-8 bytes）
 - GitHub token：macOS Keychain
 
 ### 本地运行
@@ -153,7 +162,7 @@ Cargo fmt、Clippy `-D warnings`、Rust tests 和 Git diff 检查。`CI / verify
 
 这种包可以挂载、复制到 `/Applications` 并本机验证，但不是 Apple notarized 公开安装包。首次打开时，macOS 可能提示无法验证开发者；测试用户需要右键打开，或在“系统设置 -> 隐私与安全性”里选择“仍要打开”。安装测试包时请注意：
 
-1. 从 GitHub Release 下载 `Skill.Repo.Tracker_1.2.8_aarch64.dmg`。
+1. 从 [GitHub Release](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.2.8) 下载 `Skill.Repo.Tracker_1.2.8_aarch64.dmg`。
 2. 双击打开 DMG，把 `Skill Repo Tracker.app` 拖入 `/Applications`。
 3. 首次启动如果提示“无法验证开发者”或类似安全提示，请在 Finder 里右键这个 App，选择“打开”，再在弹窗中确认“打开”。
 4. 如果右键打开仍被拦截，请进入“系统设置 -> 隐私与安全性”，在底部找到被拦截的 Skill Repo Tracker，点击“仍要打开”。
@@ -192,6 +201,16 @@ Skill Repo Tracker is a local-first macOS app for people who install, update, an
 Instead of treating Claude Code, Codex, Gemini, OpenCode, OpenClaw, or Hermes folders as the source of truth, the app keeps one independent Skill library at `~/SkillRepoTracker/skills`. Skills are installed there first, then copied to selected tool directories.
 
 Current version: `v1.2.8`
+
+### v1.2.8 Highlights
+
+Vite 8 / Rolldown retains the Safari 15 compatibility target and CSS fallbacks. Tauri CLI, serde, and the directory dialog plugin are updated, alongside stronger coverage, browser, and artifact checks. Three experimental repository development Skills support contributors; they are not new in-app features or publishing permissions. See the [release notes](docs/releases/v1.2.8.md) for scope and limitations.
+
+### Privacy and Sharing
+
+Local-first data can still be sensitive. Screenshots may disclose account associations, private-repository counts, notes, task history, and local paths. Use fictional demo data and inspect tables, status bars, dialogs, logs, and image metadata before sharing. Masking only an avatar or account button is insufficient.
+
+App-managed tokens stay in Keychain, but secrets pasted into prompts or notes remain user content and may be exported in plaintext. Do not post real databases, private exports, credentials, or personal paths in public issues. Use [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ### What It Helps With
 
@@ -235,7 +254,7 @@ This is suitable for GitHub Release test assets that users manually allow throug
 
 Install notes for the downloaded DMG:
 
-1. Download `Skill.Repo.Tracker_1.2.8_aarch64.dmg` from GitHub Releases.
+1. Download `Skill.Repo.Tracker_1.2.8_aarch64.dmg` from the [GitHub Release](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.2.8).
 2. Open the DMG and drag `Skill Repo Tracker.app` into `/Applications`.
 3. On first launch, macOS may block the app because it is ad-hoc signed. Control-click the app in Finder, choose Open, then confirm Open.
 4. If it is still blocked, open System Settings -> Privacy & Security and choose Open Anyway for Skill Repo Tracker.
