@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -19,15 +19,30 @@ import { isRustProductionSourcePath } from "./source-classification.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = "docs/engineering/coverage-baseline.json";
+const COVERAGE_ARTIFACTS = {
+  frontend: "coverage/frontend/coverage-summary.json",
+  rust: "coverage/rust.lcov",
+};
 
+export function coveragePercent(covered, total) {
+  if (!Number.isFinite(covered) || !Number.isFinite(total) || covered < 0 || total < 0) {
+    throw new Error("coverage counts must be finite non-negative numbers");
+  }
+  if (covered > total) throw new Error("covered coverage count cannot exceed total");
+  return total === 0 ? 100 : (covered * 100) / total;
+}
+
+export function floorCoveragePercent(covered, total) {
+  return Math.floor(coveragePercent(covered, total) * 100) / 100;
+}
 function frontendSummary() {
   const summary = JSON.parse(
     readFileSync(resolve(ROOT, "coverage/frontend/coverage-summary.json"), "utf8"),
   ).total;
   return {
-    lines: summary.lines.pct,
-    branches: summary.branches.pct,
-    functions: summary.functions.pct,
+    lines: coveragePercent(summary.lines.covered, summary.lines.total),
+    branches: coveragePercent(summary.branches.covered, summary.branches.total),
+    functions: coveragePercent(summary.functions.covered, summary.functions.total),
   };
 }
 
@@ -266,12 +281,10 @@ export function summarizeLcov(files) {
     functionTotal += file.functions.size;
     functionCovered += [...file.functions.values()].filter(Boolean).length;
   }
-  const percent = (covered, total) =>
-    total === 0 ? 100 : Number(((covered / total) * 100).toFixed(2));
   return {
-    lines: percent(lineCovered, lineTotal),
-    branches: percent(branchCovered, branchTotal),
-    functions: percent(functionCovered, functionTotal),
+    lines: coveragePercent(lineCovered, lineTotal),
+    branches: coveragePercent(branchCovered, branchTotal),
+    functions: coveragePercent(functionCovered, functionTotal),
   };
 }
 
@@ -377,9 +390,8 @@ export function calculateChangedCoverage({ changed, lcov, isExecutable }) {
   }
   if (lineTotal === 0) return undefined;
   return {
-    linePercent: Number(((lineCovered / lineTotal) * 100).toFixed(2)),
-    branchPercent:
-      branchTotal === 0 ? 100 : Number(((branchCovered / branchTotal) * 100).toFixed(2)),
+    linePercent: floorCoveragePercent(lineCovered, lineTotal),
+    branchPercent: floorCoveragePercent(branchCovered, branchTotal),
     lineCovered,
     lineTotal,
     branchCovered,
@@ -421,19 +433,239 @@ export function loadTrackedJsonAtBase({ tracked, readContents, label }) {
   return parseTrackedJsonAtBase({ tracked, contents, label });
 }
 
-export function validateCoverageBaselineDocument(document, label) {
+const COVERAGE_MODES = ["frontend", "rust"];
+const COVERAGE_METRICS = ["lines", "branches", "functions"];
+const COVERAGE_BASELINE_PROTOCOLS = ["reviewed-bootstrap-v1", "orchestrated-two-run-v1"];
+const REVIEWED_BOOTSTRAP_COMMIT = "ec4162cef1627d8c2e4ec90e2f96495f9dcc8626";
+
+function hasExactKeys(value, expected) {
+  const actual = Object.keys(value).sort();
+  const wanted = [...expected].sort();
+  return actual.length === wanted.length && actual.every((key, index) => key === wanted[index]);
+}
+
+function validateMetricValue(value, label, { requireTwoDecimals = false } = {}) {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
+    throw new Error(`${label} is invalid`);
+  }
+  if (requireTwoDecimals && Math.abs(value * 100 - Math.round(value * 100)) > 1e-8) {
+    throw new Error(`${label} must be recorded to at most two decimal places`);
+  }
+}
+
+export function validateCoverageBaselineDocument(document, label, { legacy = false } = {}) {
   if (!document || typeof document !== "object" || Array.isArray(document)) {
     throw new Error(`${label} must be a JSON object`);
   }
-  for (const mode of ["frontend", "rust"]) {
-    for (const metric of ["lines", "branches", "functions"]) {
+  for (const mode of COVERAGE_MODES) {
+    for (const metric of COVERAGE_METRICS) {
       const value = document[mode]?.[metric];
-      if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 100) {
-        throw new Error(`${label} has invalid ${mode}.${metric}`);
+      try {
+        validateMetricValue(value, `${label}.${mode}.${metric}`, {
+          requireTwoDecimals: !legacy,
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === `${label}.${mode}.${metric} is invalid`) {
+          throw new Error(`${label} has invalid ${mode}.${metric}`);
+        }
+        throw error;
       }
+    }
+    if (!legacy && !hasExactKeys(document[mode], COVERAGE_METRICS)) {
+      throw new Error(`${label}.${mode} must contain only lines, branches, and functions`);
+    }
+  }
+  if (!legacy) {
+    if (!hasExactKeys(document, ["measuredAtCommit", "protocol", ...COVERAGE_MODES])) {
+      throw new Error(`${label} must contain only measuredAtCommit, protocol, frontend, and rust`);
+    }
+    if (!/^[0-9a-f]{40}$/.test(document.measuredAtCommit ?? "")) {
+      throw new Error(`${label} has invalid measuredAtCommit`);
+    }
+    if (!COVERAGE_BASELINE_PROTOCOLS.includes(document.protocol)) {
+      throw new Error(`${label} has invalid protocol`);
+    }
+    if (document.protocol === "reviewed-bootstrap-v1" && document.measuredAtCommit !== REVIEWED_BOOTSTRAP_COMMIT) {
+      throw new Error(`${label} may use reviewed-bootstrap-v1 only for ${REVIEWED_BOOTSTRAP_COMMIT}`);
     }
   }
   return document;
+}
+
+export function validateCoverageMeasurementDocument(document, label) {
+  if (!document || typeof document !== "object" || Array.isArray(document)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  if (!hasExactKeys(document, ["commit", "clean", "artifacts", ...COVERAGE_MODES])) {
+    throw new Error(`${label} must contain only commit, clean, artifacts, frontend, and rust`);
+  }
+  if (!/^[0-9a-f]{40}$/.test(document.commit ?? "")) {
+    throw new Error(`${label} has invalid commit`);
+  }
+  if (document.clean !== true) throw new Error(`${label} must come from a clean worktree`);
+  for (const mode of COVERAGE_MODES) {
+    const metrics = document[mode];
+    if (!metrics || typeof metrics !== "object" || Array.isArray(metrics)) {
+      throw new Error(`${label}.${mode} must be a JSON object`);
+    }
+    if (!hasExactKeys(metrics, COVERAGE_METRICS)) {
+      throw new Error(`${label}.${mode} must contain only lines, branches, and functions`);
+    }
+    for (const metric of COVERAGE_METRICS) {
+      validateMetricValue(metrics[metric], `${label}.${mode}.${metric}`);
+    }
+    const artifact = document.artifacts?.[mode];
+    if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
+      throw new Error(`${label}.artifacts.${mode} must be a JSON object`);
+    }
+    if (!hasExactKeys(artifact, ["path", "mtimeMs"])) {
+      throw new Error(`${label}.artifacts.${mode} must contain only path and mtimeMs`);
+    }
+    if (artifact.path !== COVERAGE_ARTIFACTS[mode]) {
+      throw new Error(`${label}.artifacts.${mode}.path must be ${COVERAGE_ARTIFACTS[mode]}`);
+    }
+    if (typeof artifact.mtimeMs !== "number" || !Number.isFinite(artifact.mtimeMs) || artifact.mtimeMs <= 0) {
+      throw new Error(`${label}.artifacts.${mode}.mtimeMs is invalid`);
+    }
+  }
+  if (!hasExactKeys(document.artifacts, COVERAGE_MODES)) {
+    throw new Error(`${label}.artifacts must contain only frontend and rust`);
+  }
+  return document;
+}
+
+function floorPercentageValue(value) {
+  return Math.floor((value + 1e-9) * 100) / 100;
+}
+
+export function buildCoverageBaselineUpdate({ first, second, previous, expectedCommit }) {
+  const firstRun = validateCoverageMeasurementDocument(first, "first coverage run");
+  const secondRun = validateCoverageMeasurementDocument(second, "second coverage run");
+  const previousBaseline = validateCoverageBaselineDocument(previous, "current coverage baseline");
+  if (firstRun.commit !== secondRun.commit) {
+    throw new Error("coverage baseline runs must use the same commit");
+  }
+  if (expectedCommit && firstRun.commit !== expectedCommit) {
+    throw new Error(`coverage baseline runs must use current commit ${expectedCommit}`);
+  }
+  for (const mode of COVERAGE_MODES) {
+    if (secondRun.artifacts[mode].mtimeMs <= firstRun.artifacts[mode].mtimeMs) {
+      throw new Error(`${mode} coverage artifact was not regenerated between baseline runs`);
+    }
+  }
+
+  const next = {
+    measuredAtCommit: firstRun.commit,
+    protocol: "orchestrated-two-run-v1",
+    frontend: {},
+    rust: {},
+  };
+  for (const mode of COVERAGE_MODES) {
+    for (const metric of COVERAGE_METRICS) {
+      const firstValue = firstRun[mode][metric];
+      const secondValue = secondRun[mode][metric];
+      if (Math.abs(firstValue - secondValue) > 0.010000001) {
+        throw new Error(
+          `${mode}.${metric} drifted by more than 0.01 percentage points between runs`,
+        );
+      }
+      const candidate = floorPercentageValue(Math.min(firstValue, secondValue));
+      if (candidate + Number.EPSILON < previousBaseline[mode][metric]) {
+        throw new Error(
+          `coverage baseline may not decrease: ${mode}.${metric} ${candidate}% < ${previousBaseline[mode][metric]}%`,
+        );
+      }
+      next[mode][metric] = candidate;
+    }
+  }
+  return validateCoverageBaselineDocument(next, "updated coverage baseline");
+}
+
+function gitCommit() {
+  return execFileSync("git", ["rev-parse", "HEAD"], { cwd: ROOT, encoding: "utf8" }).trim();
+}
+
+function isCleanWorktree() {
+  return execFileSync("git", ["status", "--porcelain"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  }).trim() === "";
+}
+
+function captureCoverageMeasurement() {
+  if (!isCleanWorktree()) throw new Error("coverage baseline measurements require a clean worktree");
+  return {
+    commit: gitCommit(),
+    clean: true,
+    artifacts: Object.fromEntries(COVERAGE_MODES.map((mode) => [mode, {
+      path: COVERAGE_ARTIFACTS[mode],
+      mtimeMs: statSync(resolve(ROOT, COVERAGE_ARTIFACTS[mode])).mtimeMs,
+    }])),
+    frontend: frontendSummary(),
+    rust: rustSummary(),
+  };
+}
+
+export function assertCoverageArtifactsRegenerated(previousMtimes, measurement) {
+  const run = validateCoverageMeasurementDocument(measurement, "coverage run");
+  for (const mode of COVERAGE_MODES) {
+    if (run.artifacts[mode].mtimeMs <= (previousMtimes[mode] ?? 0)) {
+      throw new Error(`${mode} coverage artifact was not regenerated by this coverage run`);
+    }
+  }
+}
+
+export function validateCoverageBaselineArguments(options) {
+  const unexpected = options.filter((argument) => argument !== "--write");
+  if (unexpected.length > 0 || options.filter((argument) => argument === "--write").length > 1) {
+    throw new Error("coverage baseline does not accept external snapshot evidence");
+  }
+  return { write: options.includes("--write") };
+}
+
+export function runCoverageBaselineProtocol({ previous, expectedCommit, runCoverageCycle }) {
+  const first = runCoverageCycle(1);
+  const second = runCoverageCycle(2);
+  return buildCoverageBaselineUpdate({ first, second, previous, expectedCommit });
+}
+
+function coverageArtifactMtimes() {
+  return Object.fromEntries(COVERAGE_MODES.map((mode) => {
+    const artifact = resolve(ROOT, COVERAGE_ARTIFACTS[mode]);
+    return [mode, existsSync(artifact) ? statSync(artifact).mtimeMs : 0];
+  }));
+}
+
+function executeCoverageCycle() {
+  if (!isCleanWorktree()) throw new Error("coverage baseline updates require a clean worktree");
+  const expectedCommit = gitCommit();
+  const previousMtimes = coverageArtifactMtimes();
+  const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+  execFileSync(npm, ["run", "test:coverage"], { cwd: ROOT, stdio: "inherit" });
+  execFileSync(npm, ["run", "coverage:rust"], { cwd: ROOT, stdio: "inherit" });
+  if (!isCleanWorktree() || gitCommit() !== expectedCommit) {
+    throw new Error("coverage run changed the worktree or HEAD");
+  }
+  const measurement = captureCoverageMeasurement();
+  assertCoverageArtifactsRegenerated(previousMtimes, measurement);
+  return measurement;
+}
+
+function updateCoverageBaseline(write) {
+  if (!isCleanWorktree()) throw new Error("coverage baseline updates require a clean worktree");
+  const baselineFile = resolve(ROOT, BASELINE_PATH);
+  const expectedCommit = gitCommit();
+  const next = runCoverageBaselineProtocol({
+    previous: JSON.parse(readFileSync(baselineFile, "utf8")),
+    expectedCommit,
+    runCoverageCycle: executeCoverageCycle,
+  });
+  if (!isCleanWorktree() || gitCommit() !== expectedCommit) {
+    throw new Error("coverage baseline protocol changed the worktree or HEAD");
+  }
+  const serialized = `${JSON.stringify(next, null, 2)}\n`;
+  if (write) writeFileSync(baselineFile, serialized, "utf8");
+  else process.stdout.write(serialized);
 }
 
 function changedCoverage(baseRef, prefix, lcovPath, mode) {
@@ -482,8 +714,13 @@ function baselineAtBase(baseRef) {
 
 function main() {
   const mode = process.argv[2];
+  if (mode === "baseline") {
+    const { write } = validateCoverageBaselineArguments(process.argv.slice(3));
+    updateCoverageBaseline(write);
+    return;
+  }
   if (!["frontend", "rust"].includes(mode)) {
-    throw new Error("usage: node scripts/check-coverage.mjs frontend|rust");
+    throw new Error("usage: node scripts/check-coverage.mjs frontend|rust|baseline [--write]");
   }
   const baselineFile = resolve(ROOT, BASELINE_PATH);
   if (!existsSync(baselineFile)) throw new Error(`${BASELINE_PATH} is missing`);
@@ -498,6 +735,7 @@ function main() {
     ? validateCoverageBaselineDocument(
         rawPreviousBaseline,
         `${baseRef}:${BASELINE_PATH}`,
+        { legacy: true },
       )
     : undefined;
   const enforceChanged = shouldEnforceChangedCoverage({

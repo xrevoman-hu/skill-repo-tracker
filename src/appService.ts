@@ -9,7 +9,9 @@ import type {
   UiRepository,
   UiSkill,
   UiTask,
+  UpdateSettingsRequest,
 } from "./api";
+import { DemoPromptTransport } from "./demoPromptTransport";
 import {
   initialGithubAccounts,
   initialGithubRepositories,
@@ -42,12 +44,59 @@ export type AppBootstrapSnapshot = {
   appMetadata: AppMetadata | null;
 };
 
+export type AddRepositoryRequest = {
+  url: string;
+  refName: string;
+  note: string;
+};
+
+export type RepositoryMutationResult = {
+  workspace: WorkspaceSnapshot;
+  repositoryId: string;
+};
+
+export type GithubCatalogSnapshot = {
+  accounts: GitHubAccount[];
+  repositories: GitHubRepository[];
+};
+
+export type PromptTransport = Pick<
+  typeof api,
+  | "listPrompts"
+  | "getPromptDetail"
+  | "createPrompt"
+  | "updatePrompt"
+  | "deletePrompt"
+  | "setPromptPinned"
+  | "reorderPrompt"
+  | "listPromptTags"
+  | "createPromptTag"
+  | "renamePromptTag"
+  | "mergePromptTags"
+  | "deletePromptTag"
+  | "exportPromptMarkdown"
+  | "exportPromptsZip"
+  | "previewPromptsZipImport"
+  | "importPromptsZip"
+>;
+
 export interface AppService {
   readonly runtime: "tauri" | "demo";
+  readonly promptTransport: PromptTransport;
   bootstrap(): Promise<AppBootstrapSnapshot>;
   checkRepositories(current: WorkspaceSnapshot): Promise<WorkspaceSnapshot>;
   backupRepositories(request: BackupRequest): Promise<BackupResult>;
   retryTask(taskId: string, current: WorkspaceSnapshot): Promise<WorkspaceSnapshot>;
+  addRepository(
+    request: AddRepositoryRequest,
+    current: WorkspaceSnapshot,
+  ): Promise<RepositoryMutationResult>;
+  updateSettings(settings: UpdateSettingsRequest): Promise<AppSettings>;
+  refreshGithubCatalog(
+    accountId: string | undefined,
+    current: GithubCatalogSnapshot,
+  ): Promise<GithubCatalogSnapshot>;
+  chooseLocalRepository(): Promise<string | null>;
   openBackupFolder(repositoryId?: string): Promise<void>;
   checkForUpdates(currentVersion: string): Promise<AppUpdateCheck>;
 }
@@ -57,6 +106,10 @@ type TauriTransport = Pick<
   | "checkRepositories"
   | "backupRepositories"
   | "retryTask"
+  | "addRepository"
+  | "updateSettings"
+  | "refreshGithubRepositories"
+  | "pickDirectory"
   | "listRepositories"
   | "listSkills"
   | "listPlugins"
@@ -71,6 +124,7 @@ type TauriTransport = Pick<
 
 export class TauriAppService implements AppService {
   readonly runtime = "tauri" as const;
+  readonly promptTransport: PromptTransport = api;
 
   constructor(private readonly transport: TauriTransport = api) {}
 
@@ -132,6 +186,69 @@ export class TauriAppService implements AppService {
     return { repositories, skills, plugins, tasks };
   }
 
+  async addRepository(
+    request: AddRepositoryRequest,
+    current: WorkspaceSnapshot,
+  ): Promise<RepositoryMutationResult> {
+    const repositories = await this.transport.addRepository(request);
+    const [skills, plugins, tasks] = await Promise.all([
+      this.transport.listSkills(),
+      this.transport.listPlugins(),
+      this.transport.listTasks(),
+    ]);
+    const previousIds = new Set(current.repositories.map((repository) => repository.id));
+    const requestedName = normalizeRepositoryName(request.url).toLocaleLowerCase("en-US");
+    const requestedMatches = repositories.filter((repository) => (
+      normalizeRepositoryName(repository.name).toLocaleLowerCase("en-US") === requestedName
+      && repository.ref === request.refName
+    ));
+    const newRepositories = repositories.filter((repository) => !previousIds.has(repository.id));
+    const repositoryId = requestedMatches.length === 1
+      ? requestedMatches[0].id
+      : newRepositories.length === 1
+        ? newRepositories[0].id
+        : "";
+    return { workspace: { repositories, skills, plugins, tasks }, repositoryId };
+  }
+
+  async updateSettings(settings: UpdateSettingsRequest): Promise<AppSettings> {
+    const {
+      backupRoot,
+      skillLibraryRoot,
+      skillsRoot,
+      defaultSyncTargets,
+      syncBackupKeep,
+      autoCheckInterval,
+      autoCheckEnabled,
+      autoBackupEnabled,
+    } = settings;
+    return this.transport.updateSettings({
+      backupRoot,
+      skillLibraryRoot,
+      skillsRoot,
+      defaultSyncTargets,
+      syncBackupKeep,
+      autoCheckInterval,
+      autoCheckEnabled,
+      autoBackupEnabled,
+    });
+  }
+
+  async refreshGithubCatalog(
+    accountId: string | undefined,
+    current: GithubCatalogSnapshot,
+  ): Promise<GithubCatalogSnapshot> {
+    const refreshed = await this.transport.refreshGithubRepositories(accountId);
+    const repositories = accountId
+      ? [...current.repositories.filter((repository) => repository.accountId !== accountId), ...refreshed]
+      : refreshed;
+    return { accounts: await this.transport.listGithubAccounts(), repositories };
+  }
+
+  chooseLocalRepository() {
+    return this.transport.pickDirectory();
+  }
+
   async openBackupFolder(repositoryId?: string) {
     await this.transport.openBackupFolder(repositoryId);
   }
@@ -141,19 +258,26 @@ export class TauriAppService implements AppService {
   }
 }
 
+export type DemoMode = "default" | "empty-plugins" | "retry-race" | "github-rate-limit";
+
 type DemoAppServiceOptions = {
-  mode?: "default" | "empty-plugins";
+  mode?: DemoMode;
   now?: () => Date;
 };
 
 export class DemoAppService implements AppService {
   readonly runtime = "demo" as const;
-  private readonly mode: "default" | "empty-plugins";
+  readonly promptTransport: PromptTransport;
+  private readonly mode: DemoMode;
   private readonly now: () => Date;
+  private settings: AppSettings = demoSettings();
+  private githubRefreshAttempts = 0;
+  private pendingLateRetry: (() => void) | null = null;
 
   constructor(options: DemoAppServiceOptions = {}) {
     this.mode = options.mode ?? "default";
     this.now = options.now ?? createDeterministicDemoClock();
+    this.promptTransport = new DemoPromptTransport(this.now);
   }
 
   async bootstrap(): Promise<AppBootstrapSnapshot> {
@@ -162,9 +286,9 @@ export class DemoAppService implements AppService {
         repositories: initialRepos,
         skills: initialSkills,
         plugins: this.mode === "empty-plugins" ? [] : initialPlugins,
-        tasks: initialTasks,
+        tasks: this.mode === "retry-race" ? [demoRetryableTask(), ...initialTasks] : initialTasks,
       },
-      settings: null,
+      settings: this.settings,
       githubAccounts: initialGithubAccounts,
       githubRepositories: initialGithubRepositories,
       appMetadata: null,
@@ -176,7 +300,7 @@ export class DemoAppService implements AppService {
     const repositories = current.repositories.map((repository) => ({
       ...repository,
       lastChecked: checkedAt,
-      checkStatus: repository.id === "missing" ? "failed" : "success",
+      checkStatus: repository.checkStatus === "failed" ? "failed" : "success",
     }));
     const succeeded = repositories.filter((repository) => repository.checkStatus === "success").length;
     const task = demoTask(this.now(), {
@@ -226,8 +350,116 @@ export class DemoAppService implements AppService {
     return clone({ repositories, tasks: [task, ...request.tasks] });
   }
 
-  async retryTask(_taskId: string, current: WorkspaceSnapshot): Promise<WorkspaceSnapshot> {
+  async retryTask(taskId: string, current: WorkspaceSnapshot): Promise<WorkspaceSnapshot> {
+    const task = current.tasks.find((candidate) => candidate.id === taskId);
+    if (!task?.retryable) return clone(current);
+    if (this.mode === "retry-race") {
+      return new Promise((resolve) => {
+        this.pendingLateRetry = () => resolve(clone({
+          ...current,
+          tasks: [demoSuccessfulRetry(this.now(), task), ...current.tasks.filter((item) => item.id !== taskId)],
+        }));
+      });
+    }
+    return clone({
+      ...current,
+      tasks: [demoSuccessfulRetry(this.now(), task), ...current.tasks.filter((item) => item.id !== taskId)],
+    });
+  }
+
+  addRepository(
+    request: AddRepositoryRequest,
+    current: WorkspaceSnapshot,
+  ): Promise<RepositoryMutationResult> {
+    const name = normalizeRepositoryName(request.url);
+    if (!name || current.repositories.some((repository) => (
+      repository.name === name && repository.ref === request.refName
+    ))) {
+      return Promise.reject(new Error("Repository already exists."));
+    }
+    const isSkillRepo = name.includes("skill") || name.includes("spec");
+    const repositoryId = `demo:${name}@${request.refName}`;
+    const repository: UiRepository = {
+      id: repositoryId,
+      name,
+      type: isSkillRepo ? "skill repo" : "generic repo",
+      ref: request.refName,
+      skills: isSkillRepo ? 1 : 0,
+      remoteSha: isSkillRepo ? "9ac12ef" : "3d20a9f",
+      lastBackupSha: "none",
+      lastChecked: this.now().toISOString(),
+      backupStatus: "never-backed-up",
+      checkStatus: "success",
+      url: `https://github.com/${name}`,
+      branch: request.refName,
+      backupPath: `~/SkillRepoBackups/${name}`,
+      snapshotTime: "Never",
+      recognizedSkills: isSkillRepo
+        ? [{ name: name.split("/").at(-1) || name, version: "v0.1.0" }]
+        : [],
+      sourceType: "github",
+      note: request.note,
+    };
+    const task = demoTask(this.now(), {
+      kind: "Scan repository",
+      target: name,
+      progress: "1 / 1",
+      status: "success",
+      summary: isSkillRepo ? "1 Skill recognized" : "generic repo, 0 Skills",
+      retryable: false,
+      log: [
+        `normalize ${name}`,
+        "fetch remote HEAD SHA",
+        isSkillRepo ? "found SKILL.md" : "no SKILL.md found; keep as generic repo",
+      ],
+    });
+    const result = clone({
+      repositoryId,
+      workspace: {
+        ...current,
+        repositories: [repository, ...current.repositories],
+        tasks: [task, ...current.tasks],
+      },
+    });
+    const releaseLateRetry = this.pendingLateRetry;
+    this.pendingLateRetry = null;
+    if (!releaseLateRetry) return Promise.resolve(result);
+    return new Promise((resolve) => {
+      resolve(result);
+      Promise.resolve().then(releaseLateRetry);
+    });
+  }
+
+  async updateSettings(settings: UpdateSettingsRequest): Promise<AppSettings> {
+    const normalizedBackupRoot = normalizeDirectory(settings.backupRoot);
+    const normalizedSkillLibraryRoot = normalizeDirectory(settings.skillLibraryRoot);
+    this.settings = {
+      ...this.settings,
+      ...clone(settings),
+      backupRoot: normalizedBackupRoot,
+      skillLibraryRoot: normalizedSkillLibraryRoot,
+      skillsRoot: settings.skillsRoot ? normalizeDirectory(settings.skillsRoot) : settings.skillsRoot,
+    };
+    return clone(this.settings);
+  }
+
+  async refreshGithubCatalog(
+    _accountId: string | undefined,
+    current: GithubCatalogSnapshot,
+  ): Promise<GithubCatalogSnapshot> {
+    this.githubRefreshAttempts += 1;
+    if (this.mode === "github-rate-limit" && this.githubRefreshAttempts === 1) {
+      throw {
+        code: "github_secondary_rate_limited",
+        message: "GitHub request was rate limited.",
+        details: "status=429 reset_at=2026-09-03T12:00:00Z",
+      };
+    }
     return clone(current);
+  }
+
+  async chooseLocalRepository() {
+    return null;
   }
 
   async openBackupFolder(_repositoryId?: string) {}
@@ -243,6 +475,61 @@ export class DemoAppService implements AppService {
 
 function demoTask(now: Date, task: Omit<UiTask, "id">): UiTask {
   return { id: `${task.kind.toLowerCase().replaceAll(" ", "-")}-${now.getTime()}`, ...task };
+}
+
+function demoSettings(): AppSettings {
+  return {
+    backupRoot: "~/SkillRepoBackups",
+    skillLibraryRoot: "~/SkillRepoTracker/skills",
+    defaultSyncTargets: [],
+    availableSyncTargets: [],
+    syncBackupKeep: 5,
+    autoCheckInterval: 60,
+    autoCheckEnabled: false,
+    autoBackupEnabled: false,
+    githubTokenConfigured: false,
+    githubTokenStatus: "not_configured",
+    githubTokenLastVerified: null,
+  };
+}
+
+function demoRetryableTask(): UiTask {
+  return {
+    id: "demo-retry-failed",
+    kind: "Backup repositories",
+    target: "example-org/content-skill-kit",
+    progress: "0 / 1",
+    status: "failed",
+    summary: "network failed before manifest write",
+    retryable: true,
+    log: ["network failed", "temporary directory removed", "last_backup_sha unchanged"],
+  };
+}
+
+function demoSuccessfulRetry(now: Date, task: UiTask): UiTask {
+  return demoTask(now, {
+    kind: task.kind,
+    target: task.target,
+    progress: "1 / 1",
+    status: "success",
+    summary: "retry completed",
+    retryable: false,
+    log: [...task.log, "retry completed without publishing stale state"],
+  });
+}
+
+function normalizeRepositoryName(value: string) {
+  return value
+    .trim()
+    .replace(/^https?:\/\/(?:www\.)?github\.com\//i, "")
+    .replace(/^github\.com\//i, "")
+    .replace(/\.git$/i, "")
+    .replace(/^\/+|\/+$/g, "");
+}
+
+function normalizeDirectory(value: string) {
+  const trimmed = value.trim();
+  return trimmed.length > 1 ? trimmed.replace(/\/+$/g, "") : trimmed;
 }
 
 function clone<T>(value: T): T {

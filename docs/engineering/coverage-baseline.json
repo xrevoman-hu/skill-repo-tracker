@@ -1,13 +1,14 @@
 {
-  "measuredAtCommit": "working tree on 26904260edd632b100bc3c2d913ad605982c6562 (2026-09-01)",
+  "measuredAtCommit": "ec4162cef1627d8c2e4ec90e2f96495f9dcc8626",
+  "protocol": "reviewed-bootstrap-v1",
   "frontend": {
-    "lines": 73.68,
-    "branches": 74.98,
-    "functions": 54.48
+    "lines": 74.15,
+    "branches": 75.06,
+    "functions": 55.53
   },
   "rust": {
-    "lines": 67.31,
-    "branches": 57.98,
-    "functions": 30.9
+    "lines": 70,
+    "branches": 60,
+    "functions": 32.09
   }
 }

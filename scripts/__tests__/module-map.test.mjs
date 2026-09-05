@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -782,6 +783,14 @@ test("context selection returns the owning module, Rule, and ADR without loading
     ownerRules: ["docs/rules/permissions.md"],
     decisions: [],
   });
+});
+
+test("prompt-capable service and demo fixture load the Prompt migration ADR", () => {
+  const map = JSON.parse(
+    readFileSync(new URL("../../docs/engineering/module-map.json", import.meta.url), "utf8"),
+  );
+  const context = selectModuleContext(map, ["src/appService.ts", "src/demoPromptTransport.ts"]);
+  assert.ok(context.decisions.includes("docs/adr/0005-prompt-export-and-migration.md"));
 });
 
 test("the tracked module map covers the current repository", () => {
