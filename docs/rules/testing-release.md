@@ -49,7 +49,9 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   dynamic loader、dead-shell/注释中的路径都不能制造入口或执行未建档 payload。
   Vite `publicDir` 必须关闭，`index.html` 必须保持唯一精确入口；`public/` 和 `src/` 中未登记的
   资产扩展会失败；外部 PostCSS 配置与 package `postcss` 字段被禁止，构建只用精确 inline 空
-  plugin 清单。生产前端不得用 `eval`、`Function` 或 `WebAssembly` 执行 raw/URL payload；
+  plugin 清单。Vite 的 JavaScript 与 CSS 构建目标都固定为 `safari15`，与 macOS 12 的产品下限
+  对齐；source map 固定关闭，不能随构建工具默认值漂移。生产前端不得用 `eval`、`Function` 或
+  `WebAssembly` 执行 raw/URL payload；
   新可执行资产类型必须先纳入 module ownership、coverage、预算和负向测试。
 - Coverage：`npm run coverage:check`；基线只能上调，PR 生产代码 changed lines >=80%、
   branches >=70%；测试文件和 coverage 配置明确排除的入口不计入 changed-lines 分母。

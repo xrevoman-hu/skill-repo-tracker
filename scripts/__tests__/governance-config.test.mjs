@@ -224,6 +224,22 @@ test("typecheck and test discovery configurations cannot silently shrink", () =>
     /production build contract/,
   );
   assert.match(
+    validateViteConfigPolicy(
+      vite.replace('target: "safari15"', 'target: "baseline-widely-available"'),
+    )[0],
+    /production build contract/,
+  );
+  assert.match(
+    validateViteConfigPolicy(
+      vite.replace('cssTarget: "safari15"', 'cssTarget: "baseline-widely-available"'),
+    )[0],
+    /production build contract/,
+  );
+  assert.match(
+    validateViteConfigPolicy(vite.replace("sourcemap: false", "sourcemap: true"))[0],
+    /production build contract/,
+  );
+  assert.match(
     validateViteConfigPolicy(vite.replace("publicDir: false", 'publicDir: "public"'))[0],
     /production build contract/,
   );

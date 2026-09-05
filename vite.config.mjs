@@ -2,6 +2,11 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 export default defineConfig({
+  build: {
+    target: "safari15",
+    cssTarget: "safari15",
+    sourcemap: false,
+  },
   clearScreen: false,
   publicDir: false,
   css: {
