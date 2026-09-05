@@ -55,3 +55,5 @@ Release 标题、正文与 tracked notes 一致，公开 DMG 下载后的签名�
 DMG 的名称/bytes/SHA-256 与下载复验结果。最终证明本地 main = origin/main = tag peeled
 commit = manifest.commit = 公开 DMG 构建来源。任何缺项写“待完成”并给下一步；不能只凭
 Release 页面存在、同名文件或 unsigned token 声称发布已验证。
+面向用户默认先用不超过200字说明可否继续、具体阻断和下一步；只有真实缺少的授权或
+Environment人工批准才交用户处理。完整证据链放在报告后部或独立文件。
