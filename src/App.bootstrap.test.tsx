@@ -21,6 +21,7 @@ describe("application bootstrap", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.clearAllMocks();
     vi.restoreAllMocks();
   });
 

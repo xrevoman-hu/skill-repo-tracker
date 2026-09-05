@@ -166,9 +166,9 @@ test("test runner APIs cannot be recovered through dynamic imports", () => {
 
 test("Vitest TestOptions and spread tables cannot create false-green evidence", () => {
   const optionMutation = [
-    'test("option false green", () => {',
+    'test("option false green", { skip: true }, () => {',
     '  throw new Error("option body must execute");',
-    '}, { skip: true });',
+    '});',
   ].join("\n");
   const spreadMutation = [
     'test.each([...[]])("spread row %#", () => {',
@@ -187,7 +187,7 @@ test("Vitest TestOptions and spread tables cannot create false-green evidence", 
   assert.doesNotMatch(runner.stdout, /spread row|body must execute/);
   assert.match(
     findForbiddenTestModifiers("src/options.test.ts", optionMutation)[0],
-    /only a numeric literal timeout is allowed/,
+    /must use the direct \(title, callback\[, timeout\]\) form/,
   );
   assert.match(
     findForbiddenTestModifiers("src/spread.test.ts", spreadMutation)[0],
@@ -197,14 +197,14 @@ test("Vitest TestOptions and spread tables cannot create false-green evidence", 
 
 test("direct and each registrations reject TestOptions and non-literal timeouts", () => {
   const mutations = [
-    'test("skip", () => {}, { skip: true });',
-    'it("todo", () => {}, { todo: true });',
-    'describe("only", () => {}, { only: true });',
-    'suite("fails", () => {}, { fails: true });',
-    'test.each([1])("retry", () => {}, { retry: 1 });',
-    'it.each([1])("repeats", () => {}, { repeats: 2 });',
-    'describe.each([1])("skip", () => {}, { skip: true });',
-    'suite.each([1])("todo", () => {}, { todo: true });',
+    'test("skip", { skip: true }, () => {});',
+    'it("todo", { todo: true }, () => {});',
+    'describe("only", { only: true }, () => {});',
+    'suite("fails", { fails: true }, () => {});',
+    'test.each([1])("retry", { retry: 1 }, () => {});',
+    'it.each([1])("repeats", { repeats: 2 }, () => {});',
+    'describe.each([1])("skip", { skip: true }, () => {});',
+    'suite.each([1])("todo", { todo: true }, () => {});',
     'test("identifier timeout", () => {}, TIMEOUT);',
     'it.each([1])("object timeout", () => {}, { timeout: 1000 });',
     'describe("computed timeout", () => {}, 500 + 500);',
@@ -217,7 +217,13 @@ test("direct and each registrations reject TestOptions and non-literal timeouts"
       mutation,
     );
     assert.equal(errors.length, 1, mutation);
-    assert.match(errors[0], /only a numeric literal timeout is allowed/, mutation);
+    assert.match(
+      errors[0],
+      index < 8
+        ? /must use the direct \(title, callback\[, timeout\]\) form/
+        : /only a numeric literal timeout is allowed/,
+      mutation,
+    );
   }
 
   const accepted = [
