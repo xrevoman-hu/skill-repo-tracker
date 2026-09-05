@@ -585,6 +585,10 @@
           },
           {
             "path": "e2e/demo-governance.spec.ts",
+            "selector": "DemoAppService 支撑设置与仓库只读关键流且不访问外部服务"
+          },
+          {
+            "path": "e2e/demo-governance.spec.ts",
             "selector": "检测全部仓库会生成可审计任务，且不访问外部服务"
           },
           {
