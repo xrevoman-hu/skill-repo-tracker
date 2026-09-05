@@ -467,9 +467,9 @@ function byteLength(value: string) {
 function clone<T>(value: T): T {
   if (Array.isArray(value)) return value.map((entry) => clone(entry)) as T;
   if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, entry]) => [key, clone(entry)]),
-    ) as T;
+    const entries = Object.entries(value);
+    const clonedEntries = entries.map(([key, entry]) => [key, clone(entry)]);
+    return Object.fromEntries(clonedEntries) as T;
   }
   return value;
 }

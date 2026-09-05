@@ -254,7 +254,7 @@
       "layer": "frontend-shared",
       "ownerRule": "docs/rules/testing-release.md",
       "decisions": ["docs/adr/0007-staged-modularization.md"],
-      "paths": ["src/Button.tsx", "src/inspectorDismiss.ts"]
+      "paths": ["src/buttonProps.ts", "src/inspectorDismiss.ts"]
     },
     {
       "id": "frontend-external-navigation",

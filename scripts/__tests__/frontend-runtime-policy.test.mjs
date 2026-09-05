@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 
 import { findForbiddenFrontendRuntimeUsage } from "../frontend-runtime-policy.mjs";
 
@@ -176,13 +177,7 @@ test("runtime DOM cannot create navigation or document-policy escape surfaces", 
     ),
     [],
   );
-  assert.deepEqual(
-    findForbiddenFrontendRuntimeUsage(
-      "src/App.tsx",
-      '<PreferencesPanel {...props} />',
-    ),
-    [],
-  );
+  assertBlocked('<PreferencesPanel {...props} />', /resource loading/, "src/App.tsx");
   assert.deepEqual(
     findForbiddenFrontendRuntimeUsage(
       "src/main.tsx",
@@ -352,6 +347,111 @@ test("raw browser opening is unique to the exact hardened helper call", () => {
     /raw browser navigation/,
     "src/externalNavigation.ts",
   );
+});
+
+test("document policy rejects arbitrary receivers, resource constructors, and React factory recovery", () => {
+  for (const source of [
+    'this.innerHTML = html', 'this.src = url', 'this.setAttribute("src", url)',
+    '(this.src as string) = url', '(this.src!) = url',
+    '(this.src satisfies string) = url', 'for (this.src of urls) {}',
+    'for ((this.src as string) in urls) {}', '++(this.src as number)',
+    'this.style.backgroundImage = url', 'super.setAttribute("src", url)',
+    'class Element extends HTMLElement { connectedCallback() { this.innerHTML = html; } }',
+    '(flag ? first : second).src = url',
+    'new Audio(remoteUrl)', 'new Image()', 'new FontFace("remote", remoteUrl)',
+    'const Sound = window.Audio; new Sound(url)',
+    'const key = "Audio"; const Sound = window[key]; new Sound(url)',
+    'React.createFactory("img")', 'import { createFactory as make } from "react"; make("img")',
+    'const make = React.createFactory; make("img")',
+    'import { jsx as make } from "react/jsx-runtime"; make("img", props)',
+    'import * as runtime from "react/jsx-runtime"; runtime.jsxs("img", props)',
+    'import("react/jsx-dev-runtime")', 'require("react/jsx-runtime")',
+  ]) assertBlocked(source, /document-policy|resource|dynamic execution|DOM style/);
+});
+
+test("Settings component names never exempt JSX spread or intrinsic forwarding", () => {
+  for (const source of [
+    'function PreferencesPanel(props) { return <div {...props} />; }',
+    'function SettingsView(PreferencesPanel) { return <PreferencesPanel {...props} />; }',
+    'import { Untrusted as PreferencesModal } from "./other"; <PreferencesModal {...props} />',
+    'function SettingsView(props) { return <input {...props.preferences} />; }',
+  ]) assertBlocked(source, /resource loading/, "src/App.tsx");
+});
+
+test("Settings spread binds the exact reviewed implementations and typed contracts", () => {
+  const source = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
+  const sources = new Map(["GitHubWorkbench", "PluginsView", "PromptsView"].map(name =>
+    [`src/${name}.tsx`, readFileSync(new URL(`../../src/${name}.tsx`, import.meta.url), "utf8")]));
+  assert.deepEqual(findForbiddenFrontendRuntimeUsage("src/App.tsx", source, sources), []);
+  for (const mutated of [
+    source + '\nfunction Shadow(PreferencesPanel) { return <PreferencesPanel {...props} />; }',
+    source + '\nfunction Shadow() { function SettingsView(props) { return null; } return <SettingsView {...props} />; }',
+    source.replace('function SettingsView(props: PreferencesProps)', 'function SettingsView(props: OtherProps)'),
+    source.replace('type PreferencesProps = {', 'type PreferencesProps = { src?: string;'),
+    source.replace('function SettingsView(props: PreferencesProps) {', 'function SettingsView(props: PreferencesProps) { return <input {...props} />;'),
+    source.replace('function SettingsView(props: PreferencesProps) {', 'function SettingsView(props: PreferencesProps) { return <Input {...props} />;'),
+  ]) assertBlocked(mutated, /resource loading/, "src/App.tsx");
+});
+
+test("imported JSX resolves inventoried function exports and rejects intrinsic aliases", () => {
+  const consumer = 'import { Sheet } from "./sheet"; export function Render() { return <Sheet />; }';
+  for (const producer of [
+    'export const Sheet = "style";',
+    'export const Sheet = getTag();',
+    'export function Sheet() { return null; } Sheet = ("style" as unknown as typeof Sheet);',
+    'export function Sheet() { return null; } (Sheet as unknown as string) = "iframe";',
+    'export function Sheet() { return null; } (Sheet!) = "iframe";',
+    'export function Sheet() { return null; } for (Sheet of tags) {}',
+    'export function Sheet() { return null; } for ((Sheet as unknown as string) in tags) {}',
+    'export { Sheet } from "./cycle";',
+    'export * from "./other";',
+  ]) {
+    const sources = new Map([["src/sheet.tsx", producer]]);
+    assert.ok(findForbiddenFrontendRuntimeUsage("src/consumer.tsx", consumer, sources).some(error => /imported JSX tag/.test(error)));
+  }
+  assert.deepEqual(findForbiddenFrontendRuntimeUsage("src/consumer.tsx", consumer,
+    new Map([["src/sheet.tsx", 'export function Sheet() { return <div />; }']])), []);
+  assert.deepEqual(findForbiddenFrontendRuntimeUsage("src/consumer.tsx", consumer,
+    new Map([["src/sheet.tsx", 'export const Sheet = () => <div />;']])), []);
+  assertBlocked('import { Missing } from "./missing"; <Missing />', /imported JSX tag/);
+  assertBlocked('function Sheet() { return null; } Sheet = ("style" as unknown as typeof Sheet); <Sheet />', /imported JSX tag/);
+  assertBlocked('export function Rogue({Button}: {Button: "style"}) { return <Button />; }', /dynamic JSX/, "src/PluginsView.tsx");
+  assertBlocked('function Holder() { return <PluginsView Tag="style" />; }', /component prop/);
+  assertBlocked('function Holder() { const Tag="style"; return <PluginsView Tag={Tag} />; }', /component prop/);
+});
+
+test("CSS handles cannot escape through valueOf or receiver-independent setters", () => {
+  for (const source of [
+    'const css = el.style.valueOf(); css.setProperty("background-image", "url(/payload)")',
+    'const css = el.style.valueOf(); css.cssText = "background:url(/payload)"',
+    'function update(css: CSSStyleDeclaration) { css.setProperty("background", url); }',
+    'function update(css: CSSStyleDeclaration) { css.backgroundImage = url; }',
+    'function update(css: CSSStyleDeclaration) { css.cursor = url; }',
+  ]) assertBlocked(source, /DOM style|document-policy/);
+});
+
+test("SVG resource and SMIL surfaces cannot bypass URL policy through animated values", () => {
+  for (const source of [
+    '<svg><image ref={node => { if (node) node.href.baseVal = url; }} /></svg>',
+    '<svg><use><set attributeName="href" to={url} /></use></svg>',
+    '<svg><feImage><animate attributeName="href" values={url} /></feImage></svg>',
+    '<svg><foreignObject /><animateMotion /><animateTransform /><mpath /></svg>',
+    'function load(node: SVGImageElement) { node.href.baseVal = url; }',
+    'function load(node: SVGUseElement) { const href = node.href; href.baseVal = url; }',
+    'function load(node: SVGFEImageElement) { Object.assign(node.href, { baseVal: url }); }',
+    'const animated = node.href; const value = animated.baseVal;',
+    'const { baseVal } = node.href; const value = node.href.animVal;',
+  ]) assertBlocked(source, /resource|raw DOM|document-policy/);
+});
+
+test("SVG presentation URL attributes reject CSS escapes in strings and JSX literals", () => {
+  for (const attribute of ["clipPath", "fill", "filter", "markerEnd", "markerMid", "markerStart", "mask", "stroke"]) {
+    assertBlocked(`<svg><path ${attribute}="u&#114;l(/local.svg#x)" /></svg>`, /resource loading/);
+    for (const value of [String.raw`u\72l(https://example.com/resource.svg#x)`, String.raw`\75rl(/local.svg#x)`]) {
+      assertBlocked(`<svg><path ${attribute}=${JSON.stringify(value)} /></svg>`, /resource loading/);
+      assertBlocked(`<svg><path ${attribute}={${JSON.stringify(value)}} /></svg>`, /resource loading/);
+    }
+  }
 });
 
 test("only the two reviewed JSX anchor shapes are accepted", () => {

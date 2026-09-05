@@ -1,4 +1,34 @@
 import ts from "typescript";
+import { createHash } from "node:crypto";
+
+// Exact reviewed Settings contracts and implementations from the PR base. A change
+// requires renewed review: these implementations destructure props and never spread
+// them onto intrinsic elements. Names alone, including shadow bindings, confer no trust.
+const REVIEWED_PREFERENCES_DECLARATIONS = new Map([
+  ["PreferencesProps", "65194f1e9ee4c651ff16306de3d18db3e035dc08fa07127ce357583560716eaa"],
+  ["PreferencesModalProps", "073057164927ffe77088511b66e4aa6767cf16021a780876ec915d43a5b3240f"],
+  ["SettingsView", "97b67a2a2c5b2d704a753eef2267c963148cd3c6c39f2c5428688f355169901a"],
+  ["PreferencesModal", "a09d28c5b833c146ab03d308d87f7be692ceb4ee379ac262e2879322b3829487"],
+  ["PreferencesPanel", "0803971b14348e6f108fd23af3885e175b02451f304d506750f83c0578612fa2"],
+]);
+
+export function reviewedPreferencesSpreadChecker(path, sourceFile, resolveDeclaration) {
+  if (path !== "src/App.tsx") return () => false;
+  const declarations = new Map();
+  for (const statement of sourceFile.statements) {
+    const expected = REVIEWED_PREFERENCES_DECLARATIONS.get(statement.name?.text);
+    if (!expected) continue;
+    const digest = createHash("sha256").update(statement.getText(sourceFile).replace(/\s+/g, " ")).digest("hex");
+    if (digest !== expected || declarations.has(statement.name.text)) return () => false;
+    declarations.set(statement.name.text, statement);
+  }
+  if (declarations.size !== REVIEWED_PREFERENCES_DECLARATIONS.size) return () => false;
+  return (opening) => {
+    const binding = resolveDeclaration(opening.tagName);
+    return Boolean(binding && ts.isFunctionDeclaration(binding) &&
+      declarations.get(binding.name?.text) === binding);
+  };
+}
 
 export function parseTypeScript(path, contents) {
   const scriptKind = path.endsWith(".tsx")
@@ -32,17 +62,19 @@ export function propertyAccessChain(node, resolveProperty = staticPropertyName) 
     ts.isTypeAssertionExpression(node) || ts.isSatisfiesExpression(node)
   ) return propertyAccessChain(node.expression, resolveProperty);
   if (ts.isIdentifier(node)) return [node.text];
+  if (node.kind === ts.SyntaxKind.ThisKeyword) return ["this"];
+  if (node.kind === ts.SyntaxKind.SuperKeyword) return ["super"];
   if (ts.isCallExpression(node) || ts.isNewExpression(node)) {
     return propertyAccessChain(node.expression, resolveProperty);
   }
   if (ts.isPropertyAccessExpression(node)) {
     const prefix = propertyAccessChain(node.expression, resolveProperty);
-    return prefix ? [...prefix, node.name.text] : undefined;
+    return [...(prefix ?? ["<receiver>"]), node.name.text];
   }
   if (ts.isElementAccessExpression(node)) {
     const prefix = propertyAccessChain(node.expression, resolveProperty);
     const property = resolveProperty(node.argumentExpression);
-    return prefix ? [...prefix, property ?? "*"] : undefined;
+    return [...(prefix ?? ["<receiver>"]), property ?? "*"];
   }
   return undefined;
 }
@@ -50,6 +82,7 @@ export function propertyAccessChain(node, resolveProperty = staticPropertyName) 
 export const DOCUMENT_POLICY_TAGS = new Set([
   "a", "audio", "base", "embed", "iframe", "img", "link", "meta", "object",
   "script", "source", "style", "track", "video",
+  "image", "use", "feImage", "foreignObject", "animate", "set", "animateMotion", "animateTransform", "mpath",
 ]);
 
 export const DOCUMENT_POLICY_ATTRIBUTES = new Set([
@@ -58,7 +91,10 @@ export const DOCUMENT_POLICY_ATTRIBUTES = new Set([
 ]);
 
 export const DOCUMENT_POLICY_PROPERTIES = new Set([
-  "StrictMode", "action", "adoptedStyleSheets", "dangerouslySetInnerHTML", "formAction", "formTarget", "href",
+  "baseVal", "animVal",
+  "background", "backgroundImage", "borderImage", "borderImageSource", "clipPath", "content", "cursor",
+  "fill", "filter", "listStyle", "listStyleImage", "mask", "maskImage", "offsetPath", "stroke",
+  "StrictMode", "action", "adoptedStyleSheets", "cssText", "dangerouslySetInnerHTML", "formAction", "formTarget", "href",
   "httpEquiv", "innerHTML", "innerText", "nodeValue", "outerHTML", "outerText", "poster", "src", "srcDoc",
   "srcSet", "srcdoc", "srcset", "style", "target", "textContent",
 ]);
@@ -66,7 +102,7 @@ export const DOCUMENT_POLICY_PROPERTIES = new Set([
 export const DOCUMENT_POLICY_METHODS = new Set([
   "addRule", "adoptNode", "after", "append", "appendChild", "assign", "before", "cloneElement", "cloneNode",
   "createAttribute", "createAttributeNS", "createContextualFragment", "createElement", "createElementNS",
-  "createHTMLDocument", "deleteRule", "execCommand", "getAttributeNode", "getAttributeNodeNS", "importNode",
+  "createFactory", "createHTMLDocument", "deleteRule", "execCommand", "getAttributeNode", "getAttributeNodeNS", "importNode",
   "insertAdjacentElement", "insertAdjacentHTML", "insertAdjacentText", "insertBefore", "insertRule", "parseHTMLUnsafe",
   "prepend", "replaceChild", "replaceChildren", "replaceSync", "replaceWith", "setAttribute", "setAttributeNode",
   "setAttributeNodeNS", "setAttributeNS", "setHTML", "setHTMLUnsafe", "setProperty", "write", "writeln",
@@ -156,7 +192,7 @@ export function isGlobalObjectAssign(chain, globalRoots) {
 export function domMutationHandleViolation(node, resolveChain, globalRoots) {
   const chain = resolveChain(node);
   const collection = chain?.find((name) =>
-    ["adoptedStyleSheets", "attributes", "attributeStyleMap", "sheet", "styleSheets"].includes(name));
+    ["adoptedStyleSheets", "attributes", "attributeStyleMap", "sheet", "styleSheets", "baseVal", "animVal"].includes(name));
   if (collection) return `raw DOM ${collection} mutation handles are forbidden`;
   if (chain?.at(-1) !== "style") return undefined;
   const parent = node.parent;
@@ -166,7 +202,10 @@ export function domMutationHandleViolation(node, resolveChain, globalRoots) {
   const isReviewedAssignTarget =
     ts.isCallExpression(parent) && parent.arguments[0] === node &&
     isGlobalObjectAssign(resolveChain(parent.expression), globalRoots);
-  return isReceiver || isReviewedAssignTarget ? undefined : "raw DOM style handles may not escape reviewed writes";
+  const nextProperty = isReceiver ? resolveChain(parent)?.at(-1) : undefined;
+  const reviewedReceiver = isReceiver && (SAFE_INLINE_STYLE_PROPERTIES.has(nextProperty) ||
+    ["getPropertyValue", "removeProperty", "setProperty"].includes(nextProperty));
+  return reviewedReceiver || isReviewedAssignTarget ? undefined : "raw DOM style handles may not escape reviewed writes";
 }
 
 export function isForbiddenRuntimeAttributeName(name) {
@@ -269,11 +308,11 @@ function isSafeStyleExpression(node) {
 export function jsxUrlReferenceIsUnreviewed(attribute) {
   const initializer = attribute.initializer;
   if (!initializer) return false;
-  if (ts.isStringLiteral(initializer)) return /(?:url|image-set)\s*\(/i.test(initializer.text);
+  if (ts.isStringLiteral(initializer)) return /[\\&]|(?:url|image-set)\s*\(/i.test(initializer.text);
   if (
     ts.isJsxExpression(initializer) && initializer.expression &&
     ts.isStringLiteralLike(initializer.expression)
-  ) return /(?:url|image-set)\s*\(/i.test(initializer.expression.text);
+  ) return /\\|(?:url|image-set)\s*\(/i.test(initializer.expression.text);
   return true;
 }
 
@@ -303,19 +342,14 @@ export function documentPropertyWriteViolation(chain) {
 }
 
 export function isWriteTarget(node) {
-  const parent = node.parent;
-  if (
-    ((ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
-      parent.operand === node &&
-      [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(parent.operator)) ||
-    (ts.isDeleteExpression(parent) && parent.expression === node)
-  ) return true;
   let current = node;
   for (;;) {
     const next = current.parent;
     if (!next) break;
     if (
       (ts.isParenthesizedExpression(next) && next.expression === current) ||
+      ((ts.isAsExpression(next) || ts.isTypeAssertionExpression(next) ||
+        ts.isNonNullExpression(next) || ts.isSatisfiesExpression(next)) && next.expression === current) ||
       (ts.isPropertyAssignment(next) && next.initializer === current) ||
       (ts.isSpreadAssignment(next) && next.expression === current) ||
       (ts.isObjectLiteralExpression(next) && next.properties.includes(current)) ||
@@ -324,13 +358,20 @@ export function isWriteTarget(node) {
     else break;
   }
   const assignment = current.parent;
+  if (!assignment) return false;
+  if (((ts.isPrefixUnaryExpression(assignment) || ts.isPostfixUnaryExpression(assignment)) &&
+    assignment.operand === current &&
+    [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(assignment.operator)) ||
+    (ts.isDeleteExpression(assignment) && assignment.expression === current) ||
+    ((ts.isForInStatement(assignment) || ts.isForOfStatement(assignment)) &&
+      assignment.initializer === current)) return true;
   return Boolean(assignment && ts.isBinaryExpression(assignment) && assignment.left === current &&
     assignment.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
     assignment.operatorToken.kind <= ts.SyntaxKind.LastAssignment);
 }
 
 export function unreviewedStyleSetPropertyCall(call, chain, resolveProperty) {
-  if (chain?.at(-1) !== "setProperty" || !chain.includes("style")) return false;
+  if (chain?.at(-1) !== "setProperty") return false;
   const property = resolveProperty(call.arguments[0]);
   return property === undefined || !SAFE_STYLE_SET_PROPERTIES.has(property);
 }

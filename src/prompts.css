@@ -588,14 +588,6 @@
   white-space: nowrap;
 }
 
-.prompt-tag:nth-child(3n + 2) {
-  background: color-mix(in srgb, var(--prompt-accent-soft), #be8cff 24%);
-}
-
-.prompt-tag:nth-child(3n) {
-  background: color-mix(in srgb, var(--prompt-accent-soft), #65c889 24%);
-}
-
 .prompt-tag-more {
   background: var(--prompt-bg);
   color: var(--prompt-muted);
@@ -692,7 +684,6 @@
 }
 
 .prompt-card.is-drag-placeholder {
-  background: color-mix(in srgb, var(--prompt-accent-soft), transparent 45%);
   border-color: var(--prompt-accent);
   border-style: dashed;
   box-shadow: none;
@@ -1410,7 +1401,6 @@
 }
 
 .prompt-inline-error {
-  background: color-mix(in srgb, var(--prompt-danger), transparent 88%);
   border-radius: 6px;
   color: var(--prompt-danger);
   font-size: 12px;

@@ -31,6 +31,20 @@ function importRequest(
 }
 
 describe("DemoPromptTransport observable state machine", () => {
+  it("isolates detail and page tag objects from the stored prompt", async () => {
+    const transport = new DemoPromptTransport(fixedNow);
+    const detail = await transport.getPromptDetail("demo-prompt-1");
+    const originalTagName = detail.tags[0].name;
+    detail.tags[0].name = "mutated";
+    detail.content = "mutated";
+    const page = await transport.listPrompts(listRequest());
+    expect(page.items[0].tags[0].name).toBe(originalTagName);
+    page.items[0].tags.splice(0);
+    const stored = await transport.getPromptDetail(detail.id);
+    expect(stored.tags[0].name).toBe(originalTagName);
+    expect(stored.content).not.toBe("mutated");
+  });
+
   it("filters by normalized text and any/all tags, sorts updates, and clamps pages", async () => {
     let tick = 0;
     const transport = new DemoPromptTransport(() => new Date(2_000_000_000_000 + tick++ * 1_000));

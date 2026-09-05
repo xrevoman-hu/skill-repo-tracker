@@ -31,7 +31,7 @@ import type {
 } from "./api";
 import { DemoAppService, TauriAppService } from "./appService";
 import type { AppService } from "./appService";
-import { Button } from "./Button";
+import type { ButtonProps } from "./buttonProps";
 import { openGithub } from "./externalNavigation";
 import { GitHubWorkbench } from "./GitHubWorkbench";
 import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
@@ -1578,6 +1578,32 @@ function latestGithubRateLimitResetFromTasks(tasks: UiTask[] = []) {
 function githubRateLimitHelpText(t: (key: string) => string, resetAt: string) {
   const base = t("githubRateLimitHelp");
   return resetAt ? `${base} ${t("githubRateLimitResetAt")}: ${resetAt}` : base;
+}
+
+export function Button({
+  children,
+  variant = "secondary",
+  onClick,
+  disabled = false,
+  className = "",
+  pending = false,
+  pendingLabel,
+  type = "button",
+  "aria-label": ariaLabel,
+  "data-autofocus": dataAutofocus,
+}: ButtonProps) {
+  return (
+    <button
+      aria-label={ariaLabel}
+      data-autofocus={dataAutofocus}
+      className={`button ${variant} ${className} ${pending ? "is-pending" : ""}`}
+      onClick={onClick}
+      disabled={disabled || pending}
+      type={type}
+    >
+      {pending ? pendingLabel || children : children}
+    </button>
+  );
 }
 
 function HelpTip({ text, label = "Help" }: { text: string; label?: string }) {

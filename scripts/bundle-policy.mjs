@@ -94,11 +94,17 @@ function validateSafari15Bundle(files) {
   }
   if (
     /:focus-visible\b/i.test(decodedCss) &&
-    !/@supports\s+not\s+selector\(\s*:focus-visible\s*\)\s*\{/i.test(decodedCss)
+    !hasReviewedFocusFallback(css)
   ) {
     errors.push("production CSS uses :focus-visible without the reviewed Safari 15 focus fallback");
   }
-  const colorMixCount = occurrenceCount(decodedCss, /color-mix\(/gi);
+  const guardedColors = reviewedColorEnhancements(css);
+  const colorMixCount = occurrenceCount(decodedCss, /color-mix\(/gi) - guardedColors.length;
+  let unguardedCss = css;
+  for (const block of guardedColors) unguardedCss = unguardedCss.replace(block, "");
+  if (/color-mix\(/i.test(decodeCssForPolicy(unguardedCss))) {
+    errors.push("production CSS color-mix() requires the reviewed top-level @supports guard");
+  }
   const startingStyleCount = occurrenceCount(decodedCss, /@starting-style\b/gi);
   if (colorMixCount > MAX_REVIEWED_COLOR_MIX) {
     errors.push(
@@ -124,6 +130,57 @@ function validateSafari15Bundle(files) {
     }
   }
   return errors;
+}
+
+function reviewedColorEnhancements(css) {
+  const blocks = [];
+  const pattern = /^@supports\s*\(\s*background\s*:\s*color-mix\(\s*in srgb\s*,\s*red\s*,\s*blue\s*\)\s*\)\s*\{(?:\s*[^{}@]+\{[^{}]*\})+\s*\}/i;
+  for (const position of topLevelAtRules(css)) {
+    const match = css.slice(position).match(pattern);
+    if (match) blocks.push(match[0]);
+  }
+  return blocks;
+}
+
+function hasReviewedFocusFallback(css) {
+  const required = ["button:focus", "summary:focus", "input:focus", "select:focus", "textarea:focus", "[role=button]:focus", "[tabindex]:focus"];
+  const block = /^@supports\s+not\s+selector\(\s*:focus-visible\s*\)\s*\{\s*([^{}]+)\{([^{}]*)\}\s*\}/i;
+  for (const position of topLevelAtRules(css)) {
+    const match = css.slice(position).match(block);
+    if (!match) continue;
+    const selectors = match[1].replace(/\[role=(["'])button\1\]/g, "[role=button]").split(",").map(value => value.trim());
+    const declarations = match[2].split(";").map(value => value.trim()).filter(Boolean);
+    if (required.every(value => selectors.includes(value)) && selectors.length === required.length &&
+      declarations.length === 2 && declarations.some(value => /^outline-offset\s*:\s*2px$/i.test(value)) &&
+      declarations.some(value => /^outline\s*:\s*2px\s+solid\s+#2563eb\s*!\s*important$/i.test(value))) return true;
+  }
+  return false;
+}
+
+function topLevelAtRules(css) {
+  const positions = [];
+  let depth = 0;
+  let quote;
+  for (let index = 0; index < css.length; index += 1) {
+    const character = css[index];
+    if (character === "\\") { index += 1; continue; }
+    if (quote) {
+      if (character === quote) quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") { quote = character; continue; }
+    if (character === "/" && css[index + 1] === "*") {
+      const end = css.indexOf("*/", index + 2);
+      if (end < 0) return [];
+      index = end + 1;
+      continue;
+    }
+    if (character === "@" && depth === 0) positions.push(index);
+    if (character === "{") depth += 1;
+    if (character === "}") depth -= 1;
+    if (depth < 0) return [];
+  }
+  return depth === 0 && !quote ? positions : [];
 }
 
 export function validateBuiltBundleSnapshot(files, budget) {
@@ -162,6 +219,9 @@ export function validateBuiltBundleSnapshot(files, budget) {
       }
       if (/url\(\s*(["']?)(?:https?:)?\/\//i.test(decodedCss)) {
         errors.push(`${file.path} contains a forbidden remote CSS URL`);
+      }
+      if (/(?:url|(?:-webkit-)?image-set)\s*\(/i.test(decodedCss)) {
+        errors.push(`${file.path} contains a forbidden CSS resource loader`);
       }
     }
     if (file.path.endsWith(".js") && file.bytes > budget.maxJavaScriptChunkBytes) {

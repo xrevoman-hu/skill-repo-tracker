@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { createJsxBindingPolicy } from "./frontend-jsx-bindings.mjs";
 import {
   RAW_DOM_MUTATION_METHODS,
   DOCUMENT_POLICY_METHODS,
@@ -15,6 +16,7 @@ import {
   parseTypeScript,
   propertyAccessChain,
   recoveredDocumentPolicyMethod,
+  reviewedPreferencesSpreadChecker,
   staticPropertyName,
   unreviewedStyleSetPropertyCall,
 } from "./frontend-dom-policy.mjs";
@@ -136,10 +138,12 @@ function belongsToDirectTauriInvoke(node) {
   );
 }
 
-export function findForbiddenFrontendRuntimeUsage(path, contents) {
+export function findForbiddenFrontendRuntimeUsage(path, contents, sources = new Map()) {
   const sourceFile = parseTypeScript(path, contents);
   const sourceStaticPropertyName = createStaticPropertyResolver(sourceFile, staticPropertyName);
   const sourcePropertyAccessChain = (node) => propertyAccessChain(node, sourceStaticPropertyName);
+  const reviewedPreferencesSpread = reviewedPreferencesSpreadChecker(path, sourceFile, sourceStaticPropertyName.declaration);
+  const jsxBindings = createJsxBindingPolicy(path, sourceFile, sourceStaticPropertyName.declaration, sources);
   const rawNetworkApis = new Set();
   const runtimeBoundaryViolations = new Set();
   const dynamicExecutionViolations = new Set();
@@ -150,7 +154,7 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
 
   const rawNetworkNames = new Set(["fetch", "XMLHttpRequest", "EventSource", "WebSocket", "sendBeacon", "RTCPeerConnection", "webkitRTCPeerConnection", "WebTransport"]);
   const globalNames = new Set(["window", "globalThis", "self", "frames", "top", "parent", "opener", "navigator", "document", "location"]);
-  const dynamicExecutionNames = new Set(["CSSStyleSheet", "DOMParser", "eval", "Function", "WebAssembly"]);
+  const dynamicExecutionNames = new Set(["Audio", "Image", "FontFace", "CSSStyleSheet", "DOMParser", "eval", "Function", "WebAssembly"]);
   const asynchronousEscapeNames = new Set(["MessageChannel", "MessagePort", "postMessage", "queueMicrotask", "scheduler"]);
   const reflectiveObjectMethods = new Set(["create", "defineProperties", "defineProperty", "getPrototypeOf", "getOwnPropertyDescriptor", "getOwnPropertyDescriptors", "setPrototypeOf"]);
   const reflectivePropertyNames = new Set(["__proto__", "constructor", "prototype"]);
@@ -242,9 +246,9 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
     const tag = resolvedTag ?? declaredTag;
     const tagBinding = sourceStaticPropertyName.declaration(opening.tagName);
     const reviewedMemberTag = isReviewedReactStrictMode(path, opening, sourceFile, sourceStaticPropertyName.declaration);
-    const reviewedComponentProp =
-      path === "src/PluginsView.tsx" &&
-      new Set(["Button", "Detail", "EmptyState", "Section", "Tag"]).has(declaredTag);
+    const reviewedComponentProp = jsxBindings.reviewedParameter(tagBinding, declaredTag);
+    const bindingViolation = jsxBindings.violation(opening);
+    if (bindingViolation) runtimeBoundaryViolations.add(`${path}:${line(opening)} ${bindingViolation}`);
     const reviewedIconLookup = declaredTag === "Component" &&
       isReviewedPromptsIconLookup(path, tagBinding, sourceFile, sourceStaticPropertyName.declaration);
     if (!declaredTag && !reviewedMemberTag) {
@@ -267,10 +271,7 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
         `${path}:${line(opening)} raw JSX navigation or document-policy elements are forbidden`,
       );
     }
-    const allowSpread =
-      path === "src/App.tsx" &&
-      new Set(["PreferencesModal", "PreferencesPanel", "SettingsView"]).has(declaredTag);
-    const resourceEscape = findJsxResourceEscape(opening, tag, allowSpread);
+    const resourceEscape = findJsxResourceEscape(opening, tag, reviewedPreferencesSpread(opening));
     if (resourceEscape) {
       runtimeBoundaryViolations.add(
         `${path}:${line(resourceEscape)} raw JSX resource loading is forbidden`,
@@ -315,7 +316,7 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
   };
 
   const recordDynamicExecutionApi = (expression) => {
-    const chain = propertyAccessChain(expression);
+    const chain = sourcePropertyAccessChain(expression);
     if (!chain?.length) return;
     const api = chain.find((name) => dynamicExecutionNames.has(name));
     if (!api) return;
@@ -419,6 +420,9 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
   };
 
   const recordModuleSpecifier = (node) => {
+    if (node && ts.isStringLiteralLike(node) && /^react\/jsx(?:-dev)?-runtime(?:$|\/)/.test(node.text)) {
+      runtimeBoundaryViolations.add(`${path}:${line(node)} direct React JSX runtime resource factories are forbidden`);
+    }
     if (
       path !== "src/api.ts" &&
       ts.isStringLiteralLike(node) &&
@@ -448,7 +452,7 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
       recordModuleSpecifier(node.moduleSpecifier);
     }
     if (
-      ts.isImportSpecifier(node) && ["cloneElement", "createElement"].includes(
+      ts.isImportSpecifier(node) && ["cloneElement", "createElement", "createFactory"].includes(
         (node.propertyName ?? node.name).text,
       )
     ) {
@@ -478,7 +482,7 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
       if (RAW_DOM_MUTATION_METHODS.has(callChain?.at(-1))) {
         runtimeBoundaryViolations.add(`${path}:${line(node)} raw DOM mutation APIs are forbidden`);
       }
-      const elementMethod = ["createElement", "cloneElement"].includes(callChain?.at(-1))
+      const elementMethod = ["createElement", "cloneElement", "createFactory"].includes(callChain?.at(-1))
         ? callChain.at(-1)
         : undefined;
       if (elementMethod) {

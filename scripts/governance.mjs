@@ -1198,6 +1198,8 @@ export function checkBoundaries(root = REPOSITORY_ROOT) {
     ),
   );
   const sourceFiles = repositorySourceFiles(root);
+  const frontendSources = new Map(sourceFiles.filter(path => path.startsWith("src/") && isProductionModule(path))
+    .map(path => [path, readFileSync(join(root, path), "utf8")]));
   for (const path of sourceFiles) {
     const contents = readFileSync(join(root, path), "utf8");
     if (isForbiddenProductionJavaScriptPath(path)) {
@@ -1211,7 +1213,7 @@ export function checkBoundaries(root = REPOSITORY_ROOT) {
       errors.push(...findFrontendImportEscapes(path, contents));
       errors.push(...findFrontendModuleGraphHazards(path, contents));
       errors.push(...findForbiddenCoveragePragmas(path, contents));
-      errors.push(...findForbiddenFrontendRuntimeUsage(path, contents));
+      errors.push(...findForbiddenFrontendRuntimeUsage(path, contents, frontendSources));
     }
     if (/\.(?:test|spec)\.(?:[cm]?[jt]sx?)$/.test(path)) {
       errors.push(...findForbiddenTestModifiers(path, contents));

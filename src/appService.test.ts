@@ -26,6 +26,18 @@ const repository: UiRepository = {
 };
 
 describe("AppService adapters", () => {
+  it("isolates nested demo snapshots without structuredClone", async () => {
+    const service = new DemoAppService();
+    const first = await service.bootstrap();
+    const original = first.workspace.repositories[0].name;
+    first.workspace.repositories[0].name = "mutated";
+    first.workspace.repositories.splice(1);
+    const second = await service.bootstrap();
+    expect(second.workspace.repositories[0].name).toBe(original);
+    expect(second.workspace.repositories.length).toBeGreaterThan(1);
+    expect(second.workspace.repositories).not.toBe(first.workspace.repositories);
+  });
+
   it("owns the demo bootstrap snapshot and keeps the empty-plugins scenario explicit", async () => {
     const populated = await new DemoAppService().bootstrap();
     const emptyPlugins = await new DemoAppService({ mode: "empty-plugins" }).bootstrap();

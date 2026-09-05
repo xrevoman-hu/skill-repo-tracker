@@ -28,6 +28,18 @@ helper 读取已登记的静态 query key；前端 `import.meta.env`/`process.en
 生产 Rust 禁止 foreign ABI/`#[link]` 和 inline/global assembly，避免绕过已登记的文件、网络、
 进程与系统调用表面积；确需引入必须先有 ADR、精确 selector、最小权限预算和负向测试。
 
+CSS 产物禁止所有 `url()`、`image-set()`/`-webkit-image-set()`，含本地及 escaped 形式。
+赋值目标识别穿透 TypeScript 类型包装，并覆盖 for-in/of 写入。含变量的 color-mix 增强必须
+位于顶层正向 @supports 中，避免旧引擎的 computed-value invalidation 覆盖静态背景。
+DOM 终端属性/方法约束与 receiver 无关；禁止直接 React JSX runtime、createFactory 和
+Audio/Image/FontFace 构造器恢复。JSX spread 只允许绑定到精确冻结的 Settings 函数和 typed
+props 合同；实现变动或同名影子绑定失去例外，禁止向 intrinsic element 继续转发。
+JSX 的本地 import 必须解析到受治理 inventory 中直接导出的函数组件；缺源、动态值或
+re-export 在建立解析合同前 fail closed。PluginsView 参数只在冻结实现中接受，调用方的
+组件 props 必须绑定函数。CSSStyleDeclaration 的 cssText/setProperty 约束不依赖 receiver。
+SVG 资源/SMIL 标签及 baseVal/animVal handle 默认禁用，防止动画值间接加载未登记资源。
+SVG presentation 引用属性同样拒绝 CSS escape，避免转义 URL 绕过静态字符串检查。
+
 禁止默认引入遥测、后台 daemon、额外系统权限或扩大自动清理范围。
 Cargo production、build 与 dev direct dependencies 分域登记 identity、source、default-features 和
 features；版本范围允许 Dependabot 正常升级，但新增 crate、切换 git/path/registry 或扩大 feature

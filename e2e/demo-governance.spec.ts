@@ -1,5 +1,35 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test("构建 CSS 在不支持 color-mix 时保留真实计算背景", async ({ page }) => {
+  const expectNoExternalRequests = await blockExternalRequests(page);
+  await page.route(/^http:\/\/127\.0\.0\.1:4173\/assets\/[^/]+\.css$/, async (route) => {
+    const response = await route.fetch();
+    // Simulate unsupported syntax, including @supports evaluation, on the real built stylesheet.
+    await route.fulfill({ response, body: (await response.text()).replaceAll("color-mix(", "unsupported-color-mix(") });
+  });
+  await page.goto("/?lang=zh&tab=prompts");
+  const backgrounds = await page.evaluate(() => {
+    const root = document.createElement("section");
+    root.className = "prompts-view";
+    root.dataset.theme = "light";
+    const classes = ["prompt-tag", "prompt-tag", "prompt-tag", "prompt-card is-drag-placeholder", "prompt-inline-error"];
+    for (const className of classes) {
+      const element = document.createElement("div");
+      element.className = className;
+      root.append(element);
+    }
+    document.body.append(root);
+    const result = Array.from(root.children, element => getComputedStyle(element).backgroundColor);
+    root.remove();
+    return result;
+  });
+  expect(backgrounds).toEqual([
+    "rgb(234, 242, 255)", "rgb(234, 242, 255)", "rgb(234, 242, 255)",
+    "rgb(234, 242, 255)", "rgb(255, 255, 255)",
+  ]);
+  expectNoExternalRequests();
+});
+
 async function blockExternalRequests(page: Page) {
   const externalRequests: string[] = [];
   const context = page.context();

@@ -2006,6 +2006,29 @@ describe("PromptsView", () => {
     }));
   });
 
+  it("requests the global group end through the move menu on a later page", async () => {
+    const manualItems: PromptSummary[] = [
+      { ...summaries[0], id: "page-two-a", title: "第二页甲", pinned: false },
+      { ...summaries[1], id: "page-two-b", title: "第二页乙", pinned: false },
+    ];
+    const pageTwo = { ...page(manualItems), page: 2, pageSize: 30, total: 32, totalPages: 2 };
+    const client = api({ listPrompts: vi.fn().mockResolvedValue(pageTwo) });
+    const user = userEvent.setup();
+    render(<PromptsView api={client} language="en" />);
+    await screen.findByText("32 prompts found");
+    await user.click(screen.getByRole("button", { name: "Manual order" }));
+    await user.click(screen.getByRole("button", { name: "Move options: 第二页甲" }));
+    await user.click(screen.getByRole("button", { name: "Move to end of group" }));
+    await waitFor(() => expect(client.reorderPrompt).toHaveBeenCalledWith({
+      id: "page-two-a",
+      previousId: null,
+      nextId: null,
+      boundary: "last",
+      expectedRevision: summaries[0].revision,
+      expectedLibraryRevision: 9,
+    }));
+  });
+
   it("registers a current leave guard for tab and window-close interception", async () => {
     const user = userEvent.setup();
     const confirmDiscard = vi.fn().mockResolvedValue(false);
