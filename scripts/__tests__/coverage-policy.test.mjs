@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  assertCoverageMeasurementMatchesArtifacts,
+  assertCoverageArtifactsRegenerated,
   buildCoverageBaselineUpdate,
   buildCoverageDiffArguments,
   calculateChangedCoverage,
@@ -16,8 +16,9 @@ import {
   isProbablyExecutableSource,
   loadTrackedJsonAtBase,
   parseTrackedJsonAtBase,
+  runCoverageBaselineProtocol,
   validateCoverageBaselineDocument,
-  validateCoverageBaselineSnapshotPaths,
+  validateCoverageBaselineArguments,
   validateCoverageMeasurementDocument,
   summarizeLcov,
 } from "../check-coverage.mjs";
@@ -382,13 +383,14 @@ test("current coverage baseline schema is strict while a tracked legacy base rem
   );
   assert.throws(
     () => validateCoverageBaselineDocument(legacy, "current baseline"),
-    /current baseline must contain only measuredAtCommit, frontend, and rust/,
+    /current baseline must contain only measuredAtCommit, protocol, frontend, and rust/,
   );
   assert.throws(
     () =>
       validateCoverageBaselineDocument(
         {
           measuredAtCommit: "not-a-full-commit",
+          protocol: "orchestrated-two-run-v1",
           frontend: metrics,
           rust: { lines: 70, branches: 60, functions: 32.09 },
         },
@@ -401,12 +403,22 @@ test("current coverage baseline schema is strict while a tracked legacy base rem
       validateCoverageBaselineDocument(
         {
           measuredAtCommit: "a".repeat(40),
+          protocol: "orchestrated-two-run-v1",
           frontend: { ...metrics, branches: 75.061 },
           rust: { lines: 70, branches: 60, functions: 32.09 },
         },
         "current baseline",
       ),
     /at most two decimal places/,
+  );
+  assert.throws(
+    () => validateCoverageBaselineDocument({
+      measuredAtCommit: "b".repeat(40),
+      protocol: "reviewed-bootstrap-v1",
+      frontend: metrics,
+      rust: { lines: 70, branches: 60, functions: 32.09 },
+    }, "current baseline"),
+    /may use reviewed-bootstrap-v1 only for ec4162/,
   );
 });
 
@@ -434,6 +446,7 @@ test("coverage baseline updates require two clean runs on one commit and cannot 
   };
   const previous = {
     measuredAtCommit: "c".repeat(40),
+    protocol: "orchestrated-two-run-v1",
     frontend: { lines: 80, branches: 81, functions: 82 },
     rust: { lines: 83, branches: 84, functions: 85 },
   };
@@ -442,6 +455,7 @@ test("coverage baseline updates require two clean runs on one commit and cannot 
     buildCoverageBaselineUpdate({ first, second, previous, expectedCommit: commit }),
     {
       measuredAtCommit: commit,
+      protocol: "orchestrated-two-run-v1",
       frontend: { lines: 80.01, branches: 81, functions: 82.01 },
       rust: { lines: 83.01, branches: 84.01, functions: 85.01 },
     },
@@ -496,38 +510,60 @@ test("coverage baseline updates require two clean runs on one commit and cannot 
   );
 });
 
-test("coverage baseline CLI inputs require distinct snapshot files outside live artifacts", () => {
-  const artifacts = {
-    frontend: "/repo/coverage/frontend/coverage-summary.json",
-    rust: "/repo/coverage/rust.lcov",
-  };
-  assert.deepEqual(
-    validateCoverageBaselineSnapshotPaths({
-      firstPath: "/tmp/coverage-first.json",
-      secondPath: "/tmp/coverage-second.json",
-      artifactPaths: artifacts,
-    }),
-    { first: "/tmp/coverage-first.json", second: "/tmp/coverage-second.json" },
+test("coverage baseline protocol owns both live runs and rejects external snapshots", () => {
+  const commit = "a".repeat(40);
+  const measurements = [
+    {
+      commit,
+      clean: true,
+      artifacts: {
+        frontend: { path: "coverage/frontend/coverage-summary.json", mtimeMs: 100 },
+        rust: { path: "coverage/rust.lcov", mtimeMs: 200 },
+      },
+      frontend: { lines: 80.01, branches: 81, functions: 82.01 },
+      rust: { lines: 83.01, branches: 84.01, functions: 85.01 },
+    },
+    {
+      commit,
+      clean: true,
+      artifacts: {
+        frontend: { path: "coverage/frontend/coverage-summary.json", mtimeMs: 300 },
+        rust: { path: "coverage/rust.lcov", mtimeMs: 400 },
+      },
+      frontend: { lines: 80.01, branches: 81, functions: 82.01 },
+      rust: { lines: 83.01, branches: 84.01, functions: 85.01 },
+    },
+  ];
+  const calls = [];
+  const result = runCoverageBaselineProtocol({
+    previous: {
+      measuredAtCommit: "c".repeat(40),
+      protocol: "orchestrated-two-run-v1",
+      frontend: { lines: 80, branches: 81, functions: 82 },
+      rust: { lines: 83, branches: 84, functions: 85 },
+    },
+    expectedCommit: commit,
+    runCoverageCycle: (cycle) => {
+      calls.push(cycle);
+      return measurements[cycle - 1];
+    },
+  });
+
+  assert.deepEqual(calls, [1, 2]);
+  assert.equal(result.protocol, "orchestrated-two-run-v1");
+  assert.deepEqual(validateCoverageBaselineArguments([]), { write: false });
+  assert.deepEqual(validateCoverageBaselineArguments(["--write"]), { write: true });
+  assert.throws(
+    () => validateCoverageBaselineArguments(["first.json", "second.json", "--write"]),
+    /does not accept external snapshot evidence/,
   );
   assert.throws(
-    () => validateCoverageBaselineSnapshotPaths({
-      firstPath: "/tmp/reused.json",
-      secondPath: "/tmp/reused.json",
-      artifactPaths: artifacts,
-    }),
-    /two distinct snapshot files/,
-  );
-  assert.throws(
-    () => validateCoverageBaselineSnapshotPaths({
-      firstPath: artifacts.frontend,
-      secondPath: "/tmp/coverage-second.json",
-      artifactPaths: artifacts,
-    }),
-    /must not reuse a live coverage artifact path/,
+    () => validateCoverageBaselineArguments(["--write", "--write"]),
+    /does not accept external snapshot evidence/,
   );
 });
 
-test("the second baseline snapshot must match current artifact identity and metrics", () => {
+test("each orchestrated coverage cycle must regenerate both live artifacts", () => {
   const commit = "a".repeat(40);
   const current = {
     commit,
@@ -539,19 +575,13 @@ test("the second baseline snapshot must match current artifact identity and metr
     frontend: { lines: 80.01, branches: 81, functions: 82.01 },
     rust: { lines: 83.01, branches: 84.01, functions: 85.01 },
   };
-  assert.doesNotThrow(() => assertCoverageMeasurementMatchesArtifacts(current, current));
+  assert.doesNotThrow(() => assertCoverageArtifactsRegenerated({ frontend: 100, rust: 200 }, current));
   assert.throws(
-    () => assertCoverageMeasurementMatchesArtifacts({
-      ...current,
-      artifacts: { ...current.artifacts, rust: { ...current.artifacts.rust, mtimeMs: 399 } },
-    }, current),
-    /live artifact mtime/,
+    () => assertCoverageArtifactsRegenerated({ frontend: 300, rust: 200 }, current),
+    /frontend coverage artifact was not regenerated/,
   );
   assert.throws(
-    () => assertCoverageMeasurementMatchesArtifacts({
-      ...current,
-      frontend: { ...current.frontend, lines: 80 },
-    }, current),
-    /frontend\.lines coverage snapshot does not match/,
+    () => assertCoverageArtifactsRegenerated({ frontend: 100, rust: 400 }, current),
+    /rust coverage artifact was not regenerated/,
   );
 });

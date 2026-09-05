@@ -1,5 +1,6 @@
 {
   "measuredAtCommit": "ec4162cef1627d8c2e4ec90e2f96495f9dcc8626",
+  "protocol": "reviewed-bootstrap-v1",
   "frontend": {
     "lines": 74.15,
     "branches": 75.06,

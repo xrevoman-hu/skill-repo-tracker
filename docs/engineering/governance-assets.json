@@ -289,6 +289,10 @@
           {
             "path": "scripts/__tests__/coverage-policy.test.mjs",
             "selector": "coverage baseline updates require two clean runs on one commit and cannot lower history"
+          },
+          {
+            "path": "scripts/__tests__/coverage-policy.test.mjs",
+            "selector": "coverage baseline protocol owns both live runs and rejects external snapshots"
           }
         ]
       }

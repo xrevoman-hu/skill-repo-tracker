@@ -71,15 +71,15 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   本次生产代码仍必须执行 80%/70% changed threshold。基线进入 `main` 后不得下调。
   无效 base ref 会失败，已跟踪基线的读取错误、无效 JSON 或缺失指标也会失败，不会被
   当成 bootstrap。
-  `docs/engineering/coverage-baseline.json` 的唯一更新协议是在同一个干净 commit 上连续两次
-  运行 `npm run coverage:check`，每次随后用
-  `node scripts/check-coverage.mjs snapshot` 把证据写到仓库外的临时 JSON；两次完成后用
-  `node scripts/check-coverage.mjs baseline <first.json> <second.json> --write` 更新。脚本要求
-  两次 commit 相同且等于当前 HEAD、工作树均干净、两份 snapshot 文件互异，并用产物路径、
-  mtime 与实时重算指标证明第二份证据对应当前 coverage 产物；每项漂移不超过 0.01 个百分点。
+  `docs/engineering/coverage-baseline.json` 的唯一更新协议是在干净 commit 上运行
+  `node scripts/check-coverage.mjs baseline --write`。该命令自身连续执行两轮前端与 Rust coverage，
+  每轮前后都核对同一个 clean HEAD，并要求两类实物的 mtime 都由该轮重新生成；不接受外部
+  snapshot JSON 作为写入证据。两轮每项漂移不超过 0.01 个百分点。
   基线取两次较低值并统一向下保留两位，且不得低于历史基线。禁止直接手改数字、用单次结果或用
-  四舍五入把临界值抬过门槛；当前文件使用完整 commit SHA 和严格字段，读取已进入历史的旧
-  格式时只保留兼容比较能力。
+  四舍五入把临界值抬过门槛；当前 `ec4162…` 数值是在编排命令进入仓库前完成两次 clean-main
+  测量并经双轴人工复审的一次性 `reviewed-bootstrap-v1`，以后写入只能升级为
+  `orchestrated-two-run-v1`。文件使用完整 commit SHA 和严格字段，读取已进入历史的旧格式时
+  只保留兼容比较能力。
 - E2E：`npm run test:e2e`，只用 `DemoAppService` 和虚构数据；CI 将它作为
   `CI / verify` 中确定性入口之后的浏览器验收步骤。浏览器流必须在导航前拦截全部请求，
   只允许当前 `127.0.0.1` 预览服务，并在测试结束时断言没有尝试访问外部地址。当前最小验收
