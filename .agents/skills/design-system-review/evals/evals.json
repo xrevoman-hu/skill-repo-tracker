@@ -1,0 +1,29 @@
+{
+  "skill_name": "design-system-review",
+  "evals": [
+    {
+      "id": 3,
+      "prompt": "请对当前 Skill Repo Tracker 的 Prompts 编辑/导入交互做一次只读设计系统审查，重点看 src/PromptsView.tsx、src/prompts.css、src/browserCompatibility.css。从实际源码提出至多3个可证实的高价值问题；若没有就写未发现，不凑数。覆盖现有主题/token、错误或pending状态、键盘/focus，并说明还缺什么运行期证据。没有浏览器和截图输入，请勿声称做过视觉或Safari验收。不要修改代码。base=335db9bef88f19e4d64747babe451ef719f95dec。",
+      "expected_output": "可复核的中文报告，遵守只读边界，区分事实、建议和未验证证据。",
+      "files": [],
+      "expectations": [
+        "结论引用真实源码位置与状态，不用主观风格凑满三个问题。",
+        "审查主题/token以及错误或pending状态，有具体证据。",
+        "审查键盘/focus并区分源码推断和运行期缺口。",
+        "保持只读，不宣称浏览器、Safari、视觉或对比度已经实测。"
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "请只读审查这个给 Skill Repo Tracker Prompts 页的提议，给排序后的问题和最小修改建议。代码：.toolbar:has(button:focus-visible){outline:2px solid blue} button:focus{outline:none} .card{background-image:image-set(\"https://cdn.example.invalid/bg.webp\" 1x);color:#68707d;background-color:#fff}。按钮是 <div onClick={save}>保存</div>；忙碌时只改灰色。提议者说 Vite target=safari15 且 Chromium 截图好看，所以Safari15、可访问性和远端资源已全部通过。评估当前仓库实际合同，不引入新库、设置或远程字体。不执行代码。",
+      "expected_output": "可复核的中文报告，遵守只读边界，区分事实、建议和未验证证据。",
+      "files": [],
+      "expectations": [
+        "识别:has与focus-visible/focus移除对Safari15基础可用性的影响。",
+        "识别image-set远端资源违反仓库资源/CSP合同并给出本地无资源替代。",
+        "识别div按钮语义键盘及仅变灰的pending重复提交问题。",
+        "拒绝以target和Chromium截图证明Safari/交互/可访问性通过；不给未计算的对比度合格断言。"
+      ]
+    }
+  ]
+}

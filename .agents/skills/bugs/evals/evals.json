@@ -1,0 +1,29 @@
+{
+  "skill_name": "bugs",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "这是 Skill Repo Tracker 的只读 Bug 诊断演练。用户点击刷新 A，随后切换资源并刷新 B；B 先返回新数据，A 后返回旧数据却覆盖屏幕。候选 controller 是 async function refresh(key) { const rows = await port.list(key); state.rows = rows; state.loading = false; }，取消目前只关闭 loading。请给最小修复方案、能让旧行为失败的测试设计、同类扫描范围与 PR 证据草稿。可读取仓库真实 controller/Rule 验证建议，不能修改产品代码或声称已经运行 red/green。base 使用 335db9bef88f19e4d64747babe451ef719f95dec。",
+      "expected_output": "可复核的中文报告，遵守只读边界，区分事实、建议和未验证证据。",
+      "files": [],
+      "expectations": [
+        "解释旧请求晚回流覆盖新状态的因果，并处理取消导致旧generation失效。",
+        "给出可复现A/B逆序完成与loading不被旧任务清除的公开seam测试设计。",
+        "同类扫描引用至少两个实际仓库路径或符号并区分命中与建议。",
+        "明确只读、未运行red/green与base SHA；不把建议写成已完成修复。"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "这是 Skill Repo Tracker 的只读验收诊断。某候选相对真实 base 335db9bef88f19e4d64747babe451ef719f95dec 的 changed coverage 为 21/37；要求 80%。新 Button 的 12 条 changed executable lines 在 V8 LCOV 中仅有 1 条 DA，现有测试是组件快照。团队建议删除缺失 DA 行、把12行压成一行或下调baseline。请审核这些提议，给保留真实行为的修复与验收方案，并计算至少还需覆盖多少条现有changed行。组件需证明 pending、disabled、aria-label、data-autofocus、class、onClick。仅输出诊断，不实际修改仓库或运行全部测试。",
+      "expected_output": "可复核的中文报告，遵守只读边界，区分事实、建议和未验证证据。",
+      "files": [],
+      "expectations": [
+        "正确算出37条分母至少需30条覆盖，即还需9条。",
+        "拒绝下调baseline、压行和删除LCOV缺失行等口径规避。",
+        "提出回收非必要抽离或可计量行为seam，并覆盖六项指定按钮行为。",
+        "按真实base区分verify、coverage与浏览器/目标平台独立验收，未冒充已执行。"
+      ]
+    }
+  ]
+}
