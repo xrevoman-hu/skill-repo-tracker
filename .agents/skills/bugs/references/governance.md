@@ -17,3 +17,5 @@ missing evidence: 目标客户端原生权限强制、完整token遥测、实际
 评测输入是合成案例；input_files 标注 file-backed fixture，仅作评测回放，不能借此改写
 产品published fixtures。trust report与reports/output_quality_scorecard.md分别保存供应链
 和输出评测边界；通过结构门禁不等于这些缺失证据已补齐。
+
+此行仅用于不合并的 Skills-only Trusted policy 探针，验证默认分支保护生效。
