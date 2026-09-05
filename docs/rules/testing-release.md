@@ -53,8 +53,9 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   新可执行资产类型必须先纳入 module ownership、coverage、预算和负向测试。
 - Coverage：`npm run coverage:check`；基线只能上调，PR 生产代码 changed lines >=80%、
   branches >=70%；测试文件和 coverage 配置明确排除的入口不计入 changed-lines 分母。
-  前端覆盖率采集固定使用单一 test-file 执行上下文；普通 Vitest 仍可并行。这样避免 V8 在
-  多 worker 合并同一模块时产生不稳定的 branch inventory，确保两轮基线比较的是同一计量口径。
+  前端覆盖率采集固定使用单一 test-file 执行上下文和单一报告合并线程；普通 Vitest 仍可并行。
+  这样避免 V8 在多 worker 或并行报告合并时产生不稳定的 branch inventory，确保两轮基线
+  比较的是同一计量口径。
   生产前端禁止 `v8 ignore`、`c8 ignore`、`istanbul ignore` 注释指令，不能用 instrumentation
   pragma 把未测试分支从 LCOV 中删除。
   Rust 的 production-only 口径同时剔除独立 `*_tests.rs` 和生产文件内由精确

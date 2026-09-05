@@ -7,7 +7,7 @@ const CRITICAL_PACKAGE_SCRIPTS = {
   test: "vitest run",
   "test:scripts": "node --test scripts/__tests__/*.test.mjs",
   "test:e2e": "playwright test",
-  "test:coverage": "vitest run --coverage --no-file-parallelism",
+  "test:coverage": "vitest run --coverage --no-file-parallelism --coverage.processingConcurrency=1",
   "coverage:rust": "node scripts/rust-coverage.mjs",
   "coverage:check":
     "npm run test:coverage && node scripts/check-coverage.mjs frontend && npm run coverage:rust && node scripts/check-coverage.mjs rust",
