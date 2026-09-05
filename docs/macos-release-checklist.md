@@ -3,6 +3,8 @@
 本清单是人工验收视图，不是第二套发布脚本。唯一可执行合同、local/remote phase 和 manifest
 交接命令只维护在 [testing-release Rule](rules/testing-release.md)；这里不得复制命令。
 
+当前发布目标为 [v1.2.8](releases/v1.2.8.md)，唯一公开资产为 `Skill.Repo.Tracker_1.2.8_aarch64.dmg`。
+
 ## 1. 授权与来源
 
 - 只有用户明确要求发布时才进入正式发布；普通 push 不发布。
