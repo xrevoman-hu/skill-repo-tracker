@@ -21,7 +21,9 @@ describe("App service seams", () => {
   it("persists settings through the injected demo service and reapplies its normalized response", async () => {
     const user = userEvent.setup();
     const service = new DemoAppService();
+    const existingSettings = (await service.bootstrap()).settings!;
     const updateSettings = vi.spyOn(service, "updateSettings").mockImplementation(async (settings) => ({
+      ...existingSettings,
       ...settings,
       backupRoot: "/normalized/backups",
       skillLibraryRoot: "/normalized/skills",
@@ -40,11 +42,16 @@ describe("App service seams", () => {
     await user.click(screen.getByRole("button", { name: "保存设置" }));
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledOnce());
-    expect(updateSettings).toHaveBeenCalledWith(expect.objectContaining({
+    expect(updateSettings).toHaveBeenCalledWith({
       backupRoot: "/requested/backups",
       skillLibraryRoot: "/requested/skills",
       skillsRoot: "/requested/skills",
-    }));
+      defaultSyncTargets: [],
+      syncBackupKeep: 5,
+      autoCheckInterval: 60,
+      autoCheckEnabled: false,
+      autoBackupEnabled: false,
+    });
     await waitFor(() => {
       expect(backupRoot).toHaveValue("/normalized/backups");
       expect(skillLibraryRoot).toHaveValue("/normalized/skills");
@@ -78,6 +85,62 @@ describe("App service seams", () => {
     });
     expect(refreshGithubCatalog).toHaveBeenCalledTimes(2);
     expect(browserFetch).not.toHaveBeenCalled();
+  });
+
+  it("keeps concurrent account-scoped GitHub refreshes from overwriting each other", async () => {
+    const user = userEvent.setup();
+    const service = new DemoAppService();
+    const base = await service.bootstrap();
+    const accountA = { ...base.githubAccounts[0], id: "account-a", login: "alice", displayName: "alice" };
+    const accountB = { ...base.githubAccounts[0], id: "account-b", login: "bob", displayName: "bob" };
+    const repositoryA = {
+      ...base.githubRepositories[0],
+      accountId: accountA.id,
+      accountLogin: accountA.login,
+      owner: accountA.login,
+      repo: "old-a",
+      fullName: "alice/old-a",
+    };
+    const repositoryB = {
+      ...base.githubRepositories[0],
+      accountId: accountB.id,
+      accountLogin: accountB.login,
+      owner: accountB.login,
+      repo: "old-b",
+      fullName: "bob/old-b",
+    };
+    vi.spyOn(service, "bootstrap").mockResolvedValue({
+      ...base,
+      githubAccounts: [accountA, accountB],
+      githubRepositories: [repositoryA, repositoryB],
+    });
+    type Catalog = Awaited<ReturnType<DemoAppService["refreshGithubCatalog"]>>;
+    let resolveA!: (value: Catalog | PromiseLike<Catalog>) => void;
+    let resolveB!: (value: Catalog | PromiseLike<Catalog>) => void;
+    vi.spyOn(service, "refreshGithubCatalog").mockImplementation((accountId) => new Promise((resolve) => {
+      if (accountId === accountA.id) resolveA = resolve;
+      if (accountId === accountB.id) resolveB = resolve;
+    }));
+    window.history.replaceState(null, "", "/?tab=github&lang=zh");
+
+    render(<App appService={service} />);
+    await user.click(await screen.findByRole("button", { name: "刷新 GitHub" }));
+    await user.click(screen.getByRole("button", { name: /bob/ }));
+    await user.click(screen.getByRole("button", { name: "刷新 GitHub" }));
+
+    resolveB({
+      accounts: [accountA, accountB],
+      repositories: [repositoryA, { ...repositoryB, repo: "fresh-b", fullName: "bob/fresh-b" }],
+    });
+    await waitFor(() => expect(screen.getByText("bob/fresh-b")).toBeInTheDocument());
+    resolveA({
+      accounts: [accountA, accountB],
+      repositories: [{ ...repositoryA, repo: "fresh-a", fullName: "alice/fresh-a" }, repositoryB],
+    });
+    await user.click(screen.getByRole("button", { name: /alice/ }));
+    await waitFor(() => expect(screen.getByText("alice/fresh-a")).toBeInTheDocument());
+    await user.click(screen.getByRole("button", { name: /bob/ }));
+    expect(screen.getByText("bob/fresh-b")).toBeInTheDocument();
   });
 
   it("focuses the stable repository id while superseding a late retry and removing optimistic state", async () => {

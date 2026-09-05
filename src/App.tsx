@@ -2699,14 +2699,10 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         skillLibraryRoot: skillsRoot,
         skillsRoot,
         defaultSyncTargets,
-        availableSyncTargets,
         syncBackupKeep,
         autoCheckInterval,
         autoCheckEnabled,
         autoBackupEnabled,
-        githubTokenConfigured,
-        githubTokenStatus,
-        githubTokenLastVerified,
       });
       applySettings(nextSettings);
       showToast(t("settingsSaved"));
@@ -2753,7 +2749,12 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         accounts: githubAccounts,
         repositories: githubRepositories,
       });
-      setGithubRepositories(next.repositories);
+      setGithubRepositories((items) => accountId
+        ? [
+            ...items.filter((repository) => repository.accountId !== accountId),
+            ...next.repositories.filter((repository) => repository.accountId === accountId),
+          ]
+        : next.repositories);
       setGithubAccounts(next.accounts);
       showToast(t("remoteRefreshed"));
     } catch (error: unknown) {

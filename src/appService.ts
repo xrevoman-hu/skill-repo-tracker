@@ -3,27 +3,15 @@ import type {
   AppMetadata,
   AppSettings,
   AppUpdateCheck,
-  CreatePromptRequest,
   GitHubAccount,
   GitHubRepository,
-  PromptDetail,
-  PromptExportSummary,
-  PromptListRequest,
-  PromptPage,
-  PromptSelection,
-  PromptSummary,
-  PromptTag,
-  PromptZipImportPreview,
-  PromptZipImportRequest,
-  PromptZipImportResult,
-  ReorderPromptRequest,
-  ReorderPromptResult,
   UiPlugin,
   UiRepository,
   UiSkill,
   UiTask,
-  UpdatePromptRequest,
+  UpdateSettingsRequest,
 } from "./api";
+import { DemoPromptTransport } from "./demoPromptTransport";
 import {
   initialGithubAccounts,
   initialGithubRepositories,
@@ -103,7 +91,7 @@ export interface AppService {
     request: AddRepositoryRequest,
     current: WorkspaceSnapshot,
   ): Promise<RepositoryMutationResult>;
-  updateSettings(settings: AppSettings): Promise<AppSettings>;
+  updateSettings(settings: UpdateSettingsRequest): Promise<AppSettings>;
   refreshGithubCatalog(
     accountId: string | undefined,
     current: GithubCatalogSnapshot,
@@ -209,14 +197,41 @@ export class TauriAppService implements AppService {
       this.transport.listTasks(),
     ]);
     const previousIds = new Set(current.repositories.map((repository) => repository.id));
-    const repositoryId = repositories.find((repository) => !previousIds.has(repository.id))?.id
-      ?? repositories[0]?.id
-      ?? "";
+    const requestedName = normalizeRepositoryName(request.url).toLocaleLowerCase("en-US");
+    const requestedMatches = repositories.filter((repository) => (
+      normalizeRepositoryName(repository.name).toLocaleLowerCase("en-US") === requestedName
+      && repository.ref === request.refName
+    ));
+    const newRepositories = repositories.filter((repository) => !previousIds.has(repository.id));
+    const repositoryId = requestedMatches.length === 1
+      ? requestedMatches[0].id
+      : newRepositories.length === 1
+        ? newRepositories[0].id
+        : "";
     return { workspace: { repositories, skills, plugins, tasks }, repositoryId };
   }
 
-  async updateSettings(settings: AppSettings): Promise<AppSettings> {
-    return this.transport.updateSettings(settings);
+  async updateSettings(settings: UpdateSettingsRequest): Promise<AppSettings> {
+    const {
+      backupRoot,
+      skillLibraryRoot,
+      skillsRoot,
+      defaultSyncTargets,
+      syncBackupKeep,
+      autoCheckInterval,
+      autoCheckEnabled,
+      autoBackupEnabled,
+    } = settings;
+    return this.transport.updateSettings({
+      backupRoot,
+      skillLibraryRoot,
+      skillsRoot,
+      defaultSyncTargets,
+      syncBackupKeep,
+      autoCheckInterval,
+      autoCheckEnabled,
+      autoBackupEnabled,
+    });
   }
 
   async refreshGithubCatalog(
@@ -356,7 +371,7 @@ export class DemoAppService implements AppService {
     request: AddRepositoryRequest,
     current: WorkspaceSnapshot,
   ): Promise<RepositoryMutationResult> {
-    const name = normalizeDemoRepositoryName(request.url);
+    const name = normalizeRepositoryName(request.url);
     if (!name || current.repositories.some((repository) => (
       repository.name === name && repository.ref === request.refName
     ))) {
@@ -415,8 +430,16 @@ export class DemoAppService implements AppService {
     });
   }
 
-  async updateSettings(settings: AppSettings): Promise<AppSettings> {
-    this.settings = clone(settings);
+  async updateSettings(settings: UpdateSettingsRequest): Promise<AppSettings> {
+    const normalizedBackupRoot = normalizeDirectory(settings.backupRoot);
+    const normalizedSkillLibraryRoot = normalizeDirectory(settings.skillLibraryRoot);
+    this.settings = {
+      ...this.settings,
+      ...clone(settings),
+      backupRoot: normalizedBackupRoot,
+      skillLibraryRoot: normalizedSkillLibraryRoot,
+      skillsRoot: settings.skillsRoot ? normalizeDirectory(settings.skillsRoot) : settings.skillsRoot,
+    };
     return clone(this.settings);
   }
 
@@ -495,7 +518,7 @@ function demoSuccessfulRetry(now: Date, task: UiTask): UiTask {
   });
 }
 
-function normalizeDemoRepositoryName(value: string) {
+function normalizeRepositoryName(value: string) {
   return value
     .trim()
     .replace(/^https?:\/\/(?:www\.)?github\.com\//i, "")
@@ -504,285 +527,9 @@ function normalizeDemoRepositoryName(value: string) {
     .replace(/^\/+|\/+$/g, "");
 }
 
-class DemoPromptTransport implements PromptTransport {
-  private readonly now: () => Date;
-  private prompts: PromptDetail[];
-  private tags: PromptTag[];
-  private libraryRevision = 1;
-  private nextPromptId = 3;
-
-  constructor(now: () => Date) {
-    this.now = now;
-    this.tags = [
-      demoPromptTag("research", "研究"),
-      demoPromptTag("release", "发布"),
-    ];
-    this.prompts = [
-      demoPrompt("demo-prompt-1", "本地优先检查清单", "# 检查\n\n验证本地状态与公开实物。", [this.tags[0]], true),
-      demoPrompt("demo-prompt-2", "发布异常处置", "# 处置\n\n上传不明时先查询远端。", [this.tags[1]], false),
-    ];
-  }
-
-  async listPrompts(request: PromptListRequest): Promise<PromptPage> {
-    const query = request.query.trim().normalize("NFC").toLocaleLowerCase();
-    let prompts = this.prompts.filter((prompt) => {
-      const queryMatches = !query
-        || `${prompt.title}\n${prompt.content}`.normalize("NFC").toLocaleLowerCase().includes(query);
-      const promptTagIds = new Set(prompt.tags.map((tag) => tag.id));
-      const tagMatches = request.tagIds.length === 0
-        || (request.tagMode === "all"
-          ? request.tagIds.every((id) => promptTagIds.has(id))
-          : request.tagIds.some((id) => promptTagIds.has(id)));
-      return queryMatches && tagMatches;
-    });
-    if (request.sort === "updatedDesc") {
-      prompts = [...prompts].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    }
-    const totalPages = Math.max(1, Math.ceil(prompts.length / request.pageSize));
-    const page = Math.min(Math.max(1, request.page), totalPages);
-    const start = (page - 1) * request.pageSize;
-    return clone({
-      items: prompts.slice(start, start + request.pageSize).map((prompt) => promptSummary(prompt)),
-      total: prompts.length,
-      page,
-      pageSize: request.pageSize,
-      totalPages,
-      libraryRevision: this.libraryRevision,
-    });
-  }
-
-  async getPromptDetail(id: string): Promise<PromptDetail> {
-    return clone(this.requirePrompt(id));
-  }
-
-  async createPrompt(request: CreatePromptRequest): Promise<PromptDetail> {
-    const now = this.now().toISOString();
-    const prompt = demoPrompt(
-      `demo-prompt-${this.nextPromptId++}`,
-      request.title,
-      request.content,
-      this.promptTags(request.tagIds),
-      Boolean(request.pinned),
-      now,
-    );
-    this.prompts = [prompt, ...this.prompts];
-    this.libraryRevision += 1;
-    return clone(prompt);
-  }
-
-  async updatePrompt(request: UpdatePromptRequest): Promise<PromptDetail> {
-    const current = this.requirePrompt(request.id);
-    if (current.revision !== request.expectedRevision) throw new Error("Prompt revision changed.");
-    const updated = {
-      ...current,
-      title: request.title,
-      content: request.content,
-      excerpt: promptExcerpt(request.content),
-      contentBytes: new TextEncoder().encode(request.content).byteLength,
-      tags: this.promptTags(request.tagIds),
-      pinned: Boolean(request.pinned),
-      updatedAt: this.now().toISOString(),
-      revision: current.revision + 1,
-    };
-    this.prompts = this.prompts.map((prompt) => prompt.id === request.id ? updated : prompt);
-    this.libraryRevision += 1;
-    return clone(updated);
-  }
-
-  async deletePrompt(id: string, expectedRevision: number): Promise<void> {
-    const current = this.requirePrompt(id);
-    if (current.revision !== expectedRevision) throw new Error("Prompt revision changed.");
-    this.prompts = this.prompts.filter((prompt) => prompt.id !== id);
-    this.libraryRevision += 1;
-  }
-
-  async setPromptPinned(id: string, pinned: boolean, expectedRevision: number): Promise<PromptSummary> {
-    const current = this.requirePrompt(id);
-    if (current.revision !== expectedRevision) throw new Error("Prompt revision changed.");
-    const updated = { ...current, pinned, revision: current.revision + 1, updatedAt: this.now().toISOString() };
-    this.prompts = this.prompts.map((prompt) => prompt.id === id ? updated : prompt);
-    this.libraryRevision += 1;
-    return clone(promptSummary(updated));
-  }
-
-  async reorderPrompt(_request: ReorderPromptRequest): Promise<ReorderPromptResult> {
-    this.libraryRevision += 1;
-    return { libraryRevision: this.libraryRevision };
-  }
-
-  async listPromptTags(): Promise<PromptTag[]> {
-    return clone(this.tags.map((tag) => ({
-      ...tag,
-      promptCount: this.prompts.filter((prompt) => prompt.tags.some((candidate) => candidate.id === tag.id)).length,
-    })));
-  }
-
-  async createPromptTag(name: string): Promise<PromptTag> {
-    const normalized = name.trim().normalize("NFC");
-    const existing = this.tags.find((tag) => tag.name.normalize("NFC") === normalized);
-    if (existing) return clone(existing);
-    const tag = demoPromptTag(`demo-tag-${this.tags.length + 1}`, normalized, this.now().toISOString());
-    this.tags = [...this.tags, tag];
-    this.libraryRevision += 1;
-    return clone(tag);
-  }
-
-  async renamePromptTag(tagId: string, name: string): Promise<PromptTag> {
-    const current = this.requireTag(tagId);
-    const updated = { ...current, name: name.trim().normalize("NFC"), updatedAt: this.now().toISOString() };
-    this.tags = this.tags.map((tag) => tag.id === tagId ? updated : tag);
-    this.prompts = this.prompts.map((prompt) => ({
-      ...prompt,
-      tags: prompt.tags.map((tag) => tag.id === tagId ? updated : tag),
-    }));
-    this.libraryRevision += 1;
-    return clone(updated);
-  }
-
-  async mergePromptTags(sourceTagId: string, targetTagId: string): Promise<PromptTag> {
-    const target = this.requireTag(targetTagId);
-    this.requireTag(sourceTagId);
-    this.prompts = this.prompts.map((prompt) => {
-      const ids = new Set(prompt.tags.map((tag) => tag.id));
-      if (!ids.has(sourceTagId)) return prompt;
-      return {
-        ...prompt,
-        tags: [...prompt.tags.filter((tag) => tag.id !== sourceTagId && tag.id !== targetTagId), target],
-      };
-    });
-    this.tags = this.tags.filter((tag) => tag.id !== sourceTagId);
-    this.libraryRevision += 1;
-    return clone(target);
-  }
-
-  async deletePromptTag(tagId: string): Promise<void> {
-    this.requireTag(tagId);
-    this.tags = this.tags.filter((tag) => tag.id !== tagId);
-    this.prompts = this.prompts.map((prompt) => ({
-      ...prompt,
-      tags: prompt.tags.filter((tag) => tag.id !== tagId),
-    }));
-    this.libraryRevision += 1;
-  }
-
-  async exportPromptMarkdown(id: string): Promise<PromptExportSummary> {
-    const prompt = this.requirePrompt(id);
-    return demoExportSummary(`${prompt.id}.md`, 1, prompt.contentBytes);
-  }
-
-  async exportPromptsZip(selection: PromptSelection): Promise<PromptExportSummary> {
-    const count = selection.mode === "explicit"
-      ? selection.ids.filter((id) => this.prompts.some((prompt) => prompt.id === id)).length
-      : Math.max(0, this.prompts.length - selection.excludedIds.length);
-    return demoExportSummary("prompts.zip", count, this.prompts.reduce((sum, prompt) => sum + prompt.contentBytes, 0));
-  }
-
-  async previewPromptsZipImport(): Promise<PromptZipImportPreview> {
-    const exists = this.prompts.some((prompt) => prompt.id === "demo-imported-prompt");
-    return {
-      path: "/tmp/skill-repo-tracker-demo-prompts.zip",
-      fileName: "skill-repo-tracker-demo-prompts.zip",
-      cancelled: false,
-      sha256: "a".repeat(64),
-      sizeBytes: 512,
-      expectedLibraryRevision: this.libraryRevision,
-      prompts: 1,
-      totalContentBytes: 48,
-      newPrompts: exists ? 0 : 1,
-      identicalPrompts: exists ? 1 : 0,
-      conflictingPrompts: 0,
-      tagsToCreate: 0,
-      tagsToReuse: 1,
-      conflicts: [],
-      valid: true,
-      message: "demo import preview",
-    };
-  }
-
-  async importPromptsZip(request: PromptZipImportRequest): Promise<PromptZipImportResult> {
-    if (request.expectedLibraryRevision !== this.libraryRevision) throw new Error("Prompt library changed.");
-    const exists = this.prompts.some((prompt) => prompt.id === "demo-imported-prompt");
-    if (!exists) {
-      this.prompts = [
-        demoPrompt(
-          "demo-imported-prompt",
-          "导入的发布恢复清单",
-          "# 恢复\n\n先查询远端状态，再决定是否重试。",
-          [this.tags[1]],
-          false,
-          this.now().toISOString(),
-        ),
-        ...this.prompts,
-      ];
-      this.libraryRevision += 1;
-    }
-    return {
-      inserted: exists ? 0 : 1,
-      skippedSame: exists ? 1 : 0,
-      keptLocal: 0,
-      overwritten: 0,
-      duplicated: 0,
-      createdTags: 0,
-      reusedTags: 1,
-      libraryRevision: this.libraryRevision,
-      message: "demo import complete",
-    };
-  }
-
-  private requirePrompt(id: string) {
-    const prompt = this.prompts.find((candidate) => candidate.id === id);
-    if (!prompt) throw new Error("Prompt not found.");
-    return prompt;
-  }
-
-  private requireTag(id: string) {
-    const tag = this.tags.find((candidate) => candidate.id === id);
-    if (!tag) throw new Error("Prompt tag not found.");
-    return tag;
-  }
-
-  private promptTags(ids: string[]) {
-    return ids.map((id) => this.requireTag(id));
-  }
-}
-
-function demoPromptTag(id: string, name: string, timestamp = "2026-06-30T10:00:00.000Z"): PromptTag {
-  return { id, name, promptCount: 0, createdAt: timestamp, updatedAt: timestamp };
-}
-
-function demoPrompt(
-  id: string,
-  title: string,
-  content: string,
-  tags: PromptTag[],
-  pinned: boolean,
-  timestamp = "2026-06-30T10:00:00.000Z",
-): PromptDetail {
-  return {
-    id,
-    title,
-    content,
-    excerpt: promptExcerpt(content),
-    tags,
-    pinned,
-    contentBytes: new TextEncoder().encode(content).byteLength,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    revision: 1,
-  };
-}
-
-function promptSummary(prompt: PromptDetail): PromptSummary {
-  const { content: _content, ...summary } = prompt;
-  return summary;
-}
-
-function promptExcerpt(content: string) {
-  return content.replace(/^#+\s*/gm, "").replace(/\s+/g, " ").trim().slice(0, 120);
-}
-
-function demoExportSummary(name: string, count: number, bytes: number): PromptExportSummary {
-  return { path: `/tmp/${name}`, cancelled: false, count, bytes, message: "demo export complete" };
+function normalizeDirectory(value: string) {
+  const trimmed = value.trim();
+  return trimmed.length > 1 ? trimmed.replace(/\/+$/g, "") : trimmed;
 }
 
 function clone<T>(value: T): T {

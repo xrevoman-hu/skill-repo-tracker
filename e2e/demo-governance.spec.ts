@@ -2,17 +2,29 @@ import { expect, test, type Page } from "@playwright/test";
 
 async function blockExternalRequests(page: Page) {
   const externalRequests: string[] = [];
+  const context = page.context();
 
-  await page.route("**/*", async (route) => {
+  await context.route("**/*", async (route) => {
     const requestUrl = route.request().url();
     const url = new URL(requestUrl);
-    if (url.hostname === "127.0.0.1") {
+    if (url.origin === "http://127.0.0.1:4173") {
       await route.continue();
       return;
     }
 
     externalRequests.push(requestUrl);
     await route.abort("blockedbyclient");
+  });
+
+  await context.routeWebSocket("**/*", async (webSocket) => {
+    const socketUrl = webSocket.url();
+    const url = new URL(socketUrl);
+    if (url.origin === "ws://127.0.0.1:4173") {
+      webSocket.connectToServer();
+      return;
+    }
+    externalRequests.push(socketUrl);
+    await webSocket.close({ code: 1008, reason: "external network disabled in Demo E2E" });
   });
 
   return () => expect(externalRequests).toEqual([]);
@@ -58,6 +70,9 @@ test("选择仓库并确认备份后可查看成功状态和日志，且不访�
 
   const repositoryRow = page.getByRole("row", { name: /example-org\/content-skill-kit/ });
   await expect(repositoryRow).toContainText("已备份");
+  await repositoryRow.click();
+  await page.getByRole("button", { name: "打开备份目录" }).click();
+  await expect(page.getByRole("heading", { level: 2, name: "example-org/content-skill-kit" })).toBeVisible();
 
   await page.getByRole("button", { name: "任务", exact: true }).click();
   const backupTask = page.getByRole("row", { name: /备份仓库.*选中仓库.*1 \/ 1.*成功/ }).first();
@@ -146,6 +161,11 @@ test("设置从默认值保存并由服务回灌，切换页面后仍保持，�
   await expect(page.getByRole("button", { name: "舒适" })).toHaveAttribute("aria-pressed", "true");
   await expect(interval).toHaveValue("60");
   await expect(backupRoot).toHaveValue("~/SkillRepoBackups");
+  await expect(page.getByText("元数据并发")).toHaveCount(0);
+  await expect(page.getByText("失败重试次数")).toHaveCount(0);
+  await expect(page.getByText("备份历史保留数量")).toHaveCount(0);
+  await page.getByRole("button", { name: "检查更新" }).click();
+  await expect(page.getByText("当前已是最新版本。").first()).toBeVisible();
 
   await page.getByRole("button", { name: "黑色主题" }).click();
   await page.getByRole("button", { name: "紧凑" }).click();
@@ -154,13 +174,13 @@ test("设置从默认值保存并由服务回灌，切换页面后仍保持，�
   await page.getByRole("button", { name: "保存设置" }).click();
 
   await expect(page.getByRole("status")).toHaveText("设置已保存。");
-  await expect(backupRoot).toHaveValue("/tmp/demo-backups/");
+  await expect(backupRoot).toHaveValue("/tmp/demo-backups");
   await page.getByRole("button", { name: "仓库", exact: true }).click();
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await expect(page.getByRole("button", { name: "黑色主题" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("button", { name: "紧凑" })).toHaveAttribute("aria-pressed", "true");
   await expect(interval).toHaveValue("75");
-  await expect(backupRoot).toHaveValue("/tmp/demo-backups/");
+  await expect(backupRoot).toHaveValue("/tmp/demo-backups");
 
   expectNoExternalRequests();
 });
@@ -207,12 +227,23 @@ test("Prompt 可创建标签、搜索并完成 ZIP 批量导出导入，且不�
   await page.getByRole("button", { name: "批量导出" }).click();
   await expect(page.getByText("导出任务已完成", { exact: true })).toBeVisible();
 
+  await promptCard.click();
+  const promptDrawer = page.getByRole("dialog", { name: "发布安全复验" });
+  await expect(promptDrawer).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await promptDrawer.getByRole("button", { name: "删除提示词" }).click();
+  await expect(page.getByText("提示词已删除", { exact: true })).toBeVisible();
+  await expect(promptCard).toHaveCount(0);
+
   await page.getByRole("button", { name: "批量导入" }).click();
   const importDialog = page.getByRole("dialog", { name: "导入提示词 ZIP" });
   await expect(importDialog).toBeVisible();
   await expect(importDialog.getByRole("combobox", { name: "冲突处理" })).toHaveValue("duplicate");
   await importDialog.getByRole("button", { name: "导入提示词" }).click();
   await expect(importDialog.getByRole("heading", { level: 2, name: "导入完成" })).toBeVisible();
+  await importDialog.locator("footer").getByRole("button", { name: "关闭" }).click();
+  await search.fill("发布安全复验");
+  await expect(page.getByRole("article", { name: "发布安全复验" })).toBeVisible();
 
   expectNoExternalRequests();
 });

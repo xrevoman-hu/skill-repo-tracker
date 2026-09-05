@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -19,6 +19,10 @@ import { isRustProductionSourcePath } from "./source-classification.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = "docs/engineering/coverage-baseline.json";
+const COVERAGE_ARTIFACTS = {
+  frontend: "coverage/frontend/coverage-summary.json",
+  rust: "coverage/rust.lcov",
+};
 
 export function floorCoveragePercent(covered, total) {
   if (!Number.isFinite(covered) || !Number.isFinite(total) || covered < 0 || total < 0) {
@@ -481,8 +485,8 @@ export function validateCoverageMeasurementDocument(document, label) {
   if (!document || typeof document !== "object" || Array.isArray(document)) {
     throw new Error(`${label} must be a JSON object`);
   }
-  if (!hasExactKeys(document, ["commit", "clean", ...COVERAGE_MODES])) {
-    throw new Error(`${label} must contain only commit, clean, frontend, and rust`);
+  if (!hasExactKeys(document, ["commit", "clean", "artifacts", ...COVERAGE_MODES])) {
+    throw new Error(`${label} must contain only commit, clean, artifacts, frontend, and rust`);
   }
   if (!/^[0-9a-f]{40}$/.test(document.commit ?? "")) {
     throw new Error(`${label} has invalid commit`);
@@ -499,6 +503,22 @@ export function validateCoverageMeasurementDocument(document, label) {
     for (const metric of COVERAGE_METRICS) {
       validateMetricValue(metrics[metric], `${label}.${mode}.${metric}`);
     }
+    const artifact = document.artifacts?.[mode];
+    if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) {
+      throw new Error(`${label}.artifacts.${mode} must be a JSON object`);
+    }
+    if (!hasExactKeys(artifact, ["path", "mtimeMs"])) {
+      throw new Error(`${label}.artifacts.${mode} must contain only path and mtimeMs`);
+    }
+    if (artifact.path !== COVERAGE_ARTIFACTS[mode]) {
+      throw new Error(`${label}.artifacts.${mode}.path must be ${COVERAGE_ARTIFACTS[mode]}`);
+    }
+    if (typeof artifact.mtimeMs !== "number" || !Number.isFinite(artifact.mtimeMs) || artifact.mtimeMs <= 0) {
+      throw new Error(`${label}.artifacts.${mode}.mtimeMs is invalid`);
+    }
+  }
+  if (!hasExactKeys(document.artifacts, COVERAGE_MODES)) {
+    throw new Error(`${label}.artifacts must contain only frontend and rust`);
   }
   return document;
 }
@@ -516,6 +536,11 @@ export function buildCoverageBaselineUpdate({ first, second, previous, expectedC
   }
   if (expectedCommit && firstRun.commit !== expectedCommit) {
     throw new Error(`coverage baseline runs must use current commit ${expectedCommit}`);
+  }
+  for (const mode of COVERAGE_MODES) {
+    if (secondRun.artifacts[mode].mtimeMs <= firstRun.artifacts[mode].mtimeMs) {
+      throw new Error(`${mode} coverage artifact was not regenerated between baseline runs`);
+    }
   }
 
   const next = { measuredAtCommit: firstRun.commit, frontend: {}, rust: {} };
@@ -556,9 +581,41 @@ function captureCoverageMeasurement() {
   return {
     commit: gitCommit(),
     clean: true,
+    artifacts: Object.fromEntries(COVERAGE_MODES.map((mode) => [mode, {
+      path: COVERAGE_ARTIFACTS[mode],
+      mtimeMs: statSync(resolve(ROOT, COVERAGE_ARTIFACTS[mode])).mtimeMs,
+    }])),
     frontend: frontendSummary(),
     rust: rustSummary(),
   };
+}
+
+export function validateCoverageBaselineSnapshotPaths({ firstPath, secondPath, artifactPaths }) {
+  const first = resolve(firstPath);
+  const second = resolve(secondPath);
+  if (first === second) throw new Error("coverage baseline runs require two distinct snapshot files");
+  const artifacts = new Set(Object.values(artifactPaths).map((path) => resolve(path)));
+  if (artifacts.has(first) || artifacts.has(second)) {
+    throw new Error("coverage snapshot files must not reuse a live coverage artifact path");
+  }
+  return { first, second };
+}
+
+export function assertCoverageMeasurementMatchesArtifacts(measurement, current) {
+  const run = validateCoverageMeasurementDocument(measurement, "second coverage run");
+  for (const mode of COVERAGE_MODES) {
+    if (run.artifacts[mode].path !== current.artifacts[mode].path) {
+      throw new Error(`${mode} coverage snapshot points at the wrong live artifact`);
+    }
+    if (run.artifacts[mode].mtimeMs !== current.artifacts[mode].mtimeMs) {
+      throw new Error(`${mode} coverage snapshot does not match the live artifact mtime`);
+    }
+    for (const metric of COVERAGE_METRICS) {
+      if (run[mode][metric] !== current[mode][metric]) {
+        throw new Error(`${mode}.${metric} coverage snapshot does not match the live artifact`);
+      }
+    }
+  }
 }
 
 function updateCoverageBaseline(firstPath, secondPath, write) {
@@ -568,10 +625,21 @@ function updateCoverageBaseline(firstPath, secondPath, write) {
     );
   }
   if (!isCleanWorktree()) throw new Error("coverage baseline updates require a clean worktree");
+  const snapshotPaths = validateCoverageBaselineSnapshotPaths({
+    firstPath,
+    secondPath,
+    artifactPaths: Object.fromEntries(Object.entries(COVERAGE_ARTIFACTS).map(([mode, path]) => (
+      [mode, resolve(ROOT, path)]
+    ))),
+  });
   const baselineFile = resolve(ROOT, BASELINE_PATH);
+  const first = JSON.parse(readFileSync(snapshotPaths.first, "utf8"));
+  const second = JSON.parse(readFileSync(snapshotPaths.second, "utf8"));
+  const current = captureCoverageMeasurement();
+  assertCoverageMeasurementMatchesArtifacts(second, current);
   const next = buildCoverageBaselineUpdate({
-    first: JSON.parse(readFileSync(resolve(firstPath), "utf8")),
-    second: JSON.parse(readFileSync(resolve(secondPath), "utf8")),
+    first,
+    second,
     previous: JSON.parse(readFileSync(baselineFile, "utf8")),
     expectedCommit: gitCommit(),
   });

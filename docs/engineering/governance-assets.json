@@ -480,6 +480,7 @@
       "reviewOnChange": [
         "src/PromptsView.tsx",
         "src/appService.ts",
+        "src/demoPromptTransport.ts",
         "src/promptLibraryAdapter.ts",
         "src-tauri/src/prompts.rs",
         "src-tauri/src/prompt_search.rs",

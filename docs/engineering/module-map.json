@@ -242,7 +242,7 @@
       "layer": "frontend-fixture",
       "ownerRule": "docs/rules/testing-release.md",
       "decisions": ["docs/adr/0007-staged-modularization.md"],
-      "paths": ["src/demoFixtures.ts"]
+      "paths": ["src/demoFixtures.ts", "src/demoPromptTransport.ts"]
     },
     {
       "id": "frontend-shared-ui",

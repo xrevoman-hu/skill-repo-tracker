@@ -304,6 +304,67 @@ describe("AppService adapters", () => {
     });
   });
 
+  it("focuses the requested repository when another repository is added concurrently", async () => {
+    const unrelatedNew = { ...repository, id: "repo-other-new", name: "other/repository" };
+    const requestedNew = {
+      ...repository,
+      id: "repo-requested-new",
+      name: "Quality/Demo-Skill",
+      ref: "release",
+    };
+    const transport = makeTauriTransport();
+    transport.addRepository.mockResolvedValue([repository, unrelatedNew, requestedNew]);
+    const service = new TauriAppService(transport);
+
+    await expect(service.addRepository({
+      url: "https://github.com/quality/demo-skill.git",
+      refName: "release",
+      note: "concurrent addition",
+    }, {
+      ...emptyWorkspace(),
+      repositories: [repository],
+    })).resolves.toMatchObject({
+      repositoryId: "repo-requested-new",
+    });
+  });
+
+  it("fails closed when multiple unrelated repositories are added concurrently", async () => {
+    const firstNew = { ...repository, id: "repo-first-new", name: "other/first" };
+    const secondNew = { ...repository, id: "repo-second-new", name: "other/second" };
+    const transport = makeTauriTransport();
+    transport.addRepository.mockResolvedValue([repository, firstNew, secondNew]);
+    const service = new TauriAppService(transport);
+
+    await expect(service.addRepository({
+      url: "https://github.com/quality/missing",
+      refName: "main",
+      note: "ambiguous additions",
+    }, {
+      ...emptyWorkspace(),
+      repositories: [repository],
+    })).resolves.toMatchObject({ repositoryId: "" });
+  });
+
+  it("focuses the matching existing repository when a Tauri upsert returns no new id", async () => {
+    const unrelated = { ...repository, id: "repo-unrelated", name: "other/repository" };
+    const existing = { ...repository, id: "repo-existing", name: "quality/demo-skill", ref: "release" };
+    const transport = makeTauriTransport();
+    transport.addRepository.mockResolvedValue([unrelated, existing]);
+    const service = new TauriAppService(transport);
+
+    await expect(service.addRepository({
+      url: "https://github.com/quality/demo-skill.git",
+      refName: "release",
+      note: "update existing",
+    }, {
+      ...emptyWorkspace(),
+      repositories: [unrelated, existing],
+    })).resolves.toMatchObject({
+      repositoryId: "repo-existing",
+      workspace: { repositories: [unrelated, existing] },
+    });
+  });
+
   it("delegates settings and merges scoped GitHub refreshes without retaining stale rows", async () => {
     const accountA = githubAccount("account-a", "alice");
     const accountB = githubAccount("account-b", "bob");
@@ -321,7 +382,16 @@ describe("AppService adapters", () => {
     const settings = { ...defaultSettings, backupRoot: "/verified-backups" };
 
     await expect(service.updateSettings(settings)).resolves.toEqual(settings);
-    expect(transport.updateSettings).toHaveBeenCalledWith(settings);
+    expect(transport.updateSettings).toHaveBeenCalledWith({
+      backupRoot: "/verified-backups",
+      skillLibraryRoot: "/skills",
+      skillsRoot: undefined,
+      defaultSyncTargets: [],
+      syncBackupKeep: 5,
+      autoCheckInterval: 60,
+      autoCheckEnabled: false,
+      autoBackupEnabled: false,
+    });
     await expect(service.chooseLocalRepository()).resolves.toBe("/repositories/local-skill");
     expect(transport.pickDirectory).toHaveBeenCalledOnce();
 
@@ -480,11 +550,13 @@ describe("AppService adapters", () => {
     await expect(prompts.exportPrompts({ mode: "explicit", ids: [created.id] })).resolves.toMatchObject({
       path: "/tmp/prompts.zip",
       count: 1,
+      bytes: created.contentBytes,
     });
+    await prompts.deletePrompt(created.id, created.revision);
 
     const preview = await prompts.previewPromptsZipImport();
     expect(preview).toMatchObject({
-      fileName: "skill-repo-tracker-demo-prompts.zip",
+      fileName: "prompts.zip",
       promptCount: 1,
       newCount: 1,
     });
@@ -497,7 +569,7 @@ describe("AppService adapters", () => {
     })).resolves.toMatchObject({ inserted: 1, skipped: 0, tagsReused: 1 });
 
     await expect(prompts.listPrompts({
-      query: "恢复清单",
+      query: "发布验证提示词",
       tagIds: [],
       tagMode: "any",
       sort: "manual",
@@ -505,8 +577,48 @@ describe("AppService adapters", () => {
       pageSize: 30,
     })).resolves.toMatchObject({
       total: 1,
-      items: [expect.objectContaining({ title: "导入的发布恢复清单" })],
+      items: [expect.objectContaining({ title: "发布验证提示词" })],
     });
+  });
+
+  it("keeps demo prompt reorder and tag identity stateful across mutations", async () => {
+    const service = new DemoAppService({ now: () => new Date("2026-09-03T12:00:00Z") });
+    const prompts = createPromptLibraryApi(service.promptTransport);
+    const first = await prompts.createPrompt({ title: "第一篇", content: "first", tagIds: [], pinned: false });
+    const second = await prompts.createPrompt({ title: "第二篇", content: "second", tagIds: [], pinned: false });
+    const before = await prompts.listPrompts({
+      query: "",
+      tagIds: [],
+      tagMode: "any",
+      sort: "manual",
+      page: 1,
+      pageSize: 30,
+    });
+
+    await prompts.reorderPrompt({
+      id: first.id,
+      previousId: null,
+      nextId: null,
+      boundary: "first",
+      expectedRevision: first.revision,
+      expectedLibraryRevision: before.libraryRevision,
+    });
+    const reordered = await prompts.listPrompts({
+      query: "",
+      tagIds: [],
+      tagMode: "any",
+      sort: "manual",
+      page: 1,
+      pageSize: 30,
+    });
+    expect(reordered.items.findIndex((prompt) => prompt.id === first.id)).toBeLessThan(
+      reordered.items.findIndex((prompt) => prompt.id === second.id),
+    );
+
+    const removed = await prompts.createTag("临时标签");
+    await prompts.deleteTag(removed.id);
+    const replacement = await prompts.createTag("替代标签");
+    expect(replacement.id).not.toBe(removed.id);
   });
 });
 
