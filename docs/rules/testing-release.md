@@ -71,8 +71,19 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   本次生产代码仍必须执行 80%/70% changed threshold。基线进入 `main` 后不得下调。
   无效 base ref 会失败，已跟踪基线的读取错误、无效 JSON 或缺失指标也会失败，不会被
   当成 bootstrap。
+  `docs/engineering/coverage-baseline.json` 的唯一更新协议是在同一个干净 commit 上连续两次
+  运行 `npm run coverage:check`，每次随后用
+  `node scripts/check-coverage.mjs snapshot` 把证据写到仓库外的临时 JSON；两次完成后用
+  `node scripts/check-coverage.mjs baseline <first.json> <second.json> --write` 更新。脚本要求
+  两次 commit 相同且等于当前 HEAD、工作树均干净、每项漂移不超过 0.01 个百分点；基线取
+  两次较低值并统一向下保留两位，且不得低于历史基线。禁止直接手改数字、用单次结果或用
+  四舍五入把临界值抬过门槛；当前文件使用完整 commit SHA 和严格字段，读取已进入历史的旧
+  格式时只保留兼容比较能力。
 - E2E：`npm run test:e2e`，只用 `DemoAppService` 和虚构数据；CI 将它作为
-  `CI / verify` 中确定性入口之后的浏览器验收步骤。
+  `CI / verify` 中确定性入口之后的浏览器验收步骤。浏览器流必须在导航前拦截全部请求，
+  只允许当前 `127.0.0.1` 预览服务，并在测试结束时断言没有尝试访问外部地址。当前最小验收
+  覆盖检测、备份、新增远端仓库、取消本地目录选择、retry 晚回流、设置回灌、GitHub 429
+  恢复及 Prompt 创建/tag/search/ZIP 导入导出；不得用无动作按钮或任意 sleep 制造假绿。
 - Trusted policy：`pull_request_target` 只执行 default-branch/base SHA 中的 trusted guard，
   通过 GitHub API读取 changed filenames、rename 旧路径与 labels；绝不 checkout 或执行 PR
   head。所有 `scripts/`、workflow 和机器治理事实源的变更必须带

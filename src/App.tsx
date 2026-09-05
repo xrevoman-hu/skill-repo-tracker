@@ -38,7 +38,7 @@ import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
 import { PluginInspector, PluginsView } from "./PluginsView";
 import { PromptsView } from "./PromptsView";
 import type { PromptExportKind, PromptLeaveContext } from "./PromptsView";
-import { promptLibraryApi } from "./promptLibraryAdapter";
+import { createPromptLibraryApi } from "./promptLibraryAdapter";
 import {
   REPOSITORY_PAGE_SIZES,
   buildRepositoryPage,
@@ -1711,7 +1711,11 @@ type AppProps = {
 };
 
 export function App({ appService: injectedAppService }: AppProps = {}) {
-  const demoMode = initialParam("demo", "default", ["default", "empty-plugins"]);
+  const demoMode = initialParam(
+    "demo",
+    "default",
+    ["default", "empty-plugins", "retry-race", "github-rate-limit"] as const,
+  );
   const demoFocus = initialParam("focus", "none", ["none", "plugin-row"]);
   const initialTab = initialParam("tab", "repositories", navItems.map((item) => item.id));
   const detectedDesktopRuntime = isDesktopRuntime();
@@ -1720,6 +1724,10 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       ? new TauriAppService()
       : new DemoAppService({ mode: demoMode })),
     [demoMode, detectedDesktopRuntime, injectedAppService],
+  );
+  const promptApi = useMemo(
+    () => createPromptLibraryApi(appService.promptTransport),
+    [appService],
   );
   const desktopRuntime = appService.runtime === "tauri";
   const [activeTab, setActiveTab] = useState(initialTab);
@@ -2575,12 +2583,11 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
   }
 
   async function addLocalRepositoryFromPicker() {
-    if (!desktopRuntime) return;
     const actionKey = "addLocalRepository";
     if (isPending(actionKey)) return;
     let optimisticTaskId = "";
     try {
-      const selected = await api.pickDirectory();
+      const selected = await appService.chooseLocalRepository();
       const path = Array.isArray(selected) ? selected[0] : selected;
       if (!path) return;
       optimisticTaskId = beginOptimisticTask(actionKey, {
@@ -2686,29 +2693,28 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     const actionKey = "persistSettings";
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
-    if (desktopRuntime) {
-      try {
-        const nextSettings = await api.updateSettings({
-          backupRoot,
-          skillLibraryRoot: skillsRoot,
-          skillsRoot,
-          defaultSyncTargets,
-          syncBackupKeep,
-          autoCheckInterval,
-          autoCheckEnabled,
-          autoBackupEnabled,
-        });
-        applySettings(nextSettings);
-        showToast(t("settingsSaved"));
-      } catch (error: unknown) {
-        showToast(errorMessage(error, t("rootSaved")));
-      } finally {
-        setActionPending(actionKey, false);
-      }
-      return;
+    try {
+      const nextSettings = await appService.updateSettings({
+        backupRoot,
+        skillLibraryRoot: skillsRoot,
+        skillsRoot,
+        defaultSyncTargets,
+        availableSyncTargets,
+        syncBackupKeep,
+        autoCheckInterval,
+        autoCheckEnabled,
+        autoBackupEnabled,
+        githubTokenConfigured,
+        githubTokenStatus,
+        githubTokenLastVerified,
+      });
+      applySettings(nextSettings);
+      showToast(t("settingsSaved"));
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("rootSaved")));
+    } finally {
+      setActionPending(actionKey, false);
     }
-    showToast(t("settingsSaved"));
-    setActionPending(actionKey, false);
   }
 
   function githubRepoActionKey(repo: GitHubRepository) {
@@ -2742,29 +2748,19 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     const actionKey = `githubRefresh:${accountId || "all"}`;
     if (isPending(actionKey)) return;
     setActionPending(actionKey, true);
-    if (desktopRuntime) {
-      try {
-        const repos = await api.refreshGithubRepositories(accountId);
-        if (accountId) {
-          setGithubRepositories((items) => [
-            ...items.filter((item) => item.accountId !== accountId),
-            ...repos,
-          ]);
-        } else {
-          setGithubRepositories(repos);
-        }
-        const accounts = await api.listGithubAccounts();
-        setGithubAccounts(accounts);
-        showToast(t("remoteRefreshed"));
-      } catch (error: unknown) {
-        showToast(errorMessage(error, t("sourceUnavailableToast")));
-      } finally {
-        setActionPending(actionKey, false);
-      }
-      return;
+    try {
+      const next = await appService.refreshGithubCatalog(accountId, {
+        accounts: githubAccounts,
+        repositories: githubRepositories,
+      });
+      setGithubRepositories(next.repositories);
+      setGithubAccounts(next.accounts);
+      showToast(t("remoteRefreshed"));
+    } catch (error: unknown) {
+      showToast(localizedApiErrorMessage(error, language, t("sourceUnavailableToast")));
+    } finally {
+      setActionPending(actionKey, false);
     }
-    showToast(t("remoteRefreshed"));
-    setActionPending(actionKey, false);
   }
 
   async function validateGithubAccount(accountId: string) {
@@ -2933,97 +2929,37 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       summary: "repository scan started",
       log: ["repository scan started"],
     });
-    if (desktopRuntime) {
-      try {
-        const nextRepos = await api.addRepository({
-          url: newRepo.url,
-          refName: newRepo.ref || "main",
-          note: newRepo.note,
-        });
-        const [nextSkills, nextPlugins, nextTasks] = await Promise.all([
-          api.listSkills(),
-          api.listPlugins(),
-          api.listTasks(),
-        ]);
-        setRepositories(nextRepos);
-        setSkills(nextSkills);
-        setPlugins(nextPlugins);
-        setTasks(nextTasks);
-        const added = nextRepos[0];
-        if (added) {
-          setSelectedRepoId(added.id);
-          setSelectedRows([added.id]);
-        }
-        if (addRepoRequestRef.current === requestId) {
-          setIsAddingRepo(false);
-          resetNewRepo();
-          setModal(null);
-          showToast(t("repoAddedGeneric"));
-        }
-      } catch (error: unknown) {
-        if (addRepoRequestRef.current === requestId) {
-          finishOptimisticTask(actionKey, optimisticTaskId);
-          showToast(errorMessage(error, t("repoExists")));
-          setIsAddingRepo(false);
-        }
-        return;
+    try {
+      const result = await appService.addRepository({
+        url: newRepo.url,
+        refName: newRepo.ref || "main",
+        note: newRepo.note,
+      }, workspaceController.snapshot());
+      workspaceController.invalidate();
+      setRepositories(result.workspace.repositories);
+      setSkills(result.workspace.skills);
+      setPlugins(result.workspace.plugins);
+      setTasks(result.workspace.tasks);
+      if (result.repositoryId) {
+        setSelectedRepoId(result.repositoryId);
+        setInspectorRepoId(result.repositoryId);
+        setSelectedRows([result.repositoryId]);
       }
-      setActionPending(actionKey, false);
+      if (addRepoRequestRef.current === requestId) {
+        setIsAddingRepo(false);
+        resetNewRepo();
+        setModal(null);
+        showToast(t("repoAddedGeneric"));
+      }
+    } catch (error: unknown) {
+      if (addRepoRequestRef.current === requestId) {
+        finishOptimisticTask(actionKey, optimisticTaskId);
+        showToast(errorMessage(error, t("repoExists")));
+        setIsAddingRepo(false);
+      }
       return;
     }
-    const name = parseRepoName(newRepo.url);
-    const exists = repositories.some((repo) => repo.name === name && repo.ref === newRepo.ref);
-    if (exists) {
-      showToast(t("repoExists"));
-      setIsAddingRepo(false);
-      finishOptimisticTask(actionKey, optimisticTaskId);
-      return;
-    }
-
-    const id = `repo-${Date.now()}`;
-    const isSkillRepo = name.includes("skill") || name.includes("spec");
-    const repo = {
-      id,
-      name,
-      type: isSkillRepo ? "skill repo" : "generic repo",
-      ref: newRepo.ref || "main",
-      skills: isSkillRepo ? 1 : 0,
-      remoteSha: isSkillRepo ? "9ac12ef" : "3d20a9f",
-      lastBackupSha: "none",
-      lastChecked: new Date().toISOString(),
-      backupStatus: "never-backed-up",
-      checkStatus: "success",
-      url: `https://github.com/${name}`,
-      branch: newRepo.ref || "main",
-      backupPath: `${backupRoot}/${name}`,
-      snapshotTime: "Never",
-      recognizedSkills: isSkillRepo ? [{ name: name.split("/")[1], version: "v0.1.0" }] : [],
-      sourceType: "github",
-      note: newRepo.note,
-    };
-    setRepositories((repos) => [repo, ...repos]);
-    setSelectedRepoId(id);
-    setSelectedRows([id]);
-    addTask({
-      kind: "Scan repository",
-      target: name,
-      progress: "1 / 1",
-      status: "success",
-      summary: isSkillRepo ? "1 Skill recognized" : "generic repo, 0 Skills",
-      retryable: false,
-      log: [
-        `normalize ${name}`,
-        "fetch remote HEAD SHA",
-        isSkillRepo ? "found SKILL.md" : "no SKILL.md found; keep as generic repo",
-      ],
-    });
-    if (addRepoRequestRef.current === requestId) {
-      setIsAddingRepo(false);
-      resetNewRepo();
-      setModal(null);
-      showToast(`${name} ${isSkillRepo ? t("repoAddedSkill") : t("repoAddedGeneric")}`);
-    }
-    finishOptimisticTask(actionKey, optimisticTaskId);
+    setActionPending(actionKey, false);
   }
 
   async function confirmBackup(mode = "updated", repoIds: string[] = []) {
@@ -3401,10 +3337,6 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     if (isPending(actionKey) || workspaceController.isBusy()) return;
     if (!canRetryTask(task)) {
       showToast(task.retryReason || t("retryRejected"));
-      return;
-    }
-    if (!desktopRuntime) {
-      showToast(t("retryRejected"));
       return;
     }
     const optimisticTaskId = beginOptimisticTask(actionKey, {
@@ -3832,7 +3764,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
 
           {activeTab === "prompts" && (
             <PromptsView
-              api={promptLibraryApi}
+              api={promptApi}
               compact={density === "compact"}
               confirmAction={confirmPromptAction}
               confirmDiscard={confirmPromptDiscard}
@@ -4531,6 +4463,7 @@ export function RepositoriesView({
                   <tr
                     aria-selected={rowActive}
                     className={`${rowActive ? "active-row" : ""} ${rowChecked ? "checked-row" : ""}`.trim()}
+                    data-repository-id={repo.id}
                     key={repo.id}
                     onClick={() => {
                       setSelectedRepoId(repo.id);

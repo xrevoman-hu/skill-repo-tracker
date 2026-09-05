@@ -277,6 +277,18 @@
           {
             "path": "scripts/__tests__/coverage-policy.test.mjs",
             "selector": "coverage baseline documents fail closed when a metric is absent"
+          },
+          {
+            "path": "scripts/__tests__/coverage-policy.test.mjs",
+            "selector": "coverage percentages floor to two decimals instead of rounding a near-threshold result green"
+          },
+          {
+            "path": "scripts/__tests__/coverage-policy.test.mjs",
+            "selector": "current coverage baseline schema is strict while a tracked legacy base remains readable"
+          },
+          {
+            "path": "scripts/__tests__/coverage-policy.test.mjs",
+            "selector": "coverage baseline updates require two clean runs on one commit and cannot lower history"
           }
         ]
       }
@@ -467,6 +479,7 @@
       "principles": [2, 3, 4, 5, 7],
       "reviewOnChange": [
         "src/PromptsView.tsx",
+        "src/appService.ts",
         "src/promptLibraryAdapter.ts",
         "src-tauri/src/prompts.rs",
         "src-tauri/src/prompt_search.rs",
@@ -556,6 +569,7 @@
         "vitest.config.ts",
         "src-tauri/Cargo.toml",
         "src-tauri/Cargo.lock",
+        "docs/engineering/coverage-baseline.json",
         "docs/engineering/dependency-risk-ledger.json",
         "docs/engineering/test-waivers.json",
         "docs/macos-release-checklist.md"
@@ -570,7 +584,35 @@
           },
           {
             "path": "e2e/demo-governance.spec.ts",
-            "selector": "DemoAppService 支撑设置与仓库只读关键流且不访问外部服务"
+            "selector": "检测全部仓库会生成可审计任务，且不访问外部服务"
+          },
+          {
+            "path": "e2e/demo-governance.spec.ts",
+            "selector": "选择仓库并确认备份后可查看成功状态和日志，且不访问外部服务"
+          },
+          {
+            "path": "e2e/demo-governance.spec.ts",
+            "selector": "新增远端仓库使用稳定 ID 并自动聚焦详情，且不访问外部服务"
+          },
+          {
+            "path": "e2e/demo-governance.spec.ts",
+            "selector": "Demo 中取消或不可用的本地目录选择不会生成任务，且不访问外部服务"
+          },
+          {
+            "path": "e2e/demo-governance.spec.ts",
+            "selector": "失败任务重试被较新的仓库变更 supersede，并清理 optimistic 状态"
+          },
+          {
+            "path": "e2e/demo-governance.spec.ts",
+            "selector": "设置从默认值保存并由服务回灌，切换页面后仍保持，且不访问外部服务"
+          },
+          {
+            "path": "e2e/demo-governance.spec.ts",
+            "selector": "GitHub 429 显示 reset_at 后可确定性恢复，且不访问外部服务"
+          },
+          {
+            "path": "e2e/demo-governance.spec.ts",
+            "selector": "Prompt 可创建标签、搜索并完成 ZIP 批量导出导入，且不访问外部服务"
           }
         ]
       }

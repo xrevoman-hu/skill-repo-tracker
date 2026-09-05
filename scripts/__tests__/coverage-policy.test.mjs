@@ -2,18 +2,21 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildCoverageBaselineUpdate,
   buildCoverageDiffArguments,
   calculateChangedCoverage,
   calculateChangedCoverageWithDetails,
   findRustConditionalLineRanges,
   findRustCfgTestLineRanges,
   findMissingCoverageFiles,
+  floorCoveragePercent,
   isCoverageProductionPath,
   isOmittedCoverageLineExecutable,
   isProbablyExecutableSource,
   loadTrackedJsonAtBase,
   parseTrackedJsonAtBase,
   validateCoverageBaselineDocument,
+  validateCoverageMeasurementDocument,
   summarizeLcov,
 } from "../check-coverage.mjs";
 
@@ -262,6 +265,30 @@ test("changed branch coverage comes from branch records on changed lines", () =>
   );
 });
 
+test("coverage percentages floor to two decimals instead of rounding a near-threshold result green", () => {
+  assert.equal(floorCoveragePercent(79_999, 100_000), 79.99);
+  assert.deepEqual(
+    calculateChangedCoverage({
+      changed: { "src/module.ts": [1, 2, 3] },
+      lcov: {
+        "src/module.ts": {
+          lines: new Map([[1, true], [2, true], [3, false]]),
+          branches: new Map(),
+        },
+      },
+      isExecutable: () => true,
+    }),
+    {
+      linePercent: 66.66,
+      branchPercent: 100,
+      lineCovered: 2,
+      lineTotal: 3,
+      branchCovered: 0,
+      branchTotal: 0,
+    },
+  );
+});
+
 test("changed coverage details preserve the aggregate and expose file-level diagnostics", () => {
   assert.deepEqual(
     calculateChangedCoverageWithDetails({
@@ -336,5 +363,114 @@ test("coverage baseline documents fail closed when a metric is absent", () => {
         "tracked baseline",
       ),
     /tracked baseline has invalid rust\.functions/,
+  );
+});
+
+test("current coverage baseline schema is strict while a tracked legacy base remains readable", () => {
+  const metrics = { lines: 74.15, branches: 75.06, functions: 55.53 };
+  const legacy = {
+    measuredAtCommit: "working tree on an older release",
+    frontend: metrics,
+    rust: { lines: 70, branches: 60, functions: 32.09 },
+    historicalNote: "ignored only when comparing an already-tracked base",
+  };
+  assert.equal(
+    validateCoverageBaselineDocument(legacy, "legacy baseline", { legacy: true }),
+    legacy,
+  );
+  assert.throws(
+    () => validateCoverageBaselineDocument(legacy, "current baseline"),
+    /current baseline must contain only measuredAtCommit, frontend, and rust/,
+  );
+  assert.throws(
+    () =>
+      validateCoverageBaselineDocument(
+        {
+          measuredAtCommit: "not-a-full-commit",
+          frontend: metrics,
+          rust: { lines: 70, branches: 60, functions: 32.09 },
+        },
+        "current baseline",
+      ),
+    /invalid measuredAtCommit/,
+  );
+  assert.throws(
+    () =>
+      validateCoverageBaselineDocument(
+        {
+          measuredAtCommit: "a".repeat(40),
+          frontend: { ...metrics, branches: 75.061 },
+          rust: { lines: 70, branches: 60, functions: 32.09 },
+        },
+        "current baseline",
+      ),
+    /at most two decimal places/,
+  );
+});
+
+test("coverage baseline updates require two clean runs on one commit and cannot lower history", () => {
+  const commit = "a".repeat(40);
+  const first = {
+    commit,
+    clean: true,
+    frontend: { lines: 80.019, branches: 81.009, functions: 82.019 },
+    rust: { lines: 83.019, branches: 84.019, functions: 85.019 },
+  };
+  const second = {
+    commit,
+    clean: true,
+    frontend: { lines: 80.011, branches: 81.001, functions: 82.011 },
+    rust: { lines: 83.011, branches: 84.011, functions: 85.011 },
+  };
+  const previous = {
+    measuredAtCommit: "c".repeat(40),
+    frontend: { lines: 80, branches: 81, functions: 82 },
+    rust: { lines: 83, branches: 84, functions: 85 },
+  };
+
+  assert.deepEqual(
+    buildCoverageBaselineUpdate({ first, second, previous, expectedCommit: commit }),
+    {
+      measuredAtCommit: commit,
+      frontend: { lines: 80.01, branches: 81, functions: 82.01 },
+      rust: { lines: 83.01, branches: 84.01, functions: 85.01 },
+    },
+  );
+  assert.throws(
+    () => validateCoverageMeasurementDocument({ ...first, clean: false }, "first run"),
+    /clean worktree/,
+  );
+  assert.throws(
+    () =>
+      buildCoverageBaselineUpdate({
+        first,
+        second: { ...second, commit: "b".repeat(40) },
+        previous,
+      }),
+    /same commit/,
+  );
+  assert.throws(
+    () =>
+      buildCoverageBaselineUpdate({
+        first,
+        second: {
+          ...second,
+          frontend: { ...second.frontend, lines: 80.03 },
+        },
+        previous,
+      }),
+    /drifted by more than 0\.01 percentage points/,
+  );
+  assert.throws(
+    () =>
+      buildCoverageBaselineUpdate({
+        first,
+        second,
+        previous: {
+          ...previous,
+          frontend: { ...previous.frontend, lines: 80.02 },
+        },
+      }),
+    /coverage baseline may not decrease/,
   );
 });

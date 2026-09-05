@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
-import { TauriAppService } from "./appService";
+import { DemoAppService, TauriAppService } from "./appService";
 import type { AppService, WorkspaceSnapshot } from "./appService";
 import type { UiTask } from "./api";
 
@@ -30,6 +30,10 @@ describe("application bootstrap", () => {
       checkRepositories: vi.fn().mockResolvedValue([]),
       backupRepositories: vi.fn().mockResolvedValue([]),
       retryTask: vi.fn().mockResolvedValue([]),
+      addRepository: vi.fn().mockResolvedValue([]),
+      updateSettings: vi.fn(async (settings) => settings),
+      refreshGithubRepositories: vi.fn().mockResolvedValue([]),
+      pickDirectory: vi.fn().mockResolvedValue(null),
       listRepositories: vi.fn().mockResolvedValue([]),
       listSkills: vi.fn().mockResolvedValue([]),
       listPlugins,
@@ -91,6 +95,7 @@ describe("application bootstrap", () => {
     const retryTask = vi.fn().mockResolvedValue(refreshed);
     const service: AppService = {
       runtime: "tauri",
+      promptTransport: new DemoAppService().promptTransport,
       bootstrap: vi.fn().mockResolvedValue({
         workspace: initial,
         settings: null,
@@ -101,6 +106,10 @@ describe("application bootstrap", () => {
       checkRepositories: vi.fn(),
       backupRepositories: vi.fn(),
       retryTask,
+      addRepository: vi.fn(),
+      updateSettings: vi.fn(),
+      refreshGithubCatalog: vi.fn(),
+      chooseLocalRepository: vi.fn().mockResolvedValue(null),
       openBackupFolder: vi.fn(),
       checkForUpdates: vi.fn().mockResolvedValue({
         currentVersion: "1.2.3",
@@ -130,6 +139,7 @@ describe("application bootstrap", () => {
     });
     const service: AppService = {
       runtime: "demo",
+      promptTransport: new DemoAppService().promptTransport,
       bootstrap: vi.fn().mockResolvedValue({
         workspace: { repositories: [], skills: [], plugins: [], tasks: [] },
         settings: null,
@@ -145,6 +155,10 @@ describe("application bootstrap", () => {
       checkRepositories: vi.fn(),
       backupRepositories: vi.fn(),
       retryTask: vi.fn(),
+      addRepository: vi.fn(),
+      updateSettings: vi.fn(),
+      refreshGithubCatalog: vi.fn(),
+      chooseLocalRepository: vi.fn().mockResolvedValue(null),
       openBackupFolder: vi.fn(),
       checkForUpdates,
     };

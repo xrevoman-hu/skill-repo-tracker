@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { DemoAppService, TauriAppService } from "./appService";
-import type { UiPlugin, UiRepository, UiSkill, UiTask } from "./api";
+import type {
+  AppSettings,
+  GitHubAccount,
+  GitHubRepository,
+  UiPlugin,
+  UiRepository,
+  UiSkill,
+  UiTask,
+  UpdateSettingsRequest,
+} from "./api";
+import { createPromptLibraryApi } from "./promptLibraryAdapter";
 
 const repository: UiRepository = {
   id: "repo-1",
@@ -50,6 +60,10 @@ describe("AppService adapters", () => {
       checkRepositories: vi.fn().mockResolvedValue([repository]),
       backupRepositories: vi.fn().mockResolvedValue([]),
       retryTask: vi.fn().mockResolvedValue([]),
+      addRepository: vi.fn().mockResolvedValue([repository]),
+      updateSettings: vi.fn(async (settings) => settings),
+      refreshGithubRepositories: vi.fn().mockResolvedValue([]),
+      pickDirectory: vi.fn().mockResolvedValue(null),
       listRepositories: vi.fn().mockResolvedValue([repository]),
       listSkills: vi.fn().mockResolvedValue([]),
       listPlugins: vi.fn().mockResolvedValue([]),
@@ -85,6 +99,10 @@ describe("AppService adapters", () => {
       checkRepositories: vi.fn().mockResolvedValue([repository]),
       backupRepositories: vi.fn().mockResolvedValue([]),
       retryTask: vi.fn().mockResolvedValue([]),
+      addRepository: vi.fn().mockResolvedValue([repository]),
+      updateSettings: vi.fn(async (settings) => settings),
+      refreshGithubRepositories: vi.fn().mockResolvedValue([]),
+      pickDirectory: vi.fn().mockResolvedValue(null),
       listRepositories: vi.fn().mockResolvedValue([repository]),
       listSkills: vi.fn().mockResolvedValue([]),
       listPlugins: vi.fn().mockResolvedValue([]),
@@ -148,6 +166,10 @@ describe("AppService adapters", () => {
       checkRepositories: vi.fn().mockResolvedValue([]),
       backupRepositories: vi.fn().mockResolvedValue([]),
       retryTask: vi.fn().mockResolvedValue([retriedTask]),
+      addRepository: vi.fn().mockResolvedValue([repository]),
+      updateSettings: vi.fn(async (settings) => settings),
+      refreshGithubRepositories: vi.fn().mockResolvedValue([]),
+      pickDirectory: vi.fn().mockResolvedValue(null),
       listRepositories: vi.fn().mockResolvedValue([repository]),
       listSkills: vi.fn().mockResolvedValue([]),
       listPlugins: vi.fn().mockResolvedValue([]),
@@ -248,7 +270,320 @@ describe("AppService adapters", () => {
       summary: "1 success, 1 skipped",
     });
   });
+
+  it("uses the repository diff for Tauri add results instead of assuming the first row is new", async () => {
+    const addedRepository: UiRepository = {
+      ...repository,
+      id: "repo-new",
+      name: "quality/demo-skill",
+    };
+    const transport = makeTauriTransport();
+    transport.addRepository.mockResolvedValue([repository, addedRepository]);
+    const service = new TauriAppService(transport);
+
+    await expect(service.addRepository({
+      url: "https://github.com/quality/demo-skill",
+      refName: "main",
+      note: "stable selection",
+    }, {
+      ...emptyWorkspace(),
+      repositories: [repository],
+    })).resolves.toEqual({
+      repositoryId: "repo-new",
+      workspace: {
+        repositories: [repository, addedRepository],
+        skills: [],
+        plugins: [],
+        tasks: [],
+      },
+    });
+    expect(transport.addRepository).toHaveBeenCalledWith({
+      url: "https://github.com/quality/demo-skill",
+      refName: "main",
+      note: "stable selection",
+    });
+  });
+
+  it("delegates settings and merges scoped GitHub refreshes without retaining stale rows", async () => {
+    const accountA = githubAccount("account-a", "alice");
+    const accountB = githubAccount("account-b", "bob");
+    const staleA = githubRepository(accountA, "old-a");
+    const freshA = githubRepository(accountA, "fresh-a");
+    const currentB = githubRepository(accountB, "current-b");
+    const freshB = githubRepository(accountB, "fresh-b");
+    const transport = makeTauriTransport();
+    transport.pickDirectory.mockResolvedValue("/repositories/local-skill");
+    transport.listGithubAccounts.mockResolvedValue([accountA, accountB]);
+    transport.refreshGithubRepositories
+      .mockResolvedValueOnce([freshA])
+      .mockResolvedValueOnce([freshA, freshB]);
+    const service = new TauriAppService(transport);
+    const settings = { ...defaultSettings, backupRoot: "/verified-backups" };
+
+    await expect(service.updateSettings(settings)).resolves.toEqual(settings);
+    expect(transport.updateSettings).toHaveBeenCalledWith(settings);
+    await expect(service.chooseLocalRepository()).resolves.toBe("/repositories/local-skill");
+    expect(transport.pickDirectory).toHaveBeenCalledOnce();
+
+    await expect(service.refreshGithubCatalog(accountA.id, {
+      accounts: [accountA, accountB],
+      repositories: [staleA, currentB],
+    })).resolves.toEqual({
+      accounts: [accountA, accountB],
+      repositories: [currentB, freshA],
+    });
+    expect(transport.refreshGithubRepositories).toHaveBeenNthCalledWith(1, accountA.id);
+
+    await expect(service.refreshGithubCatalog(undefined, {
+      accounts: [accountA, accountB],
+      repositories: [staleA, currentB],
+    })).resolves.toEqual({
+      accounts: [accountA, accountB],
+      repositories: [freshA, freshB],
+    });
+    expect(transport.refreshGithubRepositories).toHaveBeenNthCalledWith(2, undefined);
+  });
+
+  it("round-trips demo settings and returns a stable id with the complete added workspace", async () => {
+    const service = new DemoAppService({ now: () => new Date("2026-09-03T12:00:00Z") });
+    const before = await service.bootstrap();
+    const settings = {
+      ...before.settings!,
+      backupRoot: "/verified-backups",
+      autoCheckEnabled: true,
+    };
+
+    const saved = await service.updateSettings(settings);
+    saved.backupRoot = "/caller-mutation";
+    const afterSettings = await service.bootstrap();
+    expect(afterSettings.settings).toMatchObject({
+      backupRoot: "/verified-backups",
+      autoCheckEnabled: true,
+    });
+
+    const result = await service.addRepository({
+      url: "https://github.com/quality/demo-skill.git",
+      refName: "main",
+      note: "demo repository",
+    }, before.workspace);
+    expect(result.repositoryId).toBe("demo:quality/demo-skill@main");
+    expect(result.workspace.repositories[0]).toMatchObject({
+      id: result.repositoryId,
+      name: "quality/demo-skill",
+      ref: "main",
+      type: "skill repo",
+      note: "demo repository",
+    });
+    expect(result.workspace.tasks[0]).toMatchObject({
+      kind: "Scan repository",
+      target: "quality/demo-skill",
+      status: "success",
+    });
+    await expect(service.addRepository({
+      url: "github.com/quality/demo-skill",
+      refName: "main",
+      note: "duplicate",
+    }, result.workspace)).rejects.toThrow("Repository already exists.");
+  });
+
+  it("surfaces one structured demo GitHub rate limit and recovers without mutating the catalog", async () => {
+    const service = new DemoAppService({ mode: "github-rate-limit" });
+    const bootstrap = await service.bootstrap();
+    const current = {
+      accounts: bootstrap.githubAccounts,
+      repositories: bootstrap.githubRepositories,
+    };
+
+    await expect(service.refreshGithubCatalog("github:demo", current)).rejects.toEqual({
+      code: "github_secondary_rate_limited",
+      message: "GitHub request was rate limited.",
+      details: "status=429 reset_at=2026-09-03T12:00:00Z",
+    });
+    const recovered = await service.refreshGithubCatalog("github:demo", current);
+    expect(recovered).toEqual(current);
+    recovered.repositories[0].note = "caller mutation";
+    await expect(service.refreshGithubCatalog(undefined, current)).resolves.toEqual(current);
+  });
+
+  it("defers the retry-race result until a newer repository mutation has completed", async () => {
+    const service = new DemoAppService({
+      mode: "retry-race",
+      now: () => new Date("2026-09-03T12:00:00Z"),
+    });
+    const bootstrap = await service.bootstrap();
+    const failed = bootstrap.workspace.tasks.find((task) => task.id === "demo-retry-failed");
+    expect(failed).toMatchObject({ retryable: true, status: "failed" });
+
+    let lateRetrySettled = false;
+    const lateRetry = service.retryTask(failed!.id, bootstrap.workspace).then((workspace) => {
+      lateRetrySettled = true;
+      return workspace;
+    });
+    await Promise.resolve();
+    expect(lateRetrySettled).toBe(false);
+
+    const newer = await service.addRepository({
+      url: "quality/demo-skill",
+      refName: "main",
+      note: "wins generation",
+    }, bootstrap.workspace);
+    expect(newer.workspace.repositories[0].id).toBe("demo:quality/demo-skill@main");
+    expect(newer.workspace.tasks).toContainEqual(expect.objectContaining({
+      id: "demo-retry-failed",
+      status: "failed",
+    }));
+
+    const stale = await lateRetry;
+    expect(stale.repositories).not.toContainEqual(expect.objectContaining({
+      id: "demo:quality/demo-skill@main",
+    }));
+    expect(stale.tasks[0]).toMatchObject({
+      kind: "Backup repositories",
+      status: "success",
+      summary: "retry completed",
+    });
+  });
+
+  it("provides an offline prompt library seam for create, tag, search, export, and import", async () => {
+    const service = new DemoAppService({ now: () => new Date("2026-09-03T12:00:00Z") });
+    const prompts = createPromptLibraryApi(service.promptTransport);
+    const tag = await prompts.createTag("质量");
+    const created = await prompts.createPrompt({
+      title: "发布验证提示词",
+      content: "# 发布\n\n先验证公开实物。",
+      tagIds: [tag.id],
+      pinned: true,
+    });
+
+    const page = await prompts.listPrompts({
+      query: "公开实物",
+      tagIds: [tag.id],
+      tagMode: "all",
+      sort: "updatedDesc",
+      page: 1,
+      pageSize: 30,
+    });
+    expect(page.items).toEqual([
+      expect.objectContaining({ id: created.id, title: "发布验证提示词", pinned: true }),
+    ]);
+    expect(await prompts.listTags()).toContainEqual(expect.objectContaining({
+      id: tag.id,
+      name: "质量",
+      promptCount: 1,
+    }));
+
+    await expect(prompts.exportPrompt(created.id)).resolves.toMatchObject({
+      path: `/tmp/${created.id}.md`,
+      cancelled: false,
+      count: 1,
+    });
+    await expect(prompts.exportPrompts({ mode: "explicit", ids: [created.id] })).resolves.toMatchObject({
+      path: "/tmp/prompts.zip",
+      count: 1,
+    });
+
+    const preview = await prompts.previewPromptsZipImport();
+    expect(preview).toMatchObject({
+      fileName: "skill-repo-tracker-demo-prompts.zip",
+      promptCount: 1,
+      newCount: 1,
+    });
+    await expect(prompts.importPromptsZip({
+      path: preview!.path,
+      sha256: preview!.sha256,
+      sizeBytes: preview!.sizeBytes,
+      expectedLibraryRevision: preview!.libraryRevision,
+      conflictStrategy: "duplicate",
+    })).resolves.toMatchObject({ inserted: 1, skipped: 0, tagsReused: 1 });
+
+    await expect(prompts.listPrompts({
+      query: "恢复清单",
+      tagIds: [],
+      tagMode: "any",
+      sort: "manual",
+      page: 1,
+      pageSize: 30,
+    })).resolves.toMatchObject({
+      total: 1,
+      items: [expect.objectContaining({ title: "导入的发布恢复清单" })],
+    });
+  });
 });
+
+const defaultSettings: AppSettings = {
+  backupRoot: "/backups",
+  skillLibraryRoot: "/skills",
+  defaultSyncTargets: [],
+  availableSyncTargets: [],
+  syncBackupKeep: 5,
+  autoCheckInterval: 60,
+  autoCheckEnabled: false,
+  autoBackupEnabled: false,
+  githubTokenConfigured: false,
+  githubTokenStatus: "not_configured",
+  githubTokenLastVerified: null,
+};
+
+function makeTauriTransport() {
+  return {
+    checkRepositories: vi.fn().mockResolvedValue([] as UiRepository[]),
+    backupRepositories: vi.fn().mockResolvedValue([] as UiTask[]),
+    retryTask: vi.fn().mockResolvedValue([] as UiTask[]),
+    addRepository: vi.fn().mockResolvedValue([] as UiRepository[]),
+    updateSettings: vi.fn(async (settings: UpdateSettingsRequest): Promise<AppSettings> => ({
+      ...defaultSettings,
+      ...settings,
+    })),
+    refreshGithubRepositories: vi.fn().mockResolvedValue([] as GitHubRepository[]),
+    pickDirectory: vi.fn().mockResolvedValue(null),
+    listRepositories: vi.fn().mockResolvedValue([] as UiRepository[]),
+    listSkills: vi.fn().mockResolvedValue([] as UiSkill[]),
+    listPlugins: vi.fn().mockResolvedValue([] as UiPlugin[]),
+    listTasks: vi.fn().mockResolvedValue([] as UiTask[]),
+    getSettings: vi.fn().mockResolvedValue(defaultSettings),
+    listGithubAccounts: vi.fn().mockResolvedValue([] as GitHubAccount[]),
+    listGithubRepositoryCatalog: vi.fn().mockResolvedValue([] as GitHubRepository[]),
+    getAppMetadata: vi.fn().mockResolvedValue(null),
+    checkAppUpdate: vi.fn().mockResolvedValue({
+      currentVersion: "1.2.2",
+      latestVersion: "1.2.2",
+      updateAvailable: false,
+    }),
+    openBackupFolder: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+function githubAccount(id: string, login: string): GitHubAccount {
+  return {
+    id,
+    login,
+    displayName: login,
+    status: "verified",
+    scopes: "repo",
+  };
+}
+
+function githubRepository(account: GitHubAccount, repo: string): GitHubRepository {
+  return {
+    accountId: account.id,
+    accountLogin: account.login,
+    owner: account.login,
+    repo,
+    fullName: `${account.login}/${repo}`,
+    htmlUrl: `https://github.com/${account.login}/${repo}`,
+    description: "fixture",
+    visibility: "private",
+    private: true,
+    fork: false,
+    archived: false,
+    defaultBranch: "main",
+    language: "TypeScript",
+    stargazersCount: 0,
+    starred: false,
+    permissions: "pull",
+    note: "",
+  };
+}
 
 function emptyWorkspace(): {
   repositories: UiRepository[];

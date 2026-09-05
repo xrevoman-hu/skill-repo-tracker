@@ -19,7 +19,7 @@ export type WorkspaceController = {
 };
 
 export function createWorkspaceController(options: {
-  service: AppService;
+  service: Pick<AppService, "checkRepositories" | "backupRepositories" | "retryTask">;
   coordinator: TaskCoordinator;
   initial: WorkspaceSnapshot;
   publish: (snapshot: WorkspaceSnapshot) => void | Promise<void>;

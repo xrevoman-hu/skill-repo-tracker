@@ -4,6 +4,9 @@ import { createTaskCoordinator } from "./taskCoordinator";
 import { createWorkspaceController, type WorkspaceController } from "./workspaceController";
 import type { AppService, WorkspaceSnapshot } from "./appService";
 
+type WorkspaceService = Pick<AppService, "checkRepositories" | "backupRepositories" | "retryTask">
+  & Partial<AppService>;
+
 const empty: WorkspaceSnapshot = {
   repositories: [],
   skills: [],
@@ -40,7 +43,7 @@ describe("workspace controller", () => {
         ],
       };
     });
-    const service: AppService = {
+    const service: WorkspaceService = {
       runtime: "demo",
       bootstrap: vi.fn(),
       checkRepositories,
@@ -67,7 +70,7 @@ describe("workspace controller", () => {
   it("prevents a backup from overlapping an in-flight repository check", async () => {
     const pendingCheck = deferred<WorkspaceSnapshot>();
     const backupRepositories = vi.fn(async () => ({ repositories: [], tasks: [] }));
-    const service: AppService = {
+    const service: WorkspaceService = {
       runtime: "demo",
       bootstrap: vi.fn(),
       checkRepositories: vi.fn(() => pendingCheck.promise),
@@ -107,7 +110,7 @@ describe("workspace controller", () => {
       retryable: false,
       log: [],
     }] };
-    const service: AppService = {
+    const service: WorkspaceService = {
       runtime: "tauri",
       bootstrap: vi.fn(),
       checkRepositories: vi.fn(async () => empty),
@@ -185,7 +188,7 @@ describe("workspace controller", () => {
     const pendingCheck = deferred<WorkspaceSnapshot>();
     const pendingBackup = deferred<{ repositories: []; tasks: [] }>();
     const pendingRetry = deferred<WorkspaceSnapshot>();
-    const service: AppService = {
+    const service: WorkspaceService = {
       runtime: "demo",
       bootstrap: vi.fn(),
       checkRepositories: vi.fn(() => pendingCheck.promise),
@@ -223,7 +226,7 @@ describe("workspace controller", () => {
 
   it("does not treat a UI-only optimistic task overlay as newer persisted state", async () => {
     const pendingCheck = deferred<WorkspaceSnapshot>();
-    const service: AppService = {
+    const service: WorkspaceService = {
       runtime: "demo",
       bootstrap: vi.fn(),
       checkRepositories: vi.fn(() => pendingCheck.promise),
@@ -276,7 +279,7 @@ describe("workspace controller", () => {
         checkStatus: "success",
       }],
     };
-    const service: AppService = {
+    const service: WorkspaceService = {
       runtime: "demo",
       bootstrap: vi.fn(),
       checkRepositories: vi.fn(async () => next),
