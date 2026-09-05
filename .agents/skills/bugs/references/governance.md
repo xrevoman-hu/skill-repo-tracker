@@ -11,9 +11,9 @@ CONTRIBUTING.md、SECURITY.md、docs/engineering/architecture.md与owning Rules�
 参考取舍：skill-creator提供独立输出评测与盲比较；仓库architecture提供依赖及证据分层；
 testing-release Rule提供唯一验收入口与发布边界。不复制第二套脚本，不引入通用自治发布。
 
-初评有/无Skill各2例，均为只读代理输出；用户委托独立代理盲审后确认继续。
-这不是用户逐页盲审。修订稿只修正操作顺序与报告密度，未宣称原初评已重新执行。
+初评每份各2例，随后扩充并重跑为每份有/无Skill各5例；均为只读代理输出。
+用户委托独立代理盲审后确认继续，不是用户逐页盲审；最终结果与失败回归见reports。
 missing evidence: 目标客户端原生权限强制、完整token遥测、实际修复及发布执行评测。
-历史评测输入是合成案例；若后续引入input_files须标注file-backed fixture，不能借此改写
+评测输入是合成案例；input_files 标注 file-backed fixture，仅作评测回放，不能借此改写
 产品published fixtures。trust report与reports/output_quality_scorecard.md分别保存供应链
 和输出评测边界；通过结构门禁不等于这些缺失证据已补齐。

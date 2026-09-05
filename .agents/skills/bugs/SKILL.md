@@ -30,6 +30,9 @@ description: 修复 Skill Repo Tracker 的 Bug、回归、竞态、覆盖率假�
 无法直接自动化复现时，说明原因与替代证据，避免声称已跑过测试。
 
 先定位因果，再改最小行为。竞态需明确执行者、single-flight/generation、取消和晚回流；
+复用现有异步 API 前，读取其准入、失效、完成和通道释放条件；不能按方法名推断语义。
+失效旧结果不一定允许新任务立即进入。候选方案必须证明新请求被执行且旧结果不能回写，
+不能为了 latest-wins 静默改变既有 single-flight 合同。
 文件/数据库问题检查原子替换、回滚、published schema 与同步记录边界。
 按 Invariant 的 protected paths 搜索相邻入口、adapter、同类数据和失败恢复路径，记录
 搜索范围、命中和是否受影响；“已经扫过”不能替代具体结果。

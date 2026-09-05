@@ -1,6 +1,7 @@
 {
   "name": "release",
   "version": "0.1.0",
+  "license": "MIT",
   "owner": "xrevoman-hu",
   "updated_at": "2026-09-06",
   "review_due": "2026-10-06",

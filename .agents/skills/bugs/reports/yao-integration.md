@@ -1,19 +1,19 @@
 # Yao 检查记录
 
-日期：2026-09-06。owner：xrevoman-hu。当前状态：experimental，按 governed 风险要求审查；尚未取得 governed 就绪结论。
+日期：2026-09-06。工具：Yao Meta Skill 2.1.0。owner：xrevoman-hu。
+状态：experimental，按 governed 风险要求审查；不声明 governed/world-class 就绪。
 
-- 格式校验、Skill IR 导出、OpenAI 适配编译、conformance、ZIP 路径与包校验已运行通过。
-- trigger_eval.py：每份 Skill 的 2 个正例、2 个反例、1 个近邻例均按预期分类。这是配置驱动的词法/概念冒烟，不是真实客户端路由准确率。
-- Skill Atlas：三份 Skill 的路由冲突、owner 缺失、过期项均为 0；真实使用遥测为 0，不能据此声称无运行故障。
-- 临时安装成功解压并读取入口、manifest、interface、overview、Review Studio 和 OpenAI adapter。
-  Yao install-simulate 最终仍失败：其 permission-policy-load 使用 bool(capabilities)，将合法的空权限表判为不可读。
-  本包无附带脚本；不得添加虚构权限、审批者或到期日来规避此失败。原始失败报告必须保留。
-- runtime-permissions 通过适配元数据检查，native enforcement 为 0；不能声称客户端原生权限强制执行已通过。
-- 初次版本 0.1.0 尚无已发布 Skill 包，真实 upgrade 对比不适用；未伪造上一版本包。drift 与 waiver 报告已生成，无使用遥测、无人工豁免。
-- 官方 Review Studio 已生成，包含未满足的门禁；不得将页面成功生成等同于就绪检查通过。
+- 已运行格式校验、Skill IR、OpenAI compiler/conformance、静态 trust 和 ZIP package verification。
+- 每份五项 trigger smoke、组合路由十五项均符合预期；这些是配置驱动的概念/词法检查，不是真实客户端路由准确率。
+- Skill Atlas 未发现三份 Skill 之间的路由冲突、owner 缺失或过期项；真实使用遥测为零，不能据此声称运行无故障。
+- 每份五组最终真实回答已进行独立代理匿名比较；Output Lab 只回放录制回答，不冒充重新调用模型。
+- 临时安装可读取入口、manifest、interface、overview、Review Studio 和 OpenAI adapter；独立检查确认安装入口与源文件一致。
+- install-simulate 仍返回失败：其 permission-policy-load 使用 bool(capabilities)，把无附带脚本包的空权限表判为不可读。
+  独立 JSON 读取已证明空表可读，其他安装检查通过；保留官方原始失败，不添加虚构权限审批来换绿。
+- runtime-permissions 通过适配元数据检查，native enforcement 为零。宿主授权与实际工具权限仍为权威。
+- Registry audit / Review Studio 保留上述安装判断导致的 blocker；未伪造 waiver 或将报告生成成功当作所有门禁通过。
+- 首次未发布的 Skill 0.1.0 没有上一发行包，upgrade 比较不适用；drift 与空 waiver 记录已生成，没有虚构使用事件。
 
-## 剩余证据
-
-missing evidence：每份 Skill 至少 5 个真实输出案例，包含 file-backed fixture、近邻与边界案例；修订稿重新执行；真实 token 遥测；客户端原生权限验证。
-
-原始 12 份输出只覆盖只读诊断/计划，非产品修复、Safari 操作或实际发布执行。用户委托代理完成匿名裁定后确认进入 Yao，并非人工逐页盲审。当前仅保存实验性仓库助手，不提升为生产就绪认证。
+missing evidence：真实 token 遥测、客户端原生权限强制、实际修复/发布执行与长期使用效果。
+合入仓库仅表示保存经过审查的实验性助手及事实记录，不表示取得 Yao governed 就绪认证。
+发布 v1.2.8 仍须独立通过仓库门禁、实物来源链和 local/remote Environment 人工审批。
