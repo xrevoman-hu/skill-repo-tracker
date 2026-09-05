@@ -77,8 +77,8 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   `docs/engineering/coverage-baseline.json` 的唯一更新协议是在干净 commit 上运行
   `node scripts/check-coverage.mjs baseline --write`。该命令自身连续执行两轮前端与 Rust coverage，
   每轮前后都核对同一个 clean HEAD，并要求两类实物的 mtime 都由该轮重新生成；不接受外部
-  snapshot JSON 作为写入证据。两轮每项漂移不超过 0.01 个百分点。
-  基线取两次较低值并统一向下保留两位，且不得低于历史基线。禁止直接手改数字、用单次结果或用
+  snapshot JSON 作为写入证据。两轮每项使用原始 covered/total 精度比较，漂移不超过 0.01 个百分点。
+  只有通过漂移检查后，基线才取两次较低值并统一向下保留两位，且不得低于历史基线。禁止直接手改数字、用单次结果或用
   四舍五入把临界值抬过门槛；当前 `ec4162…` 数值是在编排命令进入仓库前完成两次 clean-main
   测量并经双轴人工复审的一次性 `reviewed-bootstrap-v1`，以后写入只能升级为
   `orchestrated-two-run-v1`。文件使用完整 commit SHA 和严格字段，读取已进入历史的旧格式时

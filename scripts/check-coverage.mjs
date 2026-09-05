@@ -24,22 +24,25 @@ const COVERAGE_ARTIFACTS = {
   rust: "coverage/rust.lcov",
 };
 
-export function floorCoveragePercent(covered, total) {
+export function coveragePercent(covered, total) {
   if (!Number.isFinite(covered) || !Number.isFinite(total) || covered < 0 || total < 0) {
     throw new Error("coverage counts must be finite non-negative numbers");
   }
   if (covered > total) throw new Error("covered coverage count cannot exceed total");
-  return total === 0 ? 100 : Math.floor((covered * 10_000) / total) / 100;
+  return total === 0 ? 100 : (covered * 100) / total;
 }
 
+export function floorCoveragePercent(covered, total) {
+  return Math.floor(coveragePercent(covered, total) * 100) / 100;
+}
 function frontendSummary() {
   const summary = JSON.parse(
     readFileSync(resolve(ROOT, "coverage/frontend/coverage-summary.json"), "utf8"),
   ).total;
   return {
-    lines: floorCoveragePercent(summary.lines.covered, summary.lines.total),
-    branches: floorCoveragePercent(summary.branches.covered, summary.branches.total),
-    functions: floorCoveragePercent(summary.functions.covered, summary.functions.total),
+    lines: coveragePercent(summary.lines.covered, summary.lines.total),
+    branches: coveragePercent(summary.branches.covered, summary.branches.total),
+    functions: coveragePercent(summary.functions.covered, summary.functions.total),
   };
 }
 
@@ -279,9 +282,9 @@ export function summarizeLcov(files) {
     functionCovered += [...file.functions.values()].filter(Boolean).length;
   }
   return {
-    lines: floorCoveragePercent(lineCovered, lineTotal),
-    branches: floorCoveragePercent(branchCovered, branchTotal),
-    functions: floorCoveragePercent(functionCovered, functionTotal),
+    lines: coveragePercent(lineCovered, lineTotal),
+    branches: coveragePercent(branchCovered, branchTotal),
+    functions: coveragePercent(functionCovered, functionTotal),
   };
 }
 

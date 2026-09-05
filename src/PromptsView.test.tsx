@@ -525,6 +525,40 @@ describe("PromptsView", () => {
     }
   });
 
+  it("cancels a pending pointer-close timer when the view unmounts", async () => {
+    const { unmount } = render(<PromptsView api={api()} language="en" />);
+    fireEvent.click(await screen.findByRole("article", { name: "深度研究问题拆解" }));
+    const drawer = await screen.findByRole("dialog", { name: "深度研究问题拆解" });
+    const closeButton = within(drawer).getByRole("button", { name: "Close" });
+    await waitFor(() => expect(closeButton).toHaveFocus());
+
+    vi.useFakeTimers();
+    const setTimeout = vi.spyOn(window, "setTimeout");
+    const clearTimeout = vi.spyOn(window, "clearTimeout");
+    let unmounted = false;
+    try {
+      await act(async () => {
+        fireEvent.click(closeButton, { detail: 1 });
+        await Promise.resolve();
+      });
+      expect(document.querySelector(".prompt-drawer-layer")).toHaveClass("is-closing");
+      const closeTimerCall = setTimeout.mock.calls.findIndex(([, delay]) => delay === 100);
+      expect(closeTimerCall).toBeGreaterThanOrEqual(0);
+      const closeTimer = setTimeout.mock.results[closeTimerCall]?.value;
+
+      unmount();
+      unmounted = true;
+
+      expect(clearTimeout).toHaveBeenCalledWith(closeTimer);
+    } finally {
+      if (!unmounted) unmount();
+      vi.clearAllTimers();
+      clearTimeout.mockRestore();
+      setTimeout.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps pointer exit motion after switching cards without replaying the entrance", async () => {
     const user = userEvent.setup();
     render(<PromptsView api={api()} language="en" />);
@@ -1423,6 +1457,7 @@ describe("PromptsView", () => {
     expect(screen.queryByText("Export completed")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("checkbox", { name: "Select: 深度研究问题拆解" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Batch export" }));
     expect(screen.queryByText("Export completed")).not.toBeInTheDocument();
   });
@@ -1443,6 +1478,7 @@ describe("PromptsView", () => {
     expect(client.exportPrompt).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("checkbox", { name: "Select: 深度研究问题拆解" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Batch export" }));
     expect(confirmExport).toHaveBeenNthCalledWith(2, "batch", { count: 1 });
     expect(client.exportPrompts).not.toHaveBeenCalled();

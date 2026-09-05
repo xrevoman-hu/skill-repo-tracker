@@ -7,6 +7,7 @@ import {
   buildCoverageDiffArguments,
   calculateChangedCoverage,
   calculateChangedCoverageWithDetails,
+  coveragePercent,
   findRustConditionalLineRanges,
   findRustCfgTestLineRanges,
   findMissingCoverageFiles,
@@ -269,6 +270,7 @@ test("changed branch coverage comes from branch records on changed lines", () =>
 });
 
 test("coverage percentages floor to two decimals instead of rounding a near-threshold result green", () => {
+  assert.equal(coveragePercent(2, 3), 200 / 3);
   assert.equal(floorCoveragePercent(79_999, 100_000), 79.99);
   assert.deepEqual(
     calculateChangedCoverage({
@@ -480,6 +482,18 @@ test("coverage baseline updates require two clean runs on one commit and cannot 
         second: {
           ...second,
           frontend: { ...second.frontend, lines: 80.03 },
+        },
+        previous,
+      }),
+    /drifted by more than 0\.01 percentage points/,
+  );
+  assert.throws(
+    () =>
+      buildCoverageBaselineUpdate({
+        first,
+        second: {
+          ...second,
+          frontend: { ...second.frontend, lines: 80 },
         },
         previous,
       }),

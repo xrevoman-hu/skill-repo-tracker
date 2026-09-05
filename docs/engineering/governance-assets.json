@@ -152,6 +152,10 @@
           {
             "path": "scripts/__tests__/module-map.test.mjs",
             "selector": "a forbidden dependency edge fails with the source and target modules"
+          },
+          {
+            "path": "scripts/__tests__/module-map.test.mjs",
+            "selector": "prompt-capable service and demo fixture load the Prompt migration ADR"
           }
         ]
       }
@@ -293,6 +297,10 @@
           {
             "path": "scripts/__tests__/coverage-policy.test.mjs",
             "selector": "coverage baseline protocol owns both live runs and rejects external snapshots"
+          },
+          {
+            "path": "src/PromptsView.test.tsx",
+            "selector": "cancels a pending pointer-close timer when the view unmounts"
           },
           {
             "path": "scripts/__tests__/governance.test.mjs",
