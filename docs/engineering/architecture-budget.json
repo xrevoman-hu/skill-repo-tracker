@@ -5,22 +5,22 @@
   "hotSpots": {
     "src/App.tsx": {
       "status": "active",
-      "maxLines": 6613,
-      "maxBytes": 247236,
+      "maxLines": 6578,
+      "maxBytes": 246631,
       "targetLines": 700,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
     "src/PromptsView.tsx": {
       "status": "active",
-      "maxLines": 2646,
-      "maxBytes": 110831,
+      "maxLines": 2644,
+      "maxBytes": 110829,
       "targetLines": 800,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
     "src/styles.css": {
       "status": "active",
-      "maxLines": 2870,
-      "maxBytes": 51179,
+      "maxLines": 2865,
+      "maxBytes": 51103,
       "targetLines": 800,
       "adr": "docs/adr/0008-executable-governance-assets.md"
     },
@@ -75,8 +75,8 @@
     "hotSpots": {
       "scripts/governance.mjs": {
         "status": "active",
-      "maxLines": 1382,
-      "maxBytes": 49139,
+        "maxLines": 1354,
+        "maxBytes": 48095,
         "targetLines": 1200,
         "adr": "docs/adr/0008-executable-governance-assets.md"
       }

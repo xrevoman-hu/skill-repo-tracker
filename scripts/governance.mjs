@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, extname, join, posix, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,6 +16,7 @@ import {
   checkRepositoryToolingBudget,
   compareBudgetToBase,
 } from "./architecture-budget-checks.mjs";
+import { checkBundle } from "./bundle-policy.mjs";
 import { frontendImportBoundaryViolation } from "./frontend-import-policy.mjs";
 import { checkGovernanceAssets } from "./governance-assets-check.mjs";
 import {
@@ -1321,35 +1322,6 @@ export function checkArchitecture(root = REPOSITORY_ROOT) {
   return errors;
 }
 
-export function checkBundle(root = REPOSITORY_ROOT) {
-  const budget = readJson(join(root, "docs/engineering/architecture-budget.json")).bundle;
-  const dist = join(root, "dist");
-  if (!existsSync(dist)) return ["dist does not exist; run the Vite build before bundle budget"];
-  const files = [];
-  const visit = (directory) => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) visit(path);
-      else files.push(path);
-    }
-  };
-  visit(dist);
-  const totalBytes = files.reduce((sum, path) => sum + statSync(path).size, 0);
-  const errors = [];
-  if (totalBytes > budget.maxTotalBytes) {
-    errors.push(`dist is ${totalBytes} bytes; total budget is ${budget.maxTotalBytes}`);
-  }
-  for (const path of files.filter((candidate) => candidate.endsWith(".js"))) {
-    const bytes = statSync(path).size;
-    if (bytes > budget.maxJavaScriptChunkBytes) {
-      errors.push(
-        `${relative(root, path)} is ${bytes} bytes; JavaScript chunk budget is ${budget.maxJavaScriptChunkBytes}`,
-      );
-    }
-  }
-  return errors;
-}
-
 async function main() {
   const command = process.argv[2] ?? "all";
   const checks = {
@@ -1363,7 +1335,7 @@ async function main() {
       ],
     ],
     architecture: ["architecture budget", () => checkArchitecture()],
-    bundle: ["bundle budget", () => checkBundle()],
+    bundle: ["bundle budget and production artifact policy", () => checkBundle(REPOSITORY_ROOT)],
   };
   const selected =
     command === "all" ? ["versions", "boundaries", "assets", "architecture"] : [command];

@@ -28,6 +28,215 @@ test("peer and transport channels cannot bypass AppService", () => {
   }
 });
 
+test("production runtime remains compatible with the Safari 15.0 product floor", () => {
+  for (const source of [
+    "const last = values.at(-1)",
+    "const last = values['a' + 't'](-1)",
+    "const { at: take } = values; take.call(values, -1)",
+    "const { ['a' + 't']: take } = values; take.call(values, -1)",
+    "const key = readKey(); const { [key]: take } = values; take.call(values, -1)",
+    "{ const key = 'at'; const { [key]: take } = values } { const key = 'map'; const { [key]: map } = values }",
+    "({ at: take } = values); take.call(values, -1)",
+    "const key = 'at'; values[key](-1)",
+    "{ const key = 'at'; values[key](-1) } { const key = 'map'; values[key](fn) }",
+    "const key = 'map'; function pick(key) { return values[key](-1) }",
+    "const copy = structuredClone(value)",
+    "const { structuredClone: copy } = globalThis; copy(value)",
+    "const copy = globalThis.structuredClone(value)",
+    "const key = 'structuredClone'; globalThis[key](value)",
+  ]) {
+    assertBlocked(source, /unavailable before Safari 15\.4/);
+  }
+  assert.deepEqual(
+    findForbiddenFrontendRuntimeUsage(
+      "src/Compatibility.ts",
+      "const last = values[values.length - 1]; const copy = { ...value }",
+    ),
+    [],
+  );
+});
+
+test("runtime DOM cannot create navigation or document-policy escape surfaces", () => {
+  const mutations = [
+    'document.createElement("meta")',
+    'const tag = "meta"; document.createElement(tag)',
+    'React.createElement("style")',
+    'meta.httpEquiv = "refresh"',
+    'meta["http" + "Equiv"] = "content-security-policy"',
+    'const attr = "http-equiv"; meta.setAttribute(attr, "refresh")',
+    'Object.assign(meta, { httpEquiv: "refresh" })',
+    'const src = remote; Object.assign(image, { src })',
+    'const key = "src"; Object.assign(image, { [key]: remote })',
+    '{ const key = "src"; Object.assign(image, { [key]: remote }) } { const key = "safe"; Object.assign(image, { [key]: value }) }',
+    'Object.assign(image, props)',
+    'Object.assign(image, { safe: true }, { src: remote })',
+    'Object.assign(image, { ...props })',
+    'Object.assign(node, { style: { backgroundImage: remote } })',
+    'globalThis.Object.assign(node, { style: { backgroundImage: remote } })',
+    'window["Object"]["assign"](image, { src: remote })',
+    'const attribute = readName(); meta.setAttribute(attribute, "refresh")',
+    'const tag = readTag(); document.createElement(tag)',
+    '{ const tag = "meta"; document.createElement(tag) } { const tag = "div"; document.createElement(tag) }',
+    'image.src = "https://evil.example/pixel.png"',
+    'const key = "src"; image[key] = "https://evil.example/pixel.png"',
+    'const key = readName(); image[key] = "https://evil.example/pixel.png"',
+    '{ const key = "src"; image[key] = remote } { const key = "safe"; image[key] = value }',
+    'image.setAttribute("srcset", "https://evil.example/pixel.png 1x")',
+    'node.setAttribute("style", "background-image:url(https://evil.example/pixel.png)")',
+    'node.setAttribute("STYLE", "background-image:url(https://evil.example/pixel.png)")',
+    'node.setAttribute("Style", css)',
+    'const attributeName = "St" + "Yle"; node["set" + "Attribute"](attributeName, css)',
+    'node.setAttribute("class", "unreviewed-runtime-class")',
+    'const set = image.setAttribute; set("src", remote)',
+    'const create = document.createElement; create("img")',
+    'const { setAttribute: set } = image; set("src", remote)',
+    'const { createElement: create } = document; create("img")',
+    'let set; ({ setAttribute: set } = image); set("src", remote)',
+    'let create; ({ createElement: create } = document); create("img")',
+    'let target; ({ value: target.src } = source)',
+    'image.setAttributeNS(null, "src", remote)',
+    'node.setAttributeNode(document.createAttribute("style"))',
+    'node.getAttributeNode("style").value = css',
+    'node.attributes.getNamedItem("style").value = css',
+    'document.createElementNS("http://www.w3.org/2000/svg", "style")',
+    'root.innerHTML = `<img src="${remote}">`',
+    'root.outerHTML = html',
+    'frame.srcdoc = html',
+    'frame.srcDoc = html',
+    'root.insertAdjacentHTML("beforeend", html)',
+    'document.write(html)',
+    'const write = document.write; write(html)',
+    'range.createContextualFragment(html)',
+    'node.style.backgroundImage = `url(${remote})`',
+    'node.style.WebkitBoxReflect = `below url(${remote})`',
+    'node.style.cssText = css',
+    'node.style.setProperty("background-image", remote)',
+    'const set = node.style.setProperty; set("background-image", remote)',
+    'const { setProperty: set } = node.style; set("background-image", remote)',
+    'let set; ({ setProperty: set } = node.style); set("background-image", remote)',
+    'const target = node.style; target.backgroundImage = remote',
+    'const target = node["style"]; target.cssText = css',
+    'const { style: target } = node; target.backgroundImage = remote',
+    'let target; ({ style: target } = node); target.backgroundImage = remote',
+    'function mutate(target) { target.backgroundImage = remote } mutate(node.style)',
+    'const holder = { target: node.style }; holder.target.cssText = css',
+    '[node.style][0].cssText = css',
+    'const target = node.style; Object.assign(target, { backgroundImage: remote })',
+    'Object.assign(node.style, { backgroundImage: remote })',
+    'new CSSStyleSheet()',
+    'new DOMParser()',
+    'document.adoptedStyleSheets = [sheet]',
+    'document.styleSheets[0].insertRule(css)',
+    'node.attributeStyleMap.set("background-image", remote)',
+    'styleElement.sheet.replace(css)',
+    'sheet.insertRule(css)',
+    'sheet.replaceSync(css)',
+    'node.append(css)',
+    'node.textContent = css',
+    '<meta httpEquiv="refresh" content="0;url=https://evil.example/" />',
+    '<style>{dangerousCss}</style>',
+    '<img src={remoteUrl} />',
+    '<video poster="https://evil.example/poster.png" />',
+    '<svg><use href={remoteUrl} /></svg>',
+    '<svg><use xlink:href={remoteUrl} /></svg>',
+    '<svg><path fill="url(https://evil.example/paint.svg#gradient)" /></svg>',
+    '<svg><path stroke={remotePaint} /></svg>',
+    '<div style={{ backgroundImage: `url(${remoteUrl})` }} />',
+    '<div style={{ WebkitMaskImage: `url(${remoteUrl})` }} />',
+    '<svg style={{ fill: `url(${remoteUrl})` }} />',
+    '<div style={sharedStyle} />',
+    '<div {...props} />',
+    '<div {...{ src: remoteUrl }} />',
+    'const Tag = "style"; <Tag>{css}</Tag>',
+    'const Tag = "meta"; <Tag httpEquiv="refresh" content="0;url=https://evil.example" />',
+    'const Tag = readTag(); <Tag />',
+    'function Dynamic({ Tag }) { return <Tag /> }',
+    'const Widgets = { Tag: "style" }; <Widgets.Tag>{css}</Widgets.Tag>',
+    'const Elements = { Safe: Component }; <Elements.Safe {...props} />',
+    'const React = { StrictMode: "style" }; <React.StrictMode>{css}</React.StrictMode>',
+    'import React from "fake-react"; <React.StrictMode>{css}</React.StrictMode>',
+    'import type React from "react"; <React.StrictMode>{css}</React.StrictMode>',
+    'import * as React from "react"; <React.StrictMode>{css}</React.StrictMode>',
+    '<React.StrictMode data-policy="mutable"><App /></React.StrictMode>',
+    'React.createElement("div", { dangerouslySetInnerHTML: { __html: html } })',
+    'React.createElement("div", { style: { backgroundImage: remote } })',
+    'React.createElement("svg", null, React.createElement("use", { href: remote }))',
+    'React.cloneElement(node, { dangerouslySetInnerHTML: { __html: html } })',
+    'const assign = Object.assign; assign(image, props)',
+    'const { assign } = Object; assign(image, props)',
+    'import { createElement as make } from "react"; make("div", { src: remote })',
+  ];
+  for (const source of mutations) {
+    assertBlocked(source, /document-policy|resource loading|runtime reflection|raw HTML|raw DOM|DOM (?:mutation|style)|dynamic JSX|dynamic execution/);
+  }
+  assert.deepEqual(
+    findForbiddenFrontendRuntimeUsage(
+      "src/InlineLayout.tsx",
+      '<><div style={{ maxHeight: `${height}px` }} /><span style={flag ? undefined : { width: "42%" }} /></>',
+    ),
+    [],
+  );
+  assert.deepEqual(
+    findForbiddenFrontendRuntimeUsage(
+      "src/App.tsx",
+      '<PreferencesPanel {...props} />',
+    ),
+    [],
+  );
+  assert.deepEqual(
+    findForbiddenFrontendRuntimeUsage(
+      "src/main.tsx",
+      'import React from "react"; <React.StrictMode><App /></React.StrictMode>',
+    ),
+    [],
+  );
+  assert.deepEqual(
+    findForbiddenFrontendRuntimeUsage(
+      "src/InlineLayout.tsx",
+      'card.setAttribute("data-drop-flip", "true"); card.setAttribute("aria-label", label); card.style.transform = "none"; card.style.getPropertyValue("--prompt-drag-x"); card.style.setProperty("--prompt-drag-x", "0px"); Object.assign(card.style, { transform: "none" }); Object.assign(error, { code: "safe" })',
+    ),
+    [],
+  );
+  assertBlocked('<Button {...props} />', /resource loading/);
+});
+
+test("the reviewed React.StrictMode root cannot be replaced before JSX evaluation", () => {
+  for (const source of [
+    'import React from "react"; React.StrictMode = "style"; <React.StrictMode>{css}</React.StrictMode>',
+    'import React from "react"; Object.assign(React, { StrictMode: "style" }); <React.StrictMode>{css}</React.StrictMode>',
+  ]) {
+    assertBlocked(source, /document-policy/, "src/main.tsx");
+  }
+});
+
+const reviewedPromptIconSource = `
+import { ChevronLeft, ChevronRight, Copy, Download, GripVertical, MoreHorizontal, Pencil, Pin, Plus, Search, Tag, Upload, X } from "lucide-react";
+const iconComponents = {
+  search: Search, pin: Pin, copy: Copy, close: X, edit: Pencil, download: Download,
+  drag: GripVertical, more: MoreHorizontal, tag: Tag, upload: Upload, plus: Plus,
+  previous: ChevronLeft, next: ChevronRight,
+};
+function Icon({ name }: { name: keyof typeof iconComponents }) {
+  const Component = iconComponents[name];
+  return <Component aria-hidden="true" />;
+}`;
+
+test("the reviewed Prompt icon component map has an exact immutable source shape", () => {
+  assert.deepEqual(
+    findForbiddenFrontendRuntimeUsage("src/PromptsView.tsx", reviewedPromptIconSource),
+    [],
+  );
+  for (const source of [
+    'const iconComponents = { evil: "style" }; const Component = iconComponents[key]; <Component>{css}</Component>',
+    'function Icon(iconComponents) { const Component = iconComponents[key]; return <Component /> }',
+    reviewedPromptIconSource.replace('"lucide-react"', '"fake-icons"'),
+    reviewedPromptIconSource.replace("const Component", "console.log(iconComponents); const Component"),
+    reviewedPromptIconSource.replace("const Component", 'iconComponents.search = "style"; const Component'),
+  ]) {
+    assertBlocked(source, /dynamic JSX/, "src/PromptsView.tsx");
+  }
+});
+
 test("DOM event views cannot recover Window and bypass the Tauri adapter", () => {
   const mutations = [
     [
@@ -175,6 +384,6 @@ test("only the two reviewed JSX anchor shapes are accepted", () => {
     ["src/OtherView.tsx", 'createElement("a", { href: url }, "repo")'],
   ];
   for (const [path, source] of mutations) {
-    assertBlocked(source, /raw JSX anchor|programmatic anchor/, path);
+    assertBlocked(source, /raw JSX anchor|programmatic .*createElement/, path);
   }
 });

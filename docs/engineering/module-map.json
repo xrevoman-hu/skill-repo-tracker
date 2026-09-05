@@ -138,7 +138,7 @@
       "layer": "frontend-entry",
       "ownerRule": "docs/rules/testing-release.md",
       "decisions": ["docs/adr/0007-staged-modularization.md"],
-      "paths": ["src/main.tsx"]
+      "paths": ["src/browserCompatibility.css", "src/main.tsx"]
     },
     {
       "id": "frontend-app-shell",
@@ -254,7 +254,7 @@
       "layer": "frontend-shared",
       "ownerRule": "docs/rules/testing-release.md",
       "decisions": ["docs/adr/0007-staged-modularization.md"],
-      "paths": ["src/inspectorDismiss.ts"]
+      "paths": ["src/Button.tsx", "src/inspectorDismiss.ts"]
     },
     {
       "id": "frontend-external-navigation",

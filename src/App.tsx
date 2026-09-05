@@ -1,6 +1,5 @@
 import { useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
 import type {
-  ButtonHTMLAttributes,
   Dispatch,
   MouseEvent as ReactMouseEvent,
   ReactNode,
@@ -32,6 +31,7 @@ import type {
 } from "./api";
 import { DemoAppService, TauriAppService } from "./appService";
 import type { AppService } from "./appService";
+import { Button } from "./Button";
 import { openGithub } from "./externalNavigation";
 import { GitHubWorkbench } from "./GitHubWorkbench";
 import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
@@ -1580,36 +1580,6 @@ function githubRateLimitHelpText(t: (key: string) => string, resetAt: string) {
   return resetAt ? `${base} ${t("githubRateLimitResetAt")}: ${resetAt}` : base;
 }
 
-type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: string;
-  pending?: boolean;
-  pendingLabel?: ReactNode;
-};
-
-function Button({
-  children,
-  variant = "secondary",
-  onClick,
-  disabled = false,
-  className = "",
-  pending = false,
-  pendingLabel,
-  type = "button",
-  ...buttonProps
-}: ButtonProps) {
-  return (
-    <button
-      {...buttonProps}
-      className={`button ${variant} ${className} ${pending ? "is-pending" : ""}`}
-      onClick={onClick}
-      disabled={disabled || pending}
-      type={type}
-    >
-      {pending ? pendingLabel || children : children}
-    </button>
-  );
-}
-
 function HelpTip({ text, label = "Help" }: { text: string; label?: string }) {
   return (
     <span aria-label={`${label}: ${text}`} className="help-tip" role="img" tabIndex={0} title={text}>
@@ -1925,13 +1895,8 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
 
   function setActionPending(key: string, pending: boolean) {
     setPendingActions((items) => {
-      const next = { ...items };
-      if (pending) {
-        next[key] = true;
-      } else {
-        delete next[key];
-      }
-      return next;
+      if (pending) return { ...items, [key]: true };
+      return Object.fromEntries(Object.entries(items).filter(([entryKey]) => entryKey !== key));
     });
   }
 

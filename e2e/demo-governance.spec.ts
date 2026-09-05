@@ -279,3 +279,24 @@ test("Prompt 可创建标签、搜索并完成 ZIP 批量导出导入，且不�
 
   expectNoExternalRequests();
 });
+
+test("生产 bundle 在 Safari 15.0 缺少 Object.hasOwn 时仍可渲染 Markdown", async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  await page.addInitScript(() => {
+    Object.defineProperty(Object, "hasOwn", {
+      configurable: true,
+      value: undefined,
+      writable: true,
+    });
+  });
+  const expectNoExternalRequests = await blockExternalRequests(page);
+  await page.goto("/?lang=zh&tab=prompts");
+
+  expect(await page.evaluate(() => typeof Object.hasOwn)).toBe("function");
+  await page.getByRole("article", { name: "本地优先检查清单" }).click();
+  const promptDrawer = page.getByRole("dialog", { name: "本地优先检查清单" });
+  await expect(promptDrawer.getByRole("heading", { name: "检查", exact: true })).toBeVisible();
+  expect(pageErrors).toEqual([]);
+  expectNoExternalRequests();
+});

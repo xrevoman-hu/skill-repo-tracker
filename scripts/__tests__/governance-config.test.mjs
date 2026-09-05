@@ -240,6 +240,12 @@ test("typecheck and test discovery configurations cannot silently shrink", () =>
     /production build contract/,
   );
   assert.match(
+    validateViteConfigPolicy(
+      vite.replace("output: { postBanner: SAFARI_15_OBJECT_HAS_OWN_BANNER }", "output: {}"),
+    )[0],
+    /production build contract/,
+  );
+  assert.match(
     validateViteConfigPolicy(vite.replace("publicDir: false", 'publicDir: "public"'))[0],
     /production build contract/,
   );

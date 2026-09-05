@@ -822,11 +822,6 @@ a {
   overflow: auto;
 }
 
-.table-frame:has(.empty-state) {
-  display: grid;
-  place-items: center;
-}
-
 .table-pagination {
   display: flex;
   min-height: 48px;

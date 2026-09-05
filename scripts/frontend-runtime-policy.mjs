@@ -1,59 +1,23 @@
 import ts from "typescript";
-
-function parseTypeScript(path, contents) {
-  const scriptKind = path.endsWith(".tsx")
-    ? ts.ScriptKind.TSX
-    : path.endsWith(".jsx")
-      ? ts.ScriptKind.JSX
-      : /\.(?:js|mjs|cjs)$/.test(path)
-        ? ts.ScriptKind.JS
-        : ts.ScriptKind.TS;
-  return ts.createSourceFile(path, contents, ts.ScriptTarget.Latest, true, scriptKind);
-}
-
-function staticPropertyName(node) {
-  if (ts.isStringLiteralLike(node)) return node.text;
-  if (
-    ts.isBinaryExpression(node) &&
-    node.operatorToken.kind === ts.SyntaxKind.PlusToken
-  ) {
-    const left = staticPropertyName(node.left);
-    const right = staticPropertyName(node.right);
-    return left === undefined || right === undefined ? undefined : left + right;
-  }
-  return undefined;
-}
-
-function declaredPropertyName(node) {
-  return ts.isIdentifier(node) ? node.text : staticPropertyName(node);
-}
-
-function propertyAccessChain(node) {
-  if (
-    ts.isParenthesizedExpression(node) ||
-    ts.isNonNullExpression(node) ||
-    ts.isAsExpression(node) ||
-    ts.isTypeAssertionExpression(node) ||
-    ts.isSatisfiesExpression(node)
-  ) return propertyAccessChain(node.expression);
-  if (ts.isIdentifier(node)) return [node.text];
-  if (ts.isCallExpression(node)) return propertyAccessChain(node.expression);
-  if (ts.isNewExpression(node)) return propertyAccessChain(node.expression);
-  if (ts.isPropertyAccessExpression(node)) {
-    const prefix = propertyAccessChain(node.expression);
-    return prefix ? [...prefix, node.name.text] : undefined;
-  }
-  if (ts.isElementAccessExpression(node)) {
-    const prefix = propertyAccessChain(node.expression);
-    const property = staticPropertyName(node.argumentExpression);
-    return prefix ? [...prefix, property ?? "*"] : undefined;
-  }
-  return undefined;
-}
-
-function jsxAttributeName(attribute) {
-  return ts.isIdentifier(attribute.name) ? attribute.name.text : undefined;
-}
+import {
+  RAW_DOM_MUTATION_METHODS,
+  DOCUMENT_POLICY_METHODS,
+  DOCUMENT_POLICY_PROPERTIES,
+  DOCUMENT_POLICY_TAGS,
+  createStaticPropertyResolver, domMutationHandleViolation,
+  declaredPropertyName,
+  documentPropertyWriteViolation,
+  findJsxResourceEscape,
+  isForbiddenRuntimeAttributeName, isGlobalObjectAssign, isReviewedPromptsIconLookup, isReviewedReactStrictMode, jsxAttributeName,
+  isWriteTarget,
+  objectAssignHasUnreviewedDocumentPolicyWrite,
+  objectAssignHasUnreviewedStyleWrite,
+  parseTypeScript,
+  propertyAccessChain,
+  recoveredDocumentPolicyMethod,
+  staticPropertyName,
+  unreviewedStyleSetPropertyCall,
+} from "./frontend-dom-policy.mjs";
 
 function jsxTagName(name) {
   return ts.isIdentifier(name) ? name.text : undefined;
@@ -174,52 +138,21 @@ function belongsToDirectTauriInvoke(node) {
 
 export function findForbiddenFrontendRuntimeUsage(path, contents) {
   const sourceFile = parseTypeScript(path, contents);
+  const sourceStaticPropertyName = createStaticPropertyResolver(sourceFile, staticPropertyName);
+  const sourcePropertyAccessChain = (node) => propertyAccessChain(node, sourceStaticPropertyName);
   const rawNetworkApis = new Set();
   const runtimeBoundaryViolations = new Set();
   const dynamicExecutionViolations = new Set();
+  const webkitCompatibilityViolations = new Set();
   let hardenedBrowserOpenCalls = 0;
   let importsTauriCoreOutsideApi = false;
   let invokesTauriGlobal = false;
 
-  const rawNetworkNames = new Set([
-    "fetch",
-    "XMLHttpRequest",
-    "EventSource",
-    "WebSocket",
-    "sendBeacon",
-    "RTCPeerConnection",
-    "webkitRTCPeerConnection",
-    "WebTransport",
-  ]);
-  const globalNames = new Set([
-    "window",
-    "globalThis",
-    "self",
-    "frames",
-    "top",
-    "parent",
-    "opener",
-    "navigator",
-    "document",
-    "location",
-  ]);
-  const dynamicExecutionNames = new Set(["eval", "Function", "WebAssembly"]);
-  const asynchronousEscapeNames = new Set([
-    "MessageChannel",
-    "MessagePort",
-    "postMessage",
-    "queueMicrotask",
-    "scheduler",
-  ]);
-  const reflectiveObjectMethods = new Set([
-    "create",
-    "defineProperties",
-    "defineProperty",
-    "getPrototypeOf",
-    "getOwnPropertyDescriptor",
-    "getOwnPropertyDescriptors",
-    "setPrototypeOf",
-  ]);
+  const rawNetworkNames = new Set(["fetch", "XMLHttpRequest", "EventSource", "WebSocket", "sendBeacon", "RTCPeerConnection", "webkitRTCPeerConnection", "WebTransport"]);
+  const globalNames = new Set(["window", "globalThis", "self", "frames", "top", "parent", "opener", "navigator", "document", "location"]);
+  const dynamicExecutionNames = new Set(["CSSStyleSheet", "DOMParser", "eval", "Function", "WebAssembly"]);
+  const asynchronousEscapeNames = new Set(["MessageChannel", "MessagePort", "postMessage", "queueMicrotask", "scheduler"]);
+  const reflectiveObjectMethods = new Set(["create", "defineProperties", "defineProperty", "getPrototypeOf", "getOwnPropertyDescriptor", "getOwnPropertyDescriptors", "setPrototypeOf"]);
   const reflectivePropertyNames = new Set(["__proto__", "constructor", "prototype"]);
   const line = (node) => sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
   const isTypeOnly = (node) => {
@@ -241,17 +174,11 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
   };
   const isTypeofOperand = (node) =>
     ts.isTypeOfExpression(node.parent) && node.parent.expression === node;
-  const isAssignmentLeft = (node) =>
-    ts.isBinaryExpression(node.parent) &&
-    node.parent.left === node &&
-    node.parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
-    node.parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment;
-  const isWriteTarget = (node) =>
-    isAssignmentLeft(node) ||
-    ((ts.isPrefixUnaryExpression(node.parent) || ts.isPostfixUnaryExpression(node.parent)) &&
-      node.parent.operand === node &&
-      [ts.SyntaxKind.PlusPlusToken, ts.SyntaxKind.MinusMinusToken].includes(node.parent.operator)) ||
-    (ts.isDeleteExpression(node.parent) && node.parent.expression === node);
+  const recordDocumentPropertyWrite = (expression) => {
+    if (!isWriteTarget(expression)) return;
+    const violation = documentPropertyWriteViolation(sourcePropertyAccessChain(expression));
+    if (violation) runtimeBoundaryViolations.add(`${path}:${line(expression)} ${violation}`);
+  };
 
   const recordBrowserNavigation = (expression) => {
     const chain = propertyAccessChain(expression);
@@ -310,7 +237,45 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
   };
 
   const recordJsxSurface = (opening) => {
-    const tag = jsxTagName(opening.tagName);
+    const declaredTag = jsxTagName(opening.tagName);
+    const resolvedTag = sourceStaticPropertyName(opening.tagName);
+    const tag = resolvedTag ?? declaredTag;
+    const tagBinding = sourceStaticPropertyName.declaration(opening.tagName);
+    const reviewedMemberTag = isReviewedReactStrictMode(path, opening, sourceFile, sourceStaticPropertyName.declaration);
+    const reviewedComponentProp =
+      path === "src/PluginsView.tsx" &&
+      new Set(["Button", "Detail", "EmptyState", "Section", "Tag"]).has(declaredTag);
+    const reviewedIconLookup = declaredTag === "Component" &&
+      isReviewedPromptsIconLookup(path, tagBinding, sourceFile, sourceStaticPropertyName.declaration);
+    if (!declaredTag && !reviewedMemberTag) {
+      runtimeBoundaryViolations.add(
+        `${path}:${line(opening)} dynamic JSX member tag is forbidden outside the exact React.StrictMode root boundary`,
+      );
+    }
+    if (
+      /^[A-Z]/.test(declaredTag ?? "") && resolvedTag === undefined &&
+      ((tagBinding && ts.isVariableDeclaration(tagBinding) && !reviewedIconLookup) ||
+        (tagBinding && ts.isParameter(tagBinding) && !reviewedComponentProp) ||
+        (tagBinding && ts.isBindingElement(tagBinding) && !reviewedComponentProp))
+    ) {
+      runtimeBoundaryViolations.add(
+        `${path}:${line(opening)} dynamic JSX tag is forbidden outside the reviewed local icon component map`,
+      );
+    }
+    if (DOCUMENT_POLICY_TAGS.has(tag) && tag !== "a") {
+      runtimeBoundaryViolations.add(
+        `${path}:${line(opening)} raw JSX navigation or document-policy elements are forbidden`,
+      );
+    }
+    const allowSpread =
+      path === "src/App.tsx" &&
+      new Set(["PreferencesModal", "PreferencesPanel", "SettingsView"]).has(declaredTag);
+    const resourceEscape = findJsxResourceEscape(opening, tag, allowSpread);
+    if (resourceEscape) {
+      runtimeBoundaryViolations.add(
+        `${path}:${line(resourceEscape)} raw JSX resource loading is forbidden`,
+      );
+    }
     if (tag === "a") {
       const appAnchor =
         path === "src/App.tsx" &&
@@ -431,6 +396,28 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
     );
   };
 
+  const recordUnsupportedWebkitApi = (expression) => {
+    const chain = sourcePropertyAccessChain(expression);
+    const api = chain?.at(-1);
+    const hidesComputedCall =
+      api === "*" && ts.isCallExpression(expression.parent) && expression.parent.expression === expression;
+    if ((!api || !["at", "structuredClone"].includes(api)) && !hidesComputedCall) return;
+    webkitCompatibilityViolations.add(
+      `${path}:${line(expression)} uses or hides ${api} runtime access that is unavailable before Safari 15.4; preserve the macOS 12 / Safari 15.0 runtime floor without relying on build-target polyfills`,
+    );
+  };
+
+  const recordUnsupportedWebkitBinding = (node, name) => {
+    const computed = ts.isComputedPropertyName(name);
+    const api = computed
+      ? sourceStaticPropertyName(name.expression)
+      : declaredPropertyName(name);
+    if ((!api || !["at", "structuredClone"].includes(api)) && !computed) return;
+    webkitCompatibilityViolations.add(
+      `${path}:${line(node)} aliases ${api ?? "*"}, which is unavailable before Safari 15.4; preserve the macOS 12 / Safari 15.0 runtime floor without relying on build-target polyfills`,
+    );
+  };
+
   const recordModuleSpecifier = (node) => {
     if (
       path !== "src/api.ts" &&
@@ -442,11 +429,32 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
   };
 
   const visit = (node) => {
+    if (ts.isBindingElement(node) && ts.isObjectBindingPattern(node.parent)) {
+      recordUnsupportedWebkitBinding(node, node.propertyName ?? node.name);
+    }
+    if (
+      (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
+      ts.isObjectLiteralExpression(node.parent) &&
+      ts.isBinaryExpression(node.parent.parent) &&
+      node.parent.parent.left === node.parent &&
+      node.parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    ) {
+      recordUnsupportedWebkitBinding(node, node.name);
+    }
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier
     ) {
       recordModuleSpecifier(node.moduleSpecifier);
+    }
+    if (
+      ts.isImportSpecifier(node) && ["cloneElement", "createElement"].includes(
+        (node.propertyName ?? node.name).text,
+      )
+    ) {
+      runtimeBoundaryViolations.add(
+        `${path}:${line(node)} programmatic document-policy React element factories may not be imported or aliased`,
+      );
     }
     if (ts.isCallExpression(node)) {
       recordNetworkApi(node.expression);
@@ -454,36 +462,43 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
       recordReflectionApi(node.expression);
       recordAsynchronousEscape(node.expression);
       recordFormSurface(node.expression);
-      const callChain = propertyAccessChain(node.expression);
-      if (
-        callChain?.at(-1) === "setAttribute" &&
-        ["action", "target"].includes(staticPropertyName(node.arguments[0]))
-      ) {
+      recordUnsupportedWebkitApi(node.expression);
+      const callChain = sourcePropertyAccessChain(node.expression);
+      const attributeName = callChain?.at(-1) === "setAttribute" ? sourceStaticPropertyName(node.arguments[0]) : undefined;
+      if (callChain?.at(-1) === "setAttribute" && isForbiddenRuntimeAttributeName(attributeName)) {
         runtimeBoundaryViolations.add(
-          `${path}:${line(node)} form navigation attributes are forbidden; submit only through React handlers`,
+          `${path}:${line(node)} form navigation or document-policy attributes are forbidden at runtime`,
         );
       }
-      if (
-        callChain?.at(-1) === "createElement" &&
-        ts.isStringLiteralLike(node.arguments[0]) &&
-        node.arguments[0].text === "a"
-      ) {
+      if (callChain?.at(-1) === "setAttributeNS") {
         runtimeBoundaryViolations.add(
-          `${path}:${line(node)} programmatic anchor creation is forbidden; use a reviewed JSX link boundary`,
+          `${path}:${line(node)} namespaced document-policy runtime attributes are forbidden`,
         );
       }
+      if (RAW_DOM_MUTATION_METHODS.has(callChain?.at(-1))) {
+        runtimeBoundaryViolations.add(`${path}:${line(node)} raw DOM mutation APIs are forbidden`);
+      }
+      const elementMethod = ["createElement", "cloneElement"].includes(callChain?.at(-1))
+        ? callChain.at(-1)
+        : undefined;
+      if (elementMethod) {
+        runtimeBoundaryViolations.add(
+          `${path}:${line(node)} programmatic document-policy ${elementMethod} is forbidden; use a reviewed JSX boundary`,
+        );
+      }
+      if (["createContextualFragment", "insertAdjacentHTML", "parseHTMLUnsafe", "setHTML", "setHTMLUnsafe", "write", "writeln"].includes(callChain?.at(-1))) {
+        runtimeBoundaryViolations.add(`${path}:${line(node)} raw HTML injection APIs are forbidden`);
+      }
+      if (unreviewedStyleSetPropertyCall(node, callChain, sourceStaticPropertyName)) {
+        runtimeBoundaryViolations.add(`${path}:${line(node)} unreviewed DOM style writes are forbidden`);
+      }
       if (
-        callChain?.join(".") === "Object.assign" &&
-        node.arguments[1] &&
-        ts.isObjectLiteralExpression(node.arguments[1]) &&
-        node.arguments[1].properties.some(
-          (property) =>
-            ts.isPropertyAssignment(property) &&
-            ["action", "target"].includes(declaredPropertyName(property.name)),
-        )
+        isGlobalObjectAssign(callChain, globalNames) &&
+        (objectAssignHasUnreviewedDocumentPolicyWrite(node, sourceStaticPropertyName) ||
+          objectAssignHasUnreviewedStyleWrite(node, sourceStaticPropertyName, sourcePropertyAccessChain))
       ) {
         runtimeBoundaryViolations.add(
-          `${path}:${line(node)} form navigation property writes are forbidden`,
+          `${path}:${line(node)} form navigation or document-policy property writes are forbidden`,
         );
       }
       if (
@@ -510,6 +525,15 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
       recordDynamicExecutionApi(node);
       recordReflectionApi(node);
       recordAsynchronousEscape(node);
+      recordUnsupportedWebkitApi(node);
+      recordDocumentPropertyWrite(node);
+      const handleViolation = domMutationHandleViolation(node, sourcePropertyAccessChain, globalNames); if (handleViolation) runtimeBoundaryViolations.add(`${path}:${line(node)} ${handleViolation}`);
+      const recoveredMethod = recoveredDocumentPolicyMethod(node, sourcePropertyAccessChain);
+      if (recoveredMethod) {
+        runtimeBoundaryViolations.add(
+          `${path}:${line(node)} document-policy method ${recoveredMethod} may not be aliased or recovered`,
+        );
+      }
       const isChainPrefix =
         (ts.isPropertyAccessExpression(node.parent) || ts.isElementAccessExpression(node.parent)) &&
         node.parent.expression === node;
@@ -544,6 +568,15 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
       recordDynamicExecutionApi(node);
       recordReflectionApi(node);
       recordAsynchronousEscape(node);
+      recordUnsupportedWebkitApi(node);
+      recordDocumentPropertyWrite(node);
+      const handleViolation = domMutationHandleViolation(node, sourcePropertyAccessChain, globalNames); if (handleViolation) runtimeBoundaryViolations.add(`${path}:${line(node)} ${handleViolation}`);
+      const recoveredMethod = recoveredDocumentPolicyMethod(node, sourcePropertyAccessChain);
+      if (recoveredMethod) {
+        runtimeBoundaryViolations.add(
+          `${path}:${line(node)} document-policy method ${recoveredMethod} may not be aliased or recovered`,
+        );
+      }
       const isChainPrefix =
         (ts.isPropertyAccessExpression(node.parent) || ts.isElementAccessExpression(node.parent)) &&
         node.parent.expression === node;
@@ -614,6 +647,14 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
     }
     if (
       ts.isIdentifier(node) &&
+      node.text === "structuredClone" &&
+      !isNonReferenceIdentifier(node) &&
+      !isTypeOnly(node)
+    ) {
+      recordUnsupportedWebkitApi(node);
+    }
+    if (
+      ts.isIdentifier(node) &&
       ["open", "submit", "requestSubmit"].includes(node.text) &&
       !isNonReferenceIdentifier(node) &&
       !isTypeOnly(node) &&
@@ -630,24 +671,35 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
     }
     if (ts.isBindingElement(node)) {
       const bindingName = node.propertyName
-        ? declaredPropertyName(node.propertyName)
+        ? ts.isComputedPropertyName(node.propertyName)
+          ? sourceStaticPropertyName(node.propertyName.expression)
+          : declaredPropertyName(node.propertyName)
         : ts.isIdentifier(node.name)
           ? node.name.text
           : undefined;
-      if (["submit", "requestSubmit"].includes(bindingName)) {
+      if (["style", "attributes", "submit", "requestSubmit"].includes(bindingName)) {
         runtimeBoundaryViolations.add(
-          `${path}:${line(node)} programmatic form submission may not be destructured or aliased`,
+          `${path}:${line(node)} DOM mutation handles and form submission may not be destructured or aliased`,
+        );
+      }
+      if (DOCUMENT_POLICY_METHODS.has(bindingName)) {
+        runtimeBoundaryViolations.add(
+          `${path}:${line(node)} document-policy method ${bindingName} may not be destructured or aliased`,
         );
       }
     }
-    if (ts.isBinaryExpression(node) && isAssignmentLeft(node.left)) {
-      const chain = propertyAccessChain(node.left);
-      if (["action", "target"].includes(chain?.at(-1))) {
+    if (
+      (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) &&
+      isWriteTarget(node.parent)
+    ) {
+      const assignmentName = ts.isComputedPropertyName(node.name)
+        ? sourceStaticPropertyName(node.name.expression)
+        : declaredPropertyName(node.name);
+      if (assignmentName === undefined || ["style", "attributes"].includes(assignmentName) || DOCUMENT_POLICY_METHODS.has(assignmentName)) {
         runtimeBoundaryViolations.add(
-          `${path}:${line(node.left)} form navigation property writes are forbidden`,
+          `${path}:${line(node)} document-policy methods may not be recovered through destructuring assignment`,
         );
       }
-      recordBrowserNavigation(node.left);
     }
     if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
       recordJsxSurface(node);
@@ -711,6 +763,7 @@ export function findForbiddenFrontendRuntimeUsage(path, contents) {
   }
   errors.push(...runtimeBoundaryViolations);
   errors.push(...dynamicExecutionViolations);
+  errors.push(...webkitCompatibilityViolations);
   return errors;
 }
 

@@ -1832,11 +1832,10 @@ export function PromptsView({
     boundary?: "first" | "last",
   ) {
     if (!manualReorderEnabled || reorderingIdsRef.current.size > 0) return;
-    const sourceIndex = promptPage.items.findIndex((candidate) => candidate.id === prompt.id);
+    const sourceIndex = promptPage.items.findIndex(candidate => candidate.id === prompt.id);
     if (sourceIndex < 0) return;
     const groupIndices = dragGroupIndices(prompt);
-    const firstIndex = groupIndices[0];
-    const lastIndex = groupIndices.at(-1);
+    const firstIndex = groupIndices[0], lastIndex = groupIndices.slice(-1)[0];
     if (firstIndex === undefined || lastIndex === undefined) return;
     const targetIndex = Math.min(lastIndex, Math.max(firstIndex, requestedIndex));
     if (!boundary && targetIndex === sourceIndex) return;
@@ -1845,7 +1844,7 @@ export function PromptsView({
     const nextItems = [...previousItems];
     nextItems.splice(sourceIndex, 1);
     nextItems.splice(targetIndex, 0, prompt);
-    const positionedIndex = nextItems.findIndex((candidate) => candidate.id === prompt.id);
+    const positionedIndex = nextItems.findIndex(candidate => candidate.id === prompt.id);
     const previous = nextItems[positionedIndex - 1];
     const next = nextItems[positionedIndex + 1];
     const previousId = boundary ? null : previous?.pinned === prompt.pinned ? previous.id : null;
@@ -1940,7 +1939,7 @@ export function PromptsView({
         let insertionIndex = candidateIndex + (before ? 0 : 1);
         if (insertionIndex > session.sourceIndex) insertionIndex -= 1;
         const group = dragGroupIndices(prompt);
-        targetIndex = Math.min(group.at(-1) ?? session.sourceIndex, Math.max(group[0] ?? session.sourceIndex, insertionIndex));
+        targetIndex = Math.min(group.slice(-1)[0] ?? session.sourceIndex, Math.max(group[0] ?? session.sourceIndex, insertionIndex));
       }
     }
 
@@ -2044,8 +2043,7 @@ export function PromptsView({
     }
     if (active?.id !== prompt.id || active.input !== "keyboard") return;
     const group = dragGroupIndices(prompt);
-    const firstIndex = group[0] ?? sourceIndex;
-    const lastIndex = group.at(-1) ?? sourceIndex;
+    const firstIndex = group[0] ?? sourceIndex, lastIndex = group.slice(-1)[0] ?? sourceIndex;
     let targetIndex = active.targetIndex;
     if (event.key === "ArrowLeft" || event.key === "ArrowUp") targetIndex -= 1;
     else if (event.key === "ArrowRight" || event.key === "ArrowDown") targetIndex += 1;
@@ -2373,7 +2371,7 @@ export function PromptsView({
                       <button
                         aria-expanded={moveMenuId === prompt.id}
                         aria-label={tr("dragOptions", { title: prompt.title })}
-                        onClick={() => setMoveMenuId((current) => current === prompt.id ? "" : prompt.id)}
+                        onClick={() => setMoveMenuId(current => current === prompt.id ? "" : prompt.id)}
                         type="button"
                       ><Icon name="more" /></button>
                       {moveMenuId === prompt.id && <div>
@@ -2389,7 +2387,7 @@ export function PromptsView({
                           disabled={!manualReorderEnabled}
                           onClick={() => {
                             setMoveMenuId("");
-                            void reorderPromptToIndex(prompt, groupIndices.at(-1) ?? promptIndex, "last");
+                            void reorderPromptToIndex(prompt, groupIndices.slice(-1)[0] ?? promptIndex, "last");
                           }}
                           type="button"
                         >{tr("moveLast")}</button>
