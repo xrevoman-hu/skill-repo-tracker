@@ -138,7 +138,7 @@ export class DemoPromptTransport {
         .map(({ index }) => index);
       insertAt = request.boundary === "first"
         ? (groupIndices[0] ?? 0)
-        : ((groupIndices.at(-1) ?? (withoutCurrent.length - 1)) + 1);
+        : ((groupIndices[groupIndices.length - 1] ?? (withoutCurrent.length - 1)) + 1);
     } else {
       if (!request.previousId && !request.nextId) throw new Error("Prompt reorder needs a target gap.");
       const previous = request.previousId ? this.requirePrompt(request.previousId) : null;
@@ -321,7 +321,7 @@ export class DemoPromptTransport {
       } else if (request.conflictStrategy === "keep-local") {
         keptLocal += 1;
       } else if (request.conflictStrategy === "overwrite") {
-        this.prompts[existingIndex] = candidate;
+        this.prompts.splice(existingIndex, 1, candidate);
         overwritten += 1;
       } else {
         imported.push({ ...candidate, id: `${candidate.id}-import-${this.nextPromptId++}` });
@@ -465,5 +465,11 @@ function byteLength(value: string) {
 }
 
 function clone<T>(value: T): T {
-  return structuredClone(value);
+  if (Array.isArray(value)) return value.map((entry) => clone(entry)) as T;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value);
+    const clonedEntries = entries.map(([key, entry]) => [key, clone(entry)]);
+    return Object.fromEntries(clonedEntries) as T;
+  }
+  return value;
 }

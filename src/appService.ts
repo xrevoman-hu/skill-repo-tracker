@@ -378,6 +378,7 @@ export class DemoAppService implements AppService {
       return Promise.reject(new Error("Repository already exists."));
     }
     const isSkillRepo = name.includes("skill") || name.includes("spec");
+    const nameParts = name.split("/");
     const repositoryId = `demo:${name}@${request.refName}`;
     const repository: UiRepository = {
       id: repositoryId,
@@ -395,7 +396,7 @@ export class DemoAppService implements AppService {
       backupPath: `~/SkillRepoBackups/${name}`,
       snapshotTime: "Never",
       recognizedSkills: isSkillRepo
-        ? [{ name: name.split("/").at(-1) || name, version: "v0.1.0" }]
+        ? [{ name: nameParts[nameParts.length - 1] || name, version: "v0.1.0" }]
         : [],
       sourceType: "github",
       note: request.note,
@@ -533,7 +534,13 @@ function normalizeDirectory(value: string) {
 }
 
 function clone<T>(value: T): T {
-  return structuredClone(value);
+  if (Array.isArray(value)) return value.map((entry) => clone(entry)) as T;
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value);
+    const clonedEntries = entries.map(([key, entry]) => [key, clone(entry)]);
+    return Object.fromEntries(clonedEntries) as T;
+  }
+  return value;
 }
 
 function createDeterministicDemoClock(): () => Date {

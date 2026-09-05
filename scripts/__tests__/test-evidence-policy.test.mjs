@@ -8,6 +8,15 @@ import { fileURLToPath } from "node:url";
 
 import { findForbiddenTestModifiers } from "../test-evidence-policy.mjs";
 
+function cleanNodeTestEnvironment(environment = process.env) {
+  const {
+    NODE_OPTIONS: _nodeOptions,
+    NODE_TEST_CONTEXT: _nodeTestContext,
+    ...cleanEnvironment
+  } = environment;
+  return cleanEnvironment;
+}
+
 function runVitestMutation(registrations) {
   const directory = mkdtempSync(
     join(realpathSync(tmpdir()), "skill-repo-tracker-vitest-mutation-"),
@@ -17,7 +26,7 @@ function runVitestMutation(registrations) {
   const vitestCli = fileURLToPath(
     new URL("../../node_modules/vitest/vitest.mjs", import.meta.url),
   );
-  const { NODE_TEST_CONTEXT: _nodeTestContext, ...cleanEnvironment } = process.env;
+  const cleanEnvironment = cleanNodeTestEnvironment();
   writeFileSync(
     pathname,
     [`import { test } from ${JSON.stringify(vitestModule)};`, ...registrations].join("\n"),
@@ -34,14 +43,17 @@ function runVitestMutation(registrations) {
 }
 
 test("throwing generator test bodies cannot masquerade as runner-level passing evidence", () => {
-  const { NODE_TEST_CONTEXT: _nodeTestContext, ...cleanEnvironment } = process.env;
+  const cleanEnvironment = cleanNodeTestEnvironment({
+    ...process.env,
+    NODE_OPTIONS: "--test-reporter=spec",
+  });
   const mutation = [
     'import test from "node:test";',
     'test("false green", function* () { throw new Error("body must execute"); });',
   ].join("\n");
   const runner = spawnSync(
     process.execPath,
-    ["--input-type=module", "--eval", mutation],
+    ["--test-reporter=tap", "--input-type=module", "--eval", mutation],
     { encoding: "utf8", env: cleanEnvironment },
   );
 
@@ -60,10 +72,10 @@ test("test code cannot terminate the runner before later failures execute", () =
     "process.exit(0);",
     'test("must fail", () => { throw new Error("must execute"); });',
   ].join("\n");
-  const { NODE_TEST_CONTEXT: _nodeTestContext, ...cleanEnvironment } = process.env;
+  const cleanEnvironment = cleanNodeTestEnvironment();
   const runner = spawnSync(
     process.execPath,
-    ["--input-type=module", "--eval", mutation],
+    ["--test-reporter=tap", "--input-type=module", "--eval", mutation],
     { encoding: "utf8", env: cleanEnvironment },
   );
 
@@ -261,7 +273,7 @@ test("each data rejects spreads and omitted elements for every registration API"
 });
 
 test("suite callbacks cannot return before registering a throwing test", () => {
-  const { NODE_TEST_CONTEXT: _nodeTestContext, ...cleanEnvironment } = process.env;
+  const cleanEnvironment = cleanNodeTestEnvironment();
   const mutation = [
     'import { describe, test } from "node:test";',
     'describe("suite", () => {',
@@ -272,7 +284,7 @@ test("suite callbacks cannot return before registering a throwing test", () => {
   ].join("\n");
   const runner = spawnSync(
     process.execPath,
-    ["--input-type=module", "--eval", mutation],
+    ["--test-reporter=tap", "--input-type=module", "--eval", mutation],
     { encoding: "utf8", env: cleanEnvironment },
   );
 

@@ -46,10 +46,12 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   JavaScript/TypeScript 可执行代码只允许位于 `src/`、`scripts/`、`e2e/` 与三份精确根配置，
   治理工具的本地 module import 也不得逃出 `scripts/` 的预算和 trusted-review 范围。
   治理脚本只允许沿 canonical 顶层静态 import/export 执行图可达；`eval`、`Function`、VM、
-  dynamic loader、dead-shell/注释中的路径都不能制造入口或执行未建档 payload。
-  Vite `publicDir` 必须关闭，`index.html` 必须保持唯一精确入口；`public/` 和 `src/` 中未登记的
-  资产扩展会失败；外部 PostCSS 配置与 package `postcss` 字段被禁止，构建只用精确 inline 空
-  plugin 清单。生产前端不得用 `eval`、`Function` 或 `WebAssembly` 执行 raw/URL payload；
+  dynamic loader 与 dead-shell/注释不得制造入口或执行未建档 payload。
+  Vite `publicDir` 必须关闭，`index.html` 是唯一精确入口；`public/`/`src/` 未登记资产失败；
+  外部 PostCSS 配置及 package `postcss` 字段禁用，构建仅用精确 inline 空 plugin。JS/CSS
+  目标 `safari15` 不含 polyfill；Safari 15.4 API 必须替换或由入口兼容层先安装；CSS
+  渐进增强须保留 Safari 15 focus fallback。sourcemap 关闭；bundle gate 拒绝 map、
+  远程/内联脚本、meta refresh/CSP 冲突。生产禁用 eval/Function/WebAssembly 执行 raw/URL payload；
   新可执行资产类型必须先纳入 module ownership、coverage、预算和负向测试。
 - Coverage：`npm run coverage:check`；基线只能上调，PR 生产代码 changed lines >=80%、
   branches >=70%；测试文件和 coverage 配置明确排除的入口不计入 changed-lines 分母。

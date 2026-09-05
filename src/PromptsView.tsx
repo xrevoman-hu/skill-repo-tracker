@@ -1836,7 +1836,7 @@ export function PromptsView({
     if (sourceIndex < 0) return;
     const groupIndices = dragGroupIndices(prompt);
     const firstIndex = groupIndices[0];
-    const lastIndex = groupIndices.at(-1);
+    const lastIndex = groupIndices.pop();
     if (firstIndex === undefined || lastIndex === undefined) return;
     const targetIndex = Math.min(lastIndex, Math.max(firstIndex, requestedIndex));
     if (!boundary && targetIndex === sourceIndex) return;
@@ -1940,7 +1940,7 @@ export function PromptsView({
         let insertionIndex = candidateIndex + (before ? 0 : 1);
         if (insertionIndex > session.sourceIndex) insertionIndex -= 1;
         const group = dragGroupIndices(prompt);
-        targetIndex = Math.min(group.at(-1) ?? session.sourceIndex, Math.max(group[0] ?? session.sourceIndex, insertionIndex));
+        targetIndex = Math.min(Math.max(group[0] ?? session.sourceIndex, insertionIndex), group.pop() ?? session.sourceIndex);
       }
     }
 
@@ -2045,7 +2045,7 @@ export function PromptsView({
     if (active?.id !== prompt.id || active.input !== "keyboard") return;
     const group = dragGroupIndices(prompt);
     const firstIndex = group[0] ?? sourceIndex;
-    const lastIndex = group.at(-1) ?? sourceIndex;
+    const lastIndex = group.pop() ?? sourceIndex;
     let targetIndex = active.targetIndex;
     if (event.key === "ArrowLeft" || event.key === "ArrowUp") targetIndex -= 1;
     else if (event.key === "ArrowRight" || event.key === "ArrowDown") targetIndex += 1;
@@ -2389,7 +2389,7 @@ export function PromptsView({
                           disabled={!manualReorderEnabled}
                           onClick={() => {
                             setMoveMenuId("");
-                            void reorderPromptToIndex(prompt, groupIndices.at(-1) ?? promptIndex, "last");
+                            void reorderPromptToIndex(prompt, groupIndices.pop() ?? promptIndex, "last");
                           }}
                           type="button"
                         >{tr("moveLast")}</button>

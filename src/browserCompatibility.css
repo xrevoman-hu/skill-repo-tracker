@@ -1,0 +1,45 @@
+.table-frame > .empty-state {
+  margin: auto;
+  min-height: 100%;
+  place-content: center;
+}
+
+.prompt-card.is-drag-placeholder {
+  background: var(--prompt-accent-soft);
+}
+
+.prompt-import-success {
+  background: var(--prompt-accent-soft);
+}
+
+.prompt-inline-error {
+  background: var(--prompt-surface-raised);
+}
+
+@supports (background: color-mix(in srgb, red, blue)) {
+  .prompt-tag:nth-child(3n + 2) {
+    background: color-mix(in srgb, var(--prompt-accent-soft), #be8cff 24%);
+  }
+  .prompt-tag:nth-child(3n) {
+    background: color-mix(in srgb, var(--prompt-accent-soft), #65c889 24%);
+  }
+  .prompt-card.is-drag-placeholder {
+    background: color-mix(in srgb, var(--prompt-accent-soft), transparent 45%);
+  }
+  .prompt-inline-error {
+    background: color-mix(in srgb, var(--prompt-danger), transparent 88%);
+  }
+}
+
+@supports not selector(:focus-visible) {
+  button:focus,
+  summary:focus,
+  input:focus,
+  select:focus,
+  textarea:focus,
+  [role="button"]:focus,
+  [tabindex]:focus {
+    outline: 2px solid #2563eb !important;
+    outline-offset: 2px;
+  }
+}
