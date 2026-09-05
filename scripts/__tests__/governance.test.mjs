@@ -58,7 +58,7 @@ const CRITICAL_PACKAGE_SCRIPTS = {
   test: "vitest run",
   "test:scripts": "node --test scripts/__tests__/*.test.mjs",
   "test:e2e": "playwright test",
-  "test:coverage": "vitest run --coverage",
+  "test:coverage": "vitest run --coverage --no-file-parallelism",
   "coverage:rust": "node scripts/rust-coverage.mjs",
   "coverage:check":
     "npm run test:coverage && node scripts/check-coverage.mjs frontend && npm run coverage:rust && node scripts/check-coverage.mjs rust",
@@ -326,6 +326,7 @@ test("critical package scripts are exact and repository boundaries enforce them"
   for (const [name, replacement] of [
     ["verify", "true"],
     ["coverage:check", "npm run test:coverage || true"],
+    ["test:coverage", "vitest run --coverage"],
     ["test:e2e", "playwright test || true"],
     ["release:verify", "node scripts/release-verify.mjs || true"],
   ]) {

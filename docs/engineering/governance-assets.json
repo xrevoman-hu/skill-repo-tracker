@@ -293,6 +293,10 @@
           {
             "path": "scripts/__tests__/coverage-policy.test.mjs",
             "selector": "coverage baseline protocol owns both live runs and rejects external snapshots"
+          },
+          {
+            "path": "scripts/__tests__/governance.test.mjs",
+            "selector": "critical package scripts are exact and repository boundaries enforce them"
           }
         ]
       }
