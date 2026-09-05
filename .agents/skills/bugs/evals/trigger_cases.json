@@ -1,0 +1,14 @@
+{
+  "recommended_threshold": 0.33,
+  "should_trigger": [
+    "排查 Skill Repo Tracker 刷新竞态，解释旧请求覆盖新数据。",
+    "Investigate regressions and failing CI caused by a product defect."
+  ],
+  "should_not_trigger": [
+    "翻译这段 README。",
+    "只做普通依赖升级，不修复代码。"
+  ],
+  "near_neighbor": [
+    "纯功能设计：新增资源分组。"
+  ]
+}

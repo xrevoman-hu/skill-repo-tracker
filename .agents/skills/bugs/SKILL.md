@@ -5,6 +5,9 @@ description: 修复 Skill Repo Tracker 的 Bug、回归、竞态、覆盖率假�
 
 # Bug 修复与证据
 
+本包的仓库适配、owner、review cadence、output contract、rollback boundary 与评测限制
+见 [治理说明](references/governance.md)；`agents/`、`evals/`、`reports/` 分别保存接口、案例和证据。
+
 把故障转为能够持续发现同类错误的证据。用简体中文说明结论，保留代码符号原文。
 本 Skill 是仓库规则的操作索引，不替代当前 tracked Rule、ADR 或用户授权。
 

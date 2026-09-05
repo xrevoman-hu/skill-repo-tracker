@@ -1,0 +1,7 @@
+{
+  "schema_version": "1.0",
+  "capabilities": {},
+  "scope": "This package contains instructions and evaluation data, with no bundled executable scripts. Empty capabilities is not authorization for agent tool calls.",
+  "host_enforcement": "Repository rules, user authorization and host sandbox permissions remain authoritative; release Environment approvals remain manual.",
+  "missing_evidence": ["Target-client native enforcement"]
+}

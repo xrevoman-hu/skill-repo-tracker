@@ -5,6 +5,9 @@ description: 执行或审查 Skill Repo Tracker 的 macOS 发布、发布前验�
 
 # macOS 发布证据链
 
+本包的仓库适配、owner、review cadence、output contract、rollback boundary 与评测限制
+见 [治理说明](references/governance.md)；`agents/`、`evals/`、`reports/` 分别保存接口、案例和证据。
+
 用简体中文沟通。把准备、local 验收、公开发布和 remote 实物验收分别记录；任何一层
 通过都不能代替后续层。本 Skill 不复制发布脚本，也不提供绕过 Environment 的捷径。
 

@@ -5,6 +5,9 @@ description: 审查 Skill Repo Tracker 的界面、design tokens、组件复用�
 
 # 设计系统审查
 
+本包的仓库适配、owner、review cadence、output contract、rollback boundary 与评测限制
+见 [治理说明](references/governance.md)；`agents/`、`evals/`、`reports/` 分别保存接口、案例和证据。
+
 以用户完成任务的行为和仓库现有视觉语言为依据。默认只读；用户授权修复时再做最小编辑。
 用简体中文报告，区分源代码推断、浏览器实测和 macOS 原生实测。
 

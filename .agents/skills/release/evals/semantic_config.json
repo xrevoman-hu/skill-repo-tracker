@@ -1,0 +1,27 @@
+{
+  "positive_concepts": {
+    "job": {
+      "weight": 1,
+      "phrases": [
+        "发布",
+        "release readiness",
+        "DMG",
+        "artifact provenance"
+      ]
+    }
+  },
+  "negative_concepts": {
+    "outside": {
+      "weight": 1,
+      "phrases": [
+        "解释术语",
+        "翻译",
+        "普通依赖升级"
+      ],
+      "exclusive": true
+    }
+  },
+  "fallback_positive_concepts": [
+    "job"
+  ]
+}
