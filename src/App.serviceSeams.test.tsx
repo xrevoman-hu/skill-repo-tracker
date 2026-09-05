@@ -14,6 +14,7 @@ describe("App service seams", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.clearAllMocks();
     vi.restoreAllMocks();
     window.history.replaceState(null, "", "/");
   });

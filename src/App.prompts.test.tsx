@@ -6,6 +6,7 @@ import { App, getCopy } from "./App";
 import { api } from "./api";
 
 afterEach(() => {
+  vi.clearAllMocks();
   vi.restoreAllMocks();
   window.history.pushState({}, "", "/");
 });
