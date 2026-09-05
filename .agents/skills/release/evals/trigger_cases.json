@@ -1,0 +1,14 @@
+{
+  "recommended_threshold": 0.33,
+  "should_trigger": [
+    "检查 macOS 发布前验收与 DMG 签名。",
+    "Review release readiness and artifact provenance."
+  ],
+  "should_not_trigger": [
+    "翻译用户手册。",
+    "普通依赖升级到指定版本。"
+  ],
+  "near_neighbor": [
+    "解释术语：什么是 release readiness？"
+  ]
+}

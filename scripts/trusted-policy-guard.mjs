@@ -26,6 +26,7 @@ const TRUSTED_EVENT_ACTIONS = new Set([
   "unlabeled",
 ]);
 const CRITICAL_PREFIXES = Object.freeze([
+  ".agents/skills/",
   ".github/workflows/",
   ".github/actions/",
   ".cargo/",

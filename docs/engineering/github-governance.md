@@ -16,7 +16,7 @@ API 数据处理。
 普通产品代码 PR 不需要额外 label。guard 会从同一 trusted base checkout 严格读取
 `governance-assets.json`，把 active asset 以及 active/retiring Invariant 的全部 evidence 路径动态
 加入 critical 集；catalog 缺失、结构非法或含危险路径一律失败。若变更触及这些 evidence、
-`scripts/`、workflow、Rules、ADR、测试/编译配置、Tauri 权限或其他治理事实源，只有当前 head
+`.agents/skills/`、`scripts/`、workflow、Rules、ADR、测试/编译配置、Tauri 权限或其他治理事实源，只有当前 head
 上明确的 `governance-reviewed` labeled event 才通过。测试 selector 即使不变，只要 evidence
 文件内容或 rename 前文件名变化也必须复审；guard 始终不读取 PR 文件内容。`synchronize`、
 `edited`、`reopened` 与 `unlabeled` 会重新评估并使原生 job 失败，无关 label event 不能代替

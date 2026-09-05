@@ -6,6 +6,7 @@ import { parse as parseYaml } from "yaml";
 
 import {
   CHECK_NAME,
+  REVIEW_LABEL,
   evaluateTrustedPolicy,
   extractTrustedGovernanceEvidencePaths,
   isCriticalGovernancePath,
@@ -203,6 +204,9 @@ test("ordinary product changes pass without the governance review label", () => 
 
 test("every critical governance fact source and every script is protected", () => {
   for (const path of [
+    ".agents/skills/bugs/SKILL.md",
+    ".agents/skills/release/security/permission_policy.json",
+    ".agents/skills/design-system-review/evals/evals.json",
     ".github/actions/setup/action.yml",
     ".github/workflows/trusted-policy.yml",
     ".cargo/config.toml",
@@ -241,6 +245,20 @@ test("every critical governance fact source and every script is protected", () =
     "docs/engineering/governance-assets.json",
   ]) {
     assert.equal(isCriticalGovernancePath(path), true, path);
+  }
+});
+
+test("skill changes and renames require review on the current head", () => {
+  for (const file of [
+    { filename: ".agents/skills/bugs/SKILL.md" },
+    { filename: "docs/moved-skill.md", previous_filename: ".agents/skills/release/SKILL.md" },
+  ]) {
+    const input = { changedFiles: 1, files: [file], labels: [], eventAction: "opened" };
+    assert.ok(evaluateTrustedPolicy(input).errors.length > 0);
+    assert.ok(evaluateTrustedPolicy({ ...input, labels: [REVIEW_LABEL], eventAction: "synchronize" }).errors.length > 0);
+    assert.deepEqual(evaluateTrustedPolicy({
+      ...input, labels: [REVIEW_LABEL], eventAction: "labeled", eventLabel: REVIEW_LABEL,
+    }).errors, []);
   }
 });
 

@@ -1,0 +1,27 @@
+{
+  "positive_concepts": {
+    "job": {
+      "weight": 1,
+      "phrases": [
+        "Bug",
+        "regressions",
+        "竞态",
+        "覆盖率假绿"
+      ]
+    }
+  },
+  "negative_concepts": {
+    "outside": {
+      "weight": 1,
+      "phrases": [
+        "纯功能设计",
+        "普通依赖升级",
+        "翻译"
+      ],
+      "exclusive": true
+    }
+  },
+  "fallback_positive_concepts": [
+    "job"
+  ]
+}

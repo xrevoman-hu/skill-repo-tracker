@@ -1,0 +1,14 @@
+{
+  "recommended_threshold": 0.33,
+  "should_trigger": [
+    "审查界面键盘焦点和可访问性，保持只读。",
+    "Review design tokens and UI consistency."
+  ],
+  "should_not_trigger": [
+    "完成数据库迁移。",
+    "检查发布签名。"
+  ],
+  "near_neighbor": [
+    "从零重设计一个新的网页。"
+  ]
+}

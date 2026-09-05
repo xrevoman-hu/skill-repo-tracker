@@ -1,0 +1,27 @@
+{
+  "positive_concepts": {
+    "job": {
+      "weight": 1,
+      "phrases": [
+        "界面",
+        "design tokens",
+        "可访问性",
+        "UI consistency"
+      ]
+    }
+  },
+  "negative_concepts": {
+    "outside": {
+      "weight": 1,
+      "phrases": [
+        "重设计",
+        "发布签名",
+        "数据库迁移"
+      ],
+      "exclusive": true
+    }
+  },
+  "fallback_positive_concepts": [
+    "job"
+  ]
+}

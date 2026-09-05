@@ -1,0 +1,26 @@
+{
+  "name": "release",
+  "version": "0.1.0",
+  "license": "MIT",
+  "owner": "xrevoman-hu",
+  "updated_at": "2026-09-06",
+  "review_due": "2026-10-06",
+  "review_cadence": "per-release",
+  "status": "experimental",
+  "maturity_tier": "governed",
+  "lifecycle_stage": "governed",
+  "context_budget_tier": "governed",
+  "target_platforms": [
+    "openai"
+  ],
+  "factory_components": [
+    "agents",
+    "evals",
+    "references",
+    "reports"
+  ],
+  "repository_bound": true,
+  "output_contract": "先给不超过200字的结论和下一步，附可核对证据；不同验收层不可替代。",
+  "rollback_boundary": "仅通过当前PR分支普通提交回退本Skill；不得重写main、历史tag/Release/fixture或用户未提交工作。",
+  "evidence_status": "missing evidence: target-client native enforcement, token telemetry and end-to-end execution evals"
+}

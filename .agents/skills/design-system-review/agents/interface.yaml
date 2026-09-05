@@ -1,0 +1,19 @@
+interface:
+  display_name: "设计系统审查"
+  short_description: "Skill Repo Tracker 设计系统审查"
+  default_prompt: "Use $design-system-review in the explicitly selected Skill Repo Tracker checkout."
+compatibility:
+  canonical_format: "agent-skills"
+  adapter_targets: ["openai"]
+  activation:
+    mode: "manual"
+    paths: []
+  execution:
+    context: "inline"
+    shell: "bash"
+  trust:
+    source_tier: "local"
+    remote_inline_execution: "forbid"
+    remote_metadata_policy: "allow-metadata-only"
+  degradation:
+    openai: "Repository-bound instructions; host permissions remain authoritative; metadata is not native enforcement."
