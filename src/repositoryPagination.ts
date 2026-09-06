@@ -47,6 +47,7 @@ export type RepositoryPageOptions<T> = {
 
 export type RepositoryPage<T> = {
   items: T[];
+  filteredItems: T[];
   page: number;
   pageSize: number;
   totalItems: number;
@@ -62,12 +63,13 @@ export function isRepositorySelectable(repository: SelectableRepository) {
   return repository.sourceType === "github";
 }
 
-export function pageSelectionState(
+export function repositorySelectionState(
   repositories: SelectableRepository[],
   selectedIds: string[],
 ) {
   const selectableIds = repositories.filter(isRepositorySelectable).map((repo) => repo.id);
-  const selectedCount = selectableIds.filter((id) => selectedIds.includes(id)).length;
+  const selectedIdSet = new Set(selectedIds);
+  const selectedCount = selectableIds.filter((id) => selectedIdSet.has(id)).length;
 
   return {
     checked: selectableIds.length > 0 && selectedCount === selectableIds.length,
@@ -76,17 +78,17 @@ export function pageSelectionState(
   };
 }
 
-export function togglePageSelection(
+export function toggleRepositorySelection(
   repositories: SelectableRepository[],
   selectedIds: string[],
   checked: boolean,
 ) {
-  const pageIds = repositories.filter(isRepositorySelectable).map((repo) => repo.id);
-  const pageIdSet = new Set(pageIds);
-  const selectedOutsidePage = selectedIds.filter((id) => !pageIdSet.has(id));
-  if (!checked) return selectedOutsidePage;
+  const scopeIds = repositories.filter(isRepositorySelectable).map((repo) => repo.id);
+  const scopeIdSet = new Set(scopeIds);
+  const selectedOutsideScope = selectedIds.filter((id) => !scopeIdSet.has(id));
+  if (!checked) return selectedOutsideScope;
 
-  return [...selectedOutsidePage, ...pageIds];
+  return [...new Set([...selectedOutsideScope, ...scopeIds])];
 }
 
 export function buildRepositoryPage<T extends { id: string }>(
@@ -103,6 +105,7 @@ export function buildRepositoryPage<T extends { id: string }>(
 
   return {
     items: sorted.slice(start, start + pageSize),
+    filteredItems: sorted,
     page,
     pageSize,
     totalItems: sorted.length,

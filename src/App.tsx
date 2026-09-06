@@ -37,15 +37,16 @@ import { GitHubWorkbench } from "./GitHubWorkbench";
 import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
 import { PluginInspector, PluginsView } from "./PluginsView";
 import { PromptsView } from "./PromptsView";
+import { RepositorySelectAll } from "./RepositorySelectAll";
 import type { PromptExportKind, PromptLeaveContext } from "./PromptsView";
 import { createPromptLibraryApi } from "./promptLibraryAdapter";
 import {
   REPOSITORY_PAGE_SIZES,
   buildRepositoryPage,
   isRepositorySelectable,
-  pageSelectionState,
+  repositorySelectionState,
   repositoryPaginationReducer,
-  togglePageSelection,
+  toggleRepositorySelection,
 } from "./repositoryPagination";
 import { refreshStaleSkillConflict } from "./skillConflictRefresh";
 import { latestRepositoryCheck } from "./repositoryFreshness";
@@ -76,7 +77,8 @@ type RepositoriesViewProps = {
   repos: UiRepository[];
   selectedRepo?: UiRepository | null;
   selectedRows: string[];
-  selectAllVisible: (checked: boolean) => void;
+  selectionState: ReturnType<typeof repositorySelectionState>;
+  selectAllFiltered: (checked: boolean) => void;
   toggleRow: (repoId: string) => void;
   setSelectedRepoId: (repoId: string) => void;
   setInspectorRepoId: (repoId: string) => void;
@@ -309,6 +311,7 @@ const COPY = {
     backupSelected: "备份选中",
     backupSelectedCount: "备份选中（{count}）",
     selectedOnOtherPages: "其他页 {count} 条",
+    selectAllFilteredRepositories: "全选当前筛选结果（跨所有页）",
     clearSelection: "清空选择",
     addRepository: "添加仓库",
     settings: "设置",
@@ -752,6 +755,7 @@ const COPY = {
     backupSelected: "Backup Selected",
     backupSelectedCount: "Backup Selected ({count})",
     selectedOnOtherPages: "{count} selected on other pages",
+    selectAllFilteredRepositories: "Select all filtered repositories across all pages",
     clearSelection: "Clear selection",
     addRepository: "Add Repository",
     settings: "Settings",
@@ -2113,7 +2117,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       }),
     [repositories, language, search, repoContentSearch, repoFilter, repoSort, repoPagination],
   );
-  const filteredRepos = repositoryPage.items;
+  const pagedRepos = repositoryPage.items;
 
   useEffect(() => {
     dispatchRepoPagination({ type: "criteria-changed" });
@@ -2253,8 +2257,8 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     );
   }
 
-  function selectAllVisible(checked: boolean) {
-    setSelectedRows((rows) => togglePageSelection(filteredRepos, rows, checked));
+  function selectAllFiltered(checked: boolean) {
+    setSelectedRows((rows) => toggleRepositorySelection(repositoryPage.filteredItems, rows, checked));
   }
 
   async function checkAllRepos() {
@@ -3650,7 +3654,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
             setModal={setModal}
             openAddRepoModal={openAddRepoModal}
             selectedRows={selectedRows}
-            currentRepositoryPageIds={filteredRepos.map((repository) => repository.id)}
+            currentRepositoryPageIds={pagedRepos.map((repository) => repository.id)}
             clearSelectedRows={() => setSelectedRows([])}
             repositories={repositories}
             skills={skills}
@@ -3676,10 +3680,11 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         >
           {activeTab === "repositories" && (
             <RepositoriesView
-              repos={filteredRepos}
+              repos={pagedRepos}
               selectedRepo={inspectorRepo}
               selectedRows={selectedRows}
-              selectAllVisible={selectAllVisible}
+              selectionState={repositorySelectionState(repositoryPage.filteredItems, selectedRows)}
+              selectAllFiltered={selectAllFiltered}
               toggleRow={toggleRow}
               setSelectedRepoId={setSelectedRepoId}
               setInspectorRepoId={setInspectorRepoId}
@@ -4336,7 +4341,8 @@ export function RepositoriesView({
   repos,
   selectedRepo,
   selectedRows,
-  selectAllVisible,
+  selectionState,
+  selectAllFiltered,
   toggleRow,
   setSelectedRepoId,
   setInspectorRepoId,
@@ -4365,19 +4371,11 @@ export function RepositoriesView({
     ["never", t("neverBacked")],
     ["failed", t("checkFailed")],
   ];
-  const pageSelection = pageSelectionState(repos, selectedRows);
-  const pageSelectionRef = useRef<HTMLInputElement | null>(null);
   const rangeStart = totalItems === 0 ? 0 : (page - 1) * pageSize + 1;
   const rangeEnd = totalItems === 0 ? 0 : Math.min(totalItems, page * pageSize);
   const filteredSuffix = totalItems === allItemsTotal
     ? ""
     : formatCopy(t("paginationFilteredSuffix"), { total: allItemsTotal });
-
-  useEffect(() => {
-    if (pageSelectionRef.current) {
-      pageSelectionRef.current.indeterminate = pageSelection.mixed;
-    }
-  }, [pageSelection.mixed]);
 
   function toggleSort(key: RepositorySort["key"]) {
     setRepoSort((current) => ({
@@ -4414,14 +4412,10 @@ export function RepositoriesView({
             <thead>
               <tr>
                 <th className="select-cell">
-                  <input
-                    aria-label={t("allRepositories")}
-                    aria-checked={pageSelection.mixed ? "mixed" : pageSelection.checked}
-                    checked={pageSelection.checked}
-                    disabled={pageSelection.selectableCount === 0}
-                    onChange={(event) => selectAllVisible(event.target.checked)}
-                    ref={pageSelectionRef}
-                    type="checkbox"
+                  <RepositorySelectAll
+                    label={t("selectAllFilteredRepositories")}
+                    state={selectionState}
+                    onChange={selectAllFiltered}
                   />
                 </th>
                 <th>

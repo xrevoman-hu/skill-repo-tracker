@@ -4,9 +4,9 @@ import {
   REPOSITORY_PAGE_SIZES,
   buildRepositoryPage,
   normalizeRepositoryPageSize,
-  pageSelectionState,
+  repositorySelectionState,
   repositoryPaginationReducer,
-  togglePageSelection,
+  toggleRepositorySelection,
 } from "./repositoryPagination";
 
 describe("buildRepositoryPage", () => {
@@ -81,6 +81,7 @@ describe("repository page bounds", () => {
 
     expect(result.page).toBe(3);
     expect(result.items.map((repo) => repo.id)).toEqual(["repo-31"]);
+    expect(result.filteredItems).toEqual(repositories);
   });
 
   it("splits 53 repositories into 15, 15, 15, and 8 rows", () => {
@@ -109,16 +110,16 @@ describe("repository page selection", () => {
     ];
     const selected = ["remote-from-page-one", "remote-a"];
 
-    expect(pageSelectionState(page, selected)).toEqual({
+    expect(repositorySelectionState(page, selected)).toEqual({
       checked: false,
       mixed: true,
       selectableCount: 2,
     });
-    expect(togglePageSelection(page, selected, true)).toEqual([
+    expect(toggleRepositorySelection(page, selected, true)).toEqual([
       "remote-from-page-one",
       "remote-a",
       "remote-c",
     ]);
-    expect(togglePageSelection(page, selected, false)).toEqual(["remote-from-page-one"]);
+    expect(toggleRepositorySelection(page, selected, false)).toEqual(["remote-from-page-one"]);
   });
 });

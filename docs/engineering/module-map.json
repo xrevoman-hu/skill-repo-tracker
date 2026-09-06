@@ -149,7 +149,7 @@
         "docs/adr/0004-foreground-scheduling.md",
         "docs/adr/0007-staged-modularization.md"
       ],
-      "paths": ["src/App.tsx", "src/styles.css"]
+      "paths": ["src/App.tsx", "src/RepositorySelectAll.tsx", "src/styles.css"]
     },
     {
       "id": "frontend-github-view",
