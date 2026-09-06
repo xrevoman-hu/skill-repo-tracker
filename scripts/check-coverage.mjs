@@ -4,7 +4,9 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import ts from "typescript";
+import { isProbablyExecutableSource } from "./coverage-source-lines.mjs";
+import { createFrontendLineEvidence } from "./frontend-coverage-evidence.mjs";
+export { isProbablyExecutableSource } from "./coverage-source-lines.mjs";
 
 import {
   classifyRustCfgAttribute,
@@ -292,65 +294,6 @@ function rustSummary() {
   return summarizeLcov(parseLcov(resolve(ROOT, "coverage/rust.lcov"), "rust"));
 }
 
-function deepestNodeAtPosition(sourceFile, position) {
-  let deepest = sourceFile;
-  const visit = (node) => {
-    if (node.getFullStart() <= position && position < node.getEnd()) {
-      deepest = node;
-      ts.forEachChild(node, visit);
-    }
-  };
-  visit(sourceFile);
-  return deepest;
-}
-
-export function isProbablyExecutableSource(path, contents, line) {
-  const rows = contents.split(/\r?\n/);
-  const source = rows[line - 1]?.trim() ?? "";
-  if (!source || /^(?:\/\/|\/\*|\*|\*\/)/.test(source)) return false;
-  if (/^[{}()[\],;]+$/.test(source)) return false;
-  if (!/\.(?:[cm]?ts|tsx)$/.test(path)) {
-    return !/^(?:use |mod )\b/.test(source);
-  }
-
-  const sourceFile = ts.createSourceFile(
-    path,
-    contents,
-    ts.ScriptTarget.Latest,
-    true,
-    path.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
-  const lineStart = sourceFile.getPositionOfLineAndCharacter(line - 1, 0);
-  const firstToken = lineStart + (rows[line - 1]?.search(/\S/) ?? 0);
-  let node = deepestNodeAtPosition(sourceFile, firstToken);
-  while (node) {
-    if (
-      ts.isInterfaceDeclaration(node) ||
-      ts.isTypeAliasDeclaration(node) ||
-      ts.isImportDeclaration(node) ||
-      ts.isImportEqualsDeclaration(node) ||
-      ts.isExportDeclaration(node) ||
-      ts.isPropertySignature(node) ||
-      ts.isMethodSignature(node) ||
-      ts.isCallSignatureDeclaration(node) ||
-      ts.isConstructSignatureDeclaration(node) ||
-      ts.isIndexSignatureDeclaration(node) ||
-      ts.isTypeParameterDeclaration(node) ||
-      (ts.isPropertyDeclaration(node) && !node.initializer) ||
-      (ts.isParameter(node) && !node.initializer) ||
-      ts.isTypeNode(node)
-    ) {
-      return false;
-    }
-    if (ts.canHaveModifiers(node) && ts.getModifiers(node)?.some((modifier) =>
-      modifier.kind === ts.SyntaxKind.DeclareKeyword
-    )) {
-      return false;
-    }
-    node = node.parent;
-  }
-  return true;
-}
 
 export function isOmittedCoverageLineExecutable({
   mode,
@@ -367,7 +310,7 @@ export function isOmittedCoverageLineExecutable({
     (mode !== "rust" || !filePresentInLcov || conditionallyCompiled);
 }
 
-export function calculateChangedCoverage({ changed, lcov, isExecutable }) {
+export function calculateChangedCoverage({ changed, lcov, isExecutable, isCovered = () => false }) {
   let lineTotal = 0;
   let lineCovered = 0;
   let branchTotal = 0;
@@ -379,8 +322,9 @@ export function calculateChangedCoverage({ changed, lcov, isExecutable }) {
         lineTotal += 1;
         if (file.lines.get(line)) lineCovered += 1;
       } else if (isExecutable(path, line)) {
-        // A new executable line/file omitted from LCOV is uncovered, not invisible.
+        // Missing LCOV lines stay in the denominator; only reconciled range evidence can cover them.
         lineTotal += 1;
+        if (isCovered(path, line)) lineCovered += 1;
       }
       for (const covered of file?.branches.get(line) ?? []) {
         branchTotal += 1;
@@ -399,17 +343,18 @@ export function calculateChangedCoverage({ changed, lcov, isExecutable }) {
   };
 }
 
-export function calculateChangedCoverageWithDetails({ changed, lcov, isExecutable }) {
+export function calculateChangedCoverageWithDetails({ changed, lcov, isExecutable, isCovered }) {
   const files = {};
   for (const [path, lines] of Object.entries(changed)) {
     const result = calculateChangedCoverage({
       changed: { [path]: lines },
       lcov,
       isExecutable,
+      isCovered,
     });
     if (result) files[path] = result;
   }
-  const total = calculateChangedCoverage({ changed, lcov, isExecutable });
+  const total = calculateChangedCoverage({ changed, lcov, isExecutable, isCovered });
   return total ? { ...total, files } : undefined;
 }
 
@@ -673,9 +618,18 @@ function changedCoverage(baseRef, prefix, lcovPath, mode) {
   const changed = changedSourceLines(baseRef, prefix, mode);
   const lcov = parseLcov(resolve(ROOT, lcovPath), mode);
   const sourceCache = new Map();
+  const readSource = (path) => {
+    if (!sourceCache.has(path)) sourceCache.set(path, readFileSync(resolve(ROOT, path), "utf8"));
+    return sourceCache.get(path);
+  };
+  const isCovered = mode === "frontend" ? createFrontendLineEvidence({
+    coverage: JSON.parse(readFileSync(resolve(ROOT, "coverage/frontend/coverage-final.json"), "utf8")),
+    lcov, root: ROOT, readSource,
+  }) : undefined;
   return calculateChangedCoverageWithDetails({
     changed,
     lcov,
+    isCovered,
     isExecutable: (path, line) => {
       const absolute = resolve(ROOT, path);
       if (!existsSync(absolute)) return false;
