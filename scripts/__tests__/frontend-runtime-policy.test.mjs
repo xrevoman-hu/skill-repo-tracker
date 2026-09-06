@@ -380,7 +380,7 @@ test("Settings component names never exempt JSX spread or intrinsic forwarding",
 
 test("Settings spread binds the exact reviewed implementations and typed contracts", () => {
   const source = readFileSync(new URL("../../src/App.tsx", import.meta.url), "utf8");
-  const sources = new Map(["GitHubWorkbench", "PluginsView", "PromptsView"].map(name =>
+  const sources = new Map(["GitHubWorkbench", "PluginsView", "PromptsView", "RepositorySelectAll"].map(name =>
     [`src/${name}.tsx`, readFileSync(new URL(`../../src/${name}.tsx`, import.meta.url), "utf8")]));
   assert.deepEqual(findForbiddenFrontendRuntimeUsage("src/App.tsx", source, sources), []);
   for (const mutated of [

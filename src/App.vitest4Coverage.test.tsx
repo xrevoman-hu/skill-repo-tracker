@@ -128,7 +128,7 @@ describe("App Vitest 4 behavior coverage", () => {
 
     render(<App appService={service} />);
 
-    const selectPage = await screen.findByRole("checkbox", { name: "全部仓库" });
+    const selectPage = await screen.findByRole("checkbox", { name: "全选当前筛选结果（跨所有页）" });
     await user.click(selectPage);
     expect(selectPage).toBeChecked();
     expect(screen.getByRole("button", { name: /备份选中（\d+）/ })).toBeEnabled();

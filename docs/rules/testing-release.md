@@ -56,8 +56,9 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
 - Coverage：`npm run coverage:check`；基线只能上调，PR 生产代码 changed lines >=80%、
   branches >=70%；测试文件和 coverage 配置明确排除的入口不计入 changed-lines 分母。
   前端覆盖率采集固定使用单一 test-file 执行上下文和单一报告合并线程；普通 Vitest 仍可并行。
-  这样避免 V8 在多 worker 或并行报告合并时产生不稳定的 branch inventory，确保两轮基线
-  比较的是同一计量口径。
+  同次详细 JSON 与 LCOV 的语句起始行、函数、分支命中状态对账后，可用命中语句范围和函数
+  声明补足多行证据；缺失 DA 仍入原分母，零命中语句、嵌套分支/函数优先否决，已有零 DA 不可
+  覆盖。缺失/无效/不一致证据不能算覆盖。这是语句覆盖，不保证语句抛错后的表达式已完成。
   生产前端禁止 `v8 ignore`、`c8 ignore`、`istanbul ignore` 注释指令，不能用 instrumentation
   pragma 把未测试分支从 LCOV 中删除。
   Rust 的 production-only 口径同时剔除独立 `*_tests.rs` 和生产文件内由精确
@@ -76,15 +77,13 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   本次生产代码仍必须执行 80%/70% changed threshold。基线进入 `main` 后不得下调。
   无效 base ref 会失败，已跟踪基线的读取错误、无效 JSON 或缺失指标也会失败，不会被
   当成 bootstrap。
-  `docs/engineering/coverage-baseline.json` 的唯一更新协议是在干净 commit 上运行
-  `node scripts/check-coverage.mjs baseline --write`。该命令自身连续执行两轮前端与 Rust coverage，
-  每轮前后都核对同一个 clean HEAD，并要求两类实物的 mtime 都由该轮重新生成；不接受外部
-  snapshot JSON 作为写入证据。两轮每项使用原始 covered/total 精度比较，漂移不超过 0.01 个百分点。
-  只有通过漂移检查后，基线才取两次较低值并统一向下保留两位，且不得低于历史基线。禁止直接手改数字、用单次结果或用
-  四舍五入把临界值抬过门槛；当前 `ec4162…` 数值是在编排命令进入仓库前完成两次 clean-main
-  测量并经双轴人工复审的一次性 `reviewed-bootstrap-v1`，以后写入只能升级为
-  `orchestrated-two-run-v1`。文件使用完整 commit SHA 和严格字段，读取已进入历史的旧格式时
-  只保留兼容比较能力。
+  `docs/engineering/coverage-baseline.json` 仅能在干净 commit 运行
+  `node scripts/check-coverage.mjs baseline --write` 更新：连续两轮前端/Rust coverage，各轮前后
+  核对同一 clean HEAD 和新生成实物 mtime，拒绝外部 snapshot。按原始 covered/total 比较，
+  漂移最多 0.01 个百分点；取两轮较低值向下保留两位，且不得低于历史基线。禁止手改、单次采样
+  或四舍五入抬高指标。历史 `ec4162…` 是编排上线前两次 clean-main 测量并经双轴人工审查的
+  一次性 `reviewed-bootstrap-v1`；后续仅写 `orchestrated-two-run-v1`、完整 SHA 和严格字段，
+  旧格式只兼容读取比较。
 - E2E：`npm run test:e2e`，只用 `DemoAppService` 和虚构数据；CI 将它作为
   `CI / verify` 中确定性入口之后的浏览器验收步骤。浏览器流必须在导航前拦截全部请求，
   只允许当前 `127.0.0.1` 预览服务，并在测试结束时断言没有尝试访问外部地址。当前最小验收

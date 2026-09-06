@@ -147,6 +147,34 @@ test("选择仓库并确认备份后可查看成功状态和日志，且不访�
   expectNoExternalRequests();
 });
 
+test("全选跨越所有仓库页并在确认后备份完整选择，且不访问外部服务", async ({ page }) => {
+  const expectNoExternalRequests = await blockExternalRequests(page);
+  await page.goto("/?lang=zh&tab=repositories");
+  await page.getByRole("button", { name: "清空选择" }).click();
+  const all = page.getByRole("checkbox", { name: "全选当前筛选结果（跨所有页）" });
+  await all.check();
+  const backup = page.getByRole("button", { name: /备份选中（\d+）/ });
+  const total = Number((await backup.innerText()).match(/（(\d+)）/)?.[1]);
+  expect(total).toBeGreaterThan(15);
+  await page.getByRole("button", { name: "下一页" }).click();
+  const rows = page.locator("tbody input[type=checkbox]");
+  expect(await rows.count()).toBeGreaterThan(0);
+  for (const row of await rows.all()) await expect(row).toBeChecked();
+  await rows.first().uncheck();
+  await expect(all).toHaveAttribute("aria-checked", "mixed");
+  await page.getByRole("button", { name: "首页" }).click();
+  await expect(all).toHaveAttribute("aria-checked", "mixed");
+  await all.check();
+  await expect(backup).toHaveText(`备份选中（${total}）`);
+  await backup.click();
+  const dialog = page.getByRole("dialog", { name: "备份选中仓库" });
+  await dialog.getByRole("button", { name: "确认备份" }).click();
+  await expect(dialog).toHaveCount(0);
+  await page.getByRole("button", { name: "任务", exact: true }).click();
+  await expect(page.getByRole("row", { name: new RegExp(`备份仓库.*选中仓库.* / ${total}`) }).first()).toBeVisible();
+  expectNoExternalRequests();
+});
+
 test("新增远端仓库使用稳定 ID 并自动聚焦详情，且不访问外部服务", async ({ page }) => {
   const expectNoExternalRequests = await blockExternalRequests(page);
   await page.goto("/?lang=zh&tab=repositories");
