@@ -21,7 +21,7 @@ const CRITICAL_PACKAGE_SCRIPTS = {
   "tauri:build": "tauri build",
 };
 const PRIVATE_PATHS = [
-  /^AGENTS\.md$/,
+  /^AGENTS-local\.md$/,
   /^docs\/(?:internal|promo)(?:\/|$)/,
   /^assets\/brand(?:\/|$)/,
 ];

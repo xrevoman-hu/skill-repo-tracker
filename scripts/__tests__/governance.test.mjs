@@ -75,7 +75,7 @@ const CRITICAL_PACKAGE_SCRIPTS = {
 test("repository boundaries reject private material and runtime build tools", () => {
   assert.deepEqual(
     checkRepositoryBoundaries({
-      trackedFiles: ["AGENTS.md", "docs/internal/note.md"],
+      trackedFiles: ["AGENTS.md", "AGENTS-local.md", "docs/internal/note.md"],
       packageJson: {
         dependencies: { vite: "6.4.3" },
         devDependencies: {},
@@ -84,7 +84,7 @@ test("repository boundaries reject private material and runtime build tools", ()
       lockUrls: ["https://registry.npmmirror.com/example.tgz"],
     }),
     [
-      "private file is tracked: AGENTS.md",
+      "private file is tracked: AGENTS-local.md",
       "private file is tracked: docs/internal/note.md",
       "build tool must be in devDependencies: vite",
       "package-lock contains a non-official registry URL: https://registry.npmmirror.com/example.tgz",

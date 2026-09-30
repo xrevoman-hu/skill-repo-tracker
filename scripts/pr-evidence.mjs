@@ -307,7 +307,7 @@ export function validatePullRequestEvidence({
   if (laneRan === laneNotApplicable) {
     errors.push("独立 lane 必须且只能选择：已运行并填写结果/链接，或不适用并填写原因");
   }
-  if (!checkboxChecked(verification, /没有秘密、真实用户数据、`AGENTS\.md`、`docs\/internal\/` 或宣传草稿进入 diff/)) {
+  if (!checkboxChecked(verification, /没有秘密、真实用户数据、`AGENTS-local\.md`、`docs\/internal\/` 或宣传草稿进入 diff/)) {
     errors.push("必须确认 diff 不包含秘密、真实用户数据或本机/内部资料");
   }
 

@@ -48,7 +48,13 @@ Skill Repo Tracker 是一个 local-first macOS 桌面工具，用于追踪 GitHu
 
 Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再按你的选择发布到工具目录。主库默认在 `~/SkillRepoTracker/skills`，当前默认发布到 Claude Code 和 Codex。Gemini、OpenCode、OpenClaw、Hermes 可以手动勾选，但不会默认打开。
 
-当前版本：`v1.2.9`
+当前源码版本：`v1.3.0`（尚未公开发布）。本地验收批次使用候选 tag `v1.3.0-rc.1`；上方下载链接仍指向已发布的 `v1.2.9`。
+
+### v1.3.0 更新
+
+- 仓库详情新增默认开启的“允许备份”。关闭后继续追踪和查看更新，所有备份入口均跳过该仓库。
+- 列表选择与备份许可分开：仍可选中“无需备份”仓库，但备份数量及确认清单只包含允许备份的仓库。
+- 旧仓库升级后默认允许备份，已有快照保留。详见[版本说明](docs/releases/v1.3.0.md)。
 
 ### v1.2.9 更新
 
@@ -200,7 +206,11 @@ Skill Repo Tracker is a local-first macOS app for people who install, update, an
 
 Instead of treating Claude Code, Codex, Gemini, OpenCode, OpenClaw, or Hermes folders as the source of truth, the app keeps one independent Skill library at `~/SkillRepoTracker/skills`. Skills are installed there first, then copied to selected tool directories.
 
-Current version: `v1.2.9`
+Current source version: `v1.3.0` (not publicly released). The local acceptance build is tagged `v1.3.0-rc.1`; the download links still point to the published `v1.2.9`.
+
+### v1.3.0 Highlights
+
+Repository details now include an enabled-by-default Allow backup checkbox. Disabling it keeps tracking and update detection active while every backup entry point skips the repository. Selection is independent of backup permission; counts and confirmation lists include only eligible repositories. Existing repositories default to enabled after migration, and existing snapshots are retained. See the [release notes](docs/releases/v1.3.0.md).
 
 ### v1.2.9 Highlights
 

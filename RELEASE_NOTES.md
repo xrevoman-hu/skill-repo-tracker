@@ -1,5 +1,15 @@
 # Release Notes
 
+## v1.3.0 - 仓库备份许可（未发布）
+
+- 仓库详情新增默认开启的“允许备份”；关闭后继续追踪、检测更新和查看 README，备份选中、备份有更新、单仓备份、前台调度及旧任务重试均跳过该仓库。
+- 列表选择保持独立；“无需备份”有独立状态和筛选，备份数量与确认清单排除关闭项，历史快照仍保留。
+- SQLite 追加迁移使旧仓库默认开启，重新检测或追踪不会重置偏好；迁移包保存偏好，旧包缺字段不会重开已有关闭项。
+- 公共 `AGENTS.md` 只索引项目规则，本机资料与约定迁入被 Git 忽略的 `AGENTS-local.md`。
+- 当前仅生成本地候选批次 `v1.3.0-rc.1`，应用显示版本 `1.3.0`；正式发布与远端验证尚待完成。详见[版本说明](docs/releases/v1.3.0.md)。
+
+English summary: v1.3.0 adds an enabled-by-default repository backup preference that is enforced across manual backups, foreground scheduling and retries. Tracking, update detection and existing snapshots are retained. Selection stays independent, migration preserves explicit preferences, and machine-specific agent conventions move to an ignored local overlay. The local acceptance batch is tagged `v1.3.0-rc.1` and displays app version `1.3.0`; it is not a public release. The package is ad-hoc signed, not Developer ID signed, and not Apple notarized.
+
 ## v1.2.7 - 依赖风险账本与安全审计闭环
 
 这个补丁版不新增产品功能，而是把 v1.2.6 之后已合入 `main` 的运行时依赖安全修复与可执行依赖风险治理交付到新的 Apple Silicon DMG。

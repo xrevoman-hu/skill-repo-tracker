@@ -1267,9 +1267,7 @@ input[type="checkbox"] {
   color: var(--red);
 }
 
-.tag.interrupted,
-.tag.unknown,
-.tag.not-installed {
+.tag:is(.backup-excluded, .interrupted, .unknown, .not-installed) {
   border-color: #d3d8df;
   background: var(--gray-soft);
   color: #59616d;
@@ -2701,9 +2699,7 @@ input[type="checkbox"] {
   color: #82b9ff;
 }
 
-.app-shell[data-theme="dark"] .tag.interrupted,
-.app-shell[data-theme="dark"] .tag.unknown,
-.app-shell[data-theme="dark"] .tag.not-installed {
+.app-shell[data-theme="dark"] .tag:is(.backup-excluded, .interrupted, .unknown, .not-installed) {
   border-color: #4a5361;
   color: var(--muted);
 }

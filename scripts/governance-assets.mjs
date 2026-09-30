@@ -61,7 +61,7 @@ const REQUIRED_PR_TEMPLATE_MARKERS = [
   "`npm run verify`",
   "与本变更相关的独立 lane（coverage/E2E/MSRV/性能/Release）已运行，结果/链接：",
   "独立 lane 不适用，原因：",
-  "没有秘密、真实用户数据、`AGENTS.md`、`docs/internal/` 或宣传草稿进入 diff",
+  "没有秘密、真实用户数据、`AGENTS-local.md`、`docs/internal/` 或宣传草稿进入 diff",
 ];
 
 function duplicates(values) {

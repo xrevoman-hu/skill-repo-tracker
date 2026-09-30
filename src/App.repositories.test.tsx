@@ -2,7 +2,8 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { App, RepositoriesView, RepositorySelectionActions, getCopy } from "./App";
+import { App, RepositoriesView, getCopy } from "./App";
+import { RepositorySelectionActions } from "./RepositoryBackupControls";
 import { DemoAppService } from "./appService";
 
 const copy: Record<string, string> = {
@@ -56,6 +57,7 @@ function repository(id: string, sourceType: string) {
     ref: "main",
     skills: 1,
     remoteSha: "abc",
+    backupEnabled: true,
     lastBackupSha: "none",
     checkStatus: "success",
     backupStatus: sourceType === "local" ? "local-only" : "never-backed-up",

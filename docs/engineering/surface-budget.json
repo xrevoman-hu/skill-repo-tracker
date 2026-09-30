@@ -126,8 +126,19 @@
       },
       {
         "id": "backup_repositories",
+        "status": "retiring",
+        "purpose": "Shipped Tauri command boundary.",
+        "retirementReason": "Command registration moves to repository_backups::backup_repositories without changing its IPC name."
+      },
+      {
+        "id": "repository_backups::backup_repositories",
         "status": "active",
-        "purpose": "Shipped Tauri command boundary."
+        "purpose": "Existing repository backup command extracted into its domain module; enforces the persisted repository backup preference."
+      },
+      {
+        "id": "repository_backups::update_repository_backup_enabled",
+        "status": "active",
+        "purpose": "Update a tracked GitHub repository's backup preference by stable ID; accepts no filesystem path and grants no new system permission."
       },
       {
         "id": "cancel_task",

@@ -47,9 +47,9 @@ MSRV 1.88.0、coverage、网络审计、性能与 Release 是独立 CI lane，�
   `docs/engineering/test-waivers.json` 中未过期的 active `WAIVER-YYYY-NNN`；字段与生命周期以
   `docs/rules/testing-release.md` 为准，主测试仍不得 skip。
 - PR 必须在“独立 lane 已运行并附结果/链接”和“不适用并说明原因”中且只能选择一项，并确认
-  diff 没有秘密、真实用户数据、`AGENTS.md`、`docs/internal/` 或宣传草稿。门禁只能验证字段、
+  diff 没有秘密、真实用户数据、`AGENTS-local.md`、`docs/internal/` 或宣传草稿。门禁只能验证字段、
   stable ID 与 changed paths 的一致性，不能证明填写内容真实；作者和审查者仍要核对实际 run、
   diff 与验收层。
-- 不提交 `AGENTS.md`、`docs/internal/`、宣传草稿、秘密或用户真实数据。
+- 不提交 `AGENTS-local.md`、`docs/internal/`、宣传草稿、秘密或用户真实数据。
 
 架构入口：`docs/engineering/architecture.md`。安全边界：`SECURITY.md`。

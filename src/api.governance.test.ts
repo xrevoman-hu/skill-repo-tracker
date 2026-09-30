@@ -26,6 +26,14 @@ describe("governed Tauri API boundary", () => {
     });
   });
 
+  it("updates repository backup permission using an explicit stable-id boolean request", async () => {
+    const { api } = await import("./api");
+    await api.updateRepositoryBackupEnabled("repo-42", false);
+    expect(invoke).toHaveBeenCalledWith("update_repository_backup_enabled", {
+      request: { repoId: "repo-42", backupEnabled: false },
+    });
+  });
+
   it("does not expose the removed persistent schedule writer", async () => {
     const { api } = await import("./api");
     expect("configureSchedule" in api).toBe(false);

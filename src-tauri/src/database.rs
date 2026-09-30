@@ -1,19 +1,51 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 
 use crate::{utc_now, AppError};
 
 const CORE_SCHEMA_BASELINE_VERSION: i64 = 1;
 const CORE_SCHEMA_BASELINE_NAME: &str = "legacy-v1.2.2-baseline";
+const BACKUP_PREFERENCE_VERSION: i64 = 2;
+const BACKUP_PREFERENCE_NAME: &str = "repository-backup-preference";
 const MIGRATION_SAVEPOINT: &str = "skill_repo_tracker_core_migration";
 
-/// Records the published idempotent core upgrader as an immutable baseline.
-/// Once that baseline exists, startup only validates history and never replays
-/// editable legacy upgrade code. Initial upgrade and ledger creation share one
-/// savepoint. Prompt migrations intentionally use their own version domain.
+/// Reject unknown or rewritten history before startup mutates the database.
+pub(super) fn preflight_core_schema(conn: &Connection) -> Result<(), AppError> {
+    let exists: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(());
+    }
+    let mut statement =
+        conn.prepare("SELECT version, name FROM schema_migrations ORDER BY version")?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let expected = [
+        (CORE_SCHEMA_BASELINE_VERSION, CORE_SCHEMA_BASELINE_NAME),
+        (BACKUP_PREFERENCE_VERSION, BACKUP_PREFERENCE_NAME),
+    ];
+    for (index, row) in rows.enumerate() {
+        let (version, name) = row?;
+        if expected.get(index).copied() != Some((version, name.as_str())) {
+            return Err(AppError::with_details(
+                "schema_migration_history_conflict",
+                "数据库迁移历史与当前应用不兼容。",
+                format!("version={version} name={name}"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Published migrations remain immutable; every upgrade shares one savepoint.
 pub(super) fn run_core_migrations(
     conn: &Connection,
     legacy_upgrade: impl FnOnce(&Connection) -> Result<(), AppError>,
 ) -> Result<(), AppError> {
+    preflight_core_schema(conn)?;
     conn.execute_batch(&format!("SAVEPOINT {MIGRATION_SAVEPOINT}"))?;
     let result = (|| {
         conn.execute_batch(
@@ -23,52 +55,37 @@ pub(super) fn run_core_migrations(
                applied_at TEXT NOT NULL
              )",
         )?;
-        let unknown_migration = conn
-            .query_row(
-                "SELECT version, name FROM schema_migrations
-                 WHERE version <> ?1 ORDER BY version LIMIT 1",
-                params![CORE_SCHEMA_BASELINE_VERSION],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
-        if let Some((version, name)) = unknown_migration {
-            return Err(AppError::with_details(
-                "schema_migration_history_conflict",
-                "数据库迁移历史与当前应用不兼容。",
-                format!("unknown_version={version} name={name}"),
-            ));
-        }
-        let recorded_name = conn
-            .query_row(
-                "SELECT name FROM schema_migrations WHERE version = ?1",
-                params![CORE_SCHEMA_BASELINE_VERSION],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?;
-        if recorded_name.as_deref() == Some(CORE_SCHEMA_BASELINE_NAME) {
-            return Ok(());
-        }
-        if let Some(recorded_name) = recorded_name {
-            return Err(AppError::with_details(
-                "schema_migration_history_conflict",
-                "数据库迁移历史与当前应用不兼容。",
-                format!(
-                    "version={} expected={} actual={}",
-                    CORE_SCHEMA_BASELINE_VERSION, CORE_SCHEMA_BASELINE_NAME, recorded_name
-                ),
-            ));
-        }
-
-        legacy_upgrade(conn)?;
-        conn.execute(
-            "INSERT INTO schema_migrations (version, name, applied_at)
-             VALUES (?1, ?2, ?3)",
-            params![
-                CORE_SCHEMA_BASELINE_VERSION,
-                CORE_SCHEMA_BASELINE_NAME,
-                utc_now()
-            ],
+        let baseline_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
+            params![CORE_SCHEMA_BASELINE_VERSION],
+            |row| row.get(0),
         )?;
+        if !baseline_exists {
+            legacy_upgrade(conn)?;
+            conn.execute(
+                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![
+                    CORE_SCHEMA_BASELINE_VERSION,
+                    CORE_SCHEMA_BASELINE_NAME,
+                    utc_now()
+                ],
+            )?;
+        }
+        let preference_exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
+            params![BACKUP_PREFERENCE_VERSION],
+            |row| row.get(0),
+        )?;
+        if !preference_exists {
+            conn.execute_batch(
+                "ALTER TABLE repositories ADD COLUMN backup_enabled INTEGER NOT NULL DEFAULT 1
+                 CHECK (backup_enabled IN (0, 1))",
+            )?;
+            conn.execute(
+                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?1, ?2, ?3)",
+                params![BACKUP_PREFERENCE_VERSION, BACKUP_PREFERENCE_NAME, utc_now()],
+            )?;
+        }
         Ok(())
     })();
 
@@ -169,7 +186,7 @@ mod tests {
              );
              INSERT INTO schema_migrations(version, name, applied_at) VALUES
                (1, 'legacy-v1.2.2-baseline', '2026-01-01T00:00:00Z'),
-               (2, 'future-schema-owned-by-a-newer-app', '2026-09-02T00:00:00Z');",
+               (3, 'future-schema-owned-by-a-newer-app', '2026-09-02T00:00:00Z');",
         )
         .unwrap();
         let legacy_called = Cell::new(false);
@@ -197,6 +214,7 @@ mod tests {
              VALUES (1, 'legacy-v1.2.2-baseline', '2026-01-01T00:00:00Z');",
         )
         .unwrap();
+        crate::migrate_legacy_schema(&conn).unwrap();
         let legacy_called = Cell::new(false);
 
         run_core_migrations(&conn, |_| {
@@ -206,6 +224,102 @@ mod tests {
         .unwrap();
 
         assert!(!legacy_called.get());
+    }
+
+    #[test]
+    fn backup_preference_upgrade_preserves_existing_rows_and_is_idempotent() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrate_legacy_schema(&conn).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+               version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL
+             );
+             INSERT INTO schema_migrations VALUES (1, 'legacy-v1.2.2-baseline', 'baseline-time');
+             INSERT INTO repositories
+               (id, name, owner, repo, ref_name, repo_type, remote_sha, check_status, url, branch,
+                last_backup_sha, backup_path, snapshot_time, created_at, updated_at)
+             VALUES ('fixture', 'Fixture', 'example', 'fixture', 'main', 'generic repo', 'sha',
+               'success', 'https://github.com/example/fixture', 'main', 'previous-sha',
+               '/Users/example/backups/previous.zip', 'snapshot-time', 'created', 'updated');",
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let enabled: bool = conn
+            .query_row(
+                "SELECT backup_enabled FROM repositories WHERE id = 'fixture'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(enabled);
+        conn.execute(
+            "UPDATE repositories SET backup_enabled = 0 WHERE id = 'fixture'",
+            [],
+        )
+        .unwrap();
+        migrate(&conn).unwrap();
+        let actual: (bool, String, String, String, String) = conn
+            .query_row(
+                "SELECT backup_enabled, last_backup_sha, backup_path, snapshot_time, updated_at
+             FROM repositories WHERE id = 'fixture'",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            actual,
+            (
+                false,
+                "previous-sha".into(),
+                "/Users/example/backups/previous.zip".into(),
+                "snapshot-time".into(),
+                "updated".into()
+            )
+        );
+        let baseline_time: String = conn
+            .query_row(
+                "SELECT applied_at FROM schema_migrations WHERE version = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(baseline_time, "baseline-time");
+    }
+
+    #[test]
+    fn failed_preference_ledger_append_rolls_back_ddl_and_keeps_baseline() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migrate_legacy_schema(&conn).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+               version INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, applied_at TEXT NOT NULL
+             );
+             INSERT INTO schema_migrations VALUES (1, 'legacy-v1.2.2-baseline', 'baseline-time');
+             CREATE TRIGGER reject_preference_migration BEFORE INSERT ON schema_migrations
+             WHEN NEW.version = 2 BEGIN SELECT RAISE(FAIL, 'forced preference migration failure'); END;",
+        ).unwrap();
+        let error = migrate(&conn).unwrap_err();
+        assert_eq!(error.code, "sqlite_error");
+        let columns: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('repositories') WHERE name = 'backup_enabled'",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(columns, 0);
+        let ledger: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(ledger, 1);
+        assert!(conn.is_autocommit());
     }
 
     #[test]
@@ -282,7 +396,13 @@ mod tests {
             .unwrap()
             .collect::<Result<_, _>>()
             .unwrap();
-        assert_eq!(rows, vec![(1, CORE_SCHEMA_BASELINE_NAME.to_string())]);
+        assert_eq!(
+            rows,
+            vec![
+                (1, CORE_SCHEMA_BASELINE_NAME.to_string()),
+                (2, BACKUP_PREFERENCE_NAME.to_string())
+            ]
+        );
     }
 
     #[test]
@@ -381,6 +501,7 @@ mod tests {
         conn.execute_batch("PRAGMA foreign_keys = ON").unwrap();
 
         let error = run_core_migrations(&conn, |conn| {
+            crate::migrate_legacy_schema(conn)?;
             conn.execute_batch(
                 "CREATE TABLE migration_release_parent (
                    id INTEGER PRIMARY KEY

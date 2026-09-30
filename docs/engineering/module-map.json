@@ -254,7 +254,26 @@
       "layer": "frontend-shared",
       "ownerRule": "docs/rules/testing-release.md",
       "decisions": ["docs/adr/0007-staged-modularization.md"],
-      "paths": ["src/buttonProps.ts", "src/inspectorDismiss.ts"]
+      "paths": ["src/buttonProps.ts", "src/inspectorDismiss.ts", "src/UiPrimitives.tsx"]
+    },
+    {
+      "id": "frontend-repository-backup-policy",
+      "runtime": "frontend",
+      "layer": "frontend-shared",
+      "ownerRule": "docs/rules/sync-filesystem.md",
+      "decisions": [
+        "docs/adr/0003-locking-and-atomic-replacement.md",
+        "docs/adr/0007-staged-modularization.md"
+      ],
+      "paths": ["src/repositoryBackup.ts"]
+    },
+    {
+      "id": "frontend-repository-backup-view",
+      "runtime": "frontend",
+      "layer": "frontend-feature-view",
+      "ownerRule": "docs/rules/sync-filesystem.md",
+      "decisions": ["docs/adr/0007-staged-modularization.md"],
+      "paths": ["src/RepositoryBackupControls.tsx"]
     },
     {
       "id": "frontend-external-navigation",
@@ -359,6 +378,7 @@
       "paths": [
         "src-tauri/src/backup_paths.rs",
         "src-tauri/src/backups.rs",
+        "src-tauri/src/repository_backups.rs",
         "src-tauri/src/settings_directories.rs"
       ]
     },

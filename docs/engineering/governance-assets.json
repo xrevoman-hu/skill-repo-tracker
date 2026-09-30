@@ -548,12 +548,15 @@
       "status": "active",
       "principles": [2, 3, 4, 5, 7],
       "reviewOnChange": [
+        "src/repositoryBackup.ts",
+        "src/RepositoryBackupControls.tsx",
         "src/skillConflictRefresh.ts",
         "src-tauri/src/lib.rs",
         "src-tauri/src/skill_hash.rs",
         "src-tauri/src/backups.rs",
         "src-tauri/src/backup_fs.rs",
         "src-tauri/src/backup_paths.rs",
+        "src-tauri/src/repository_backups.rs",
         "src-tauri/src/temp_artifacts.rs"
       ],
       "enforcement": {
@@ -563,6 +566,18 @@
           {
             "path": "src-tauri/src/backups_tests.rs",
             "selector": "ownership_drift_never_writes_to_or_deletes_a_replacement_directory"
+          },
+          {
+            "path": "src-tauri/src/repository_backups_tests.rs",
+            "selector": "every_backup_mode_skips_disabled_repositories_without_network_files_or_tasks"
+          },
+          {
+            "path": "src-tauri/src/repository_backups_tests.rs",
+            "selector": "disabling_during_download_discards_new_content_and_preserves_old_backup"
+          },
+          {
+            "path": "src-tauri/src/repository_backups_tests.rs",
+            "selector": "migration_packages_preserve_preferences_and_default_only_new_legacy_rows"
           }
         ]
       }

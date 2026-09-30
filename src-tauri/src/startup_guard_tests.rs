@@ -840,7 +840,7 @@ fn future_schema_rejection_leaves_database_mode_and_contents_unchanged() {
          );
          INSERT INTO schema_migrations(version, name, applied_at) VALUES
            (1, 'legacy-v1.2.2-baseline', '2026-01-01T00:00:00Z'),
-           (2, 'future-schema-owned-by-a-newer-app', '2026-09-02T00:00:00Z');",
+           (3, 'future-schema-owned-by-a-newer-app', '2026-09-02T00:00:00Z');",
     )
     .unwrap();
     drop(conn);
@@ -889,7 +889,7 @@ fn future_schema_rejection_leaves_database_mode_and_contents_unchanged() {
                 "2026-01-01T00:00:00Z".into()
             ),
             (
-                2,
+                3,
                 "future-schema-owned-by-a-newer-app".into(),
                 "2026-09-02T00:00:00Z".into()
             )

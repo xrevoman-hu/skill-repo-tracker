@@ -309,6 +309,10 @@ impl BackupDirectory {
         Ok(final_path)
     }
 
+    pub(super) fn discard(mut self) -> Result<(), AppError> {
+        self.cleanup()
+    }
+
     fn cleanup(&mut self) -> Result<(), AppError> {
         if !self.armed {
             return Ok(());
@@ -566,6 +570,7 @@ fn finalize_backup_inner(
                  snapshot_time = ?4,
                  updated_at = ?4
              WHERE id = ?1
+               AND backup_enabled = 1
                AND remote_sha IN (?2, ?5)",
             params![
                 update.repo_id,
