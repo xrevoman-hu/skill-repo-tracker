@@ -885,6 +885,7 @@
       "decisions": ["adr-0003-atomic-replacement"],
       "protectedPaths": [
         "src-tauri/src/backups.rs",
+        "src-tauri/src/repository_backups.rs",
         "src-tauri/src/backup_fs.rs",
         "src-tauri/src/backup_paths.rs",
         "src-tauri/src/temp_artifacts.rs"
@@ -893,6 +894,10 @@
         {
           "path": "src-tauri/src/backups_tests.rs",
           "selector": "database_late_failure_rolls_back_every_backup_row_and_removes_new_directory"
+        },
+        {
+          "path": "src-tauri/src/backups_tests.rs",
+          "selector": "disabling_after_staging_rolls_back_the_batch_and_preserves_previous_backup"
         }
       ],
       "gates": ["verify", "coverage", "weekly", "release"],
@@ -959,6 +964,7 @@
         "src/workspaceController.ts",
         "src/App.tsx",
         "src-tauri/src/lib.rs",
+        "src-tauri/src/repository_backups.rs",
         "src-tauri/src/prompt_search.rs"
       ],
       "evidence": [
@@ -1055,6 +1061,7 @@
         ".github/workflows/security-audit.yml",
         "docs/engineering/dependency-risk-ledger.json",
         "scripts/__tests__/dependency-risk.test.mjs",
+        "scripts/__tests__/dependency-risk-vulnerabilities.test.mjs",
         "scripts/dependency-risk.mjs",
         "scripts/dependency-risk-runtime.mjs",
         "scripts/git-paths-core.mjs",
@@ -1087,6 +1094,10 @@
         {
           "path": "scripts/__tests__/dependency-risk.test.mjs",
           "selector": "audit runner proves every warning against the audited target graph"
+        },
+        {
+          "path": "scripts/__tests__/dependency-risk-vulnerabilities.test.mjs",
+          "selector": "RustSec vulnerability records without kind retain advisory and package diagnostics and fail audit"
         }
       ],
       "gates": ["verify", "security", "ci"],

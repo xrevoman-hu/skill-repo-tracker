@@ -4,9 +4,9 @@
 
 本地管理 Skills、提示词和 GitHub 仓库。Local-first Skills, prompts, and GitHub repository management for macOS.
 
-**[下载 v1.2.9 · Apple Silicon DMG](https://github.com/xrevoman-hu/skill-repo-tracker/releases/download/v1.2.9/Skill.Repo.Tracker_1.2.9_aarch64.dmg)** · [版本说明 / Release notes](docs/releases/v1.2.9.md) · [贡献指南 / Contributing](CONTRIBUTING.md)
+**[下载 v1.3.0 · Apple Silicon DMG](https://github.com/xrevoman-hu/skill-repo-tracker/releases/download/v1.3.0/Skill.Repo.Tracker_1.3.0_aarch64.dmg)** · [版本说明 / Release notes](docs/releases/v1.3.0.md) · [贡献指南 / Contributing](CONTRIBUTING.md)
 
-macOS 12+ · Apple Silicon（arm64）。安装包为 **ad-hoc 签名测试分发，未经过 Apple notarization**；首次打开方式见下文。The installer is ad-hoc signed and not Apple notarized; first-launch instructions are below.
+macOS 12+ · Apple Silicon（arm64）。安装包为 **ad-hoc 签名测试分发，不是 Developer ID 签名，未经过 Apple notarization**；首次打开方式见下文。The installer is ad-hoc signed, not Developer ID signed, and not Apple notarized; first-launch instructions are below.
 
 ![license](https://img.shields.io/badge/license-MIT-green)
 ![Tauri](https://img.shields.io/badge/Tauri-v2-blue)
@@ -48,13 +48,15 @@ Skill Repo Tracker 是一个 local-first macOS 桌面工具，用于追踪 GitHu
 
 Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再按你的选择发布到工具目录。主库默认在 `~/SkillRepoTracker/skills`，当前默认发布到 Claude Code 和 Codex。Gemini、OpenCode、OpenClaw、Hermes 可以手动勾选，但不会默认打开。
 
-当前源码版本：`v1.3.0`（尚未公开发布）。本地验收批次使用候选 tag `v1.3.0-rc.1`；上方下载链接仍指向已发布的 `v1.2.9`。
+当前版本：`v1.3.0`，适用于 Apple Silicon、macOS 12+。
 
 ### v1.3.0 更新
 
-- 仓库详情新增默认开启的“允许备份”。关闭后继续追踪和查看更新，所有备份入口均跳过该仓库。
+- 仓库详情新增默认开启的“允许备份”。关闭后继续追踪和查看更新，所有仓库源码 ZIP 备份入口均跳过该仓库；Skill 操作所需的安全备份保持原行为。
 - 列表选择与备份许可分开：仍可选中“无需备份”仓库，但备份数量及确认清单只包含允许备份的仓库。
 - 旧仓库升级后默认允许备份，已有快照保留。详见[版本说明](docs/releases/v1.3.0.md)。
+
+首次启动会追加数据库迁移。升级前请退出旧版并备份应用数据目录；如需降级，须恢复升级前的数据副本，旧版不能直接写入升级后的数据库。
 
 ### v1.2.9 更新
 
@@ -168,7 +170,7 @@ Cargo fmt、Clippy `-D warnings`、Rust tests 和 Git diff 检查。`CI / verify
 
 这种包可以挂载、复制到 `/Applications` 并本机验证，但不是 Apple notarized 公开安装包。首次打开时，macOS 可能提示无法验证开发者；测试用户需要右键打开，或在“系统设置 -> 隐私与安全性”里选择“仍要打开”。安装测试包时请注意：
 
-1. 从 [GitHub Release](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.2.9) 下载 `Skill.Repo.Tracker_1.2.9_aarch64.dmg`。
+1. 从 [GitHub Release](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.3.0) 下载 `Skill.Repo.Tracker_1.3.0_aarch64.dmg`。
 2. 双击打开 DMG，把 `Skill Repo Tracker.app` 拖入 `/Applications`。
 3. 首次启动如果提示“无法验证开发者”或类似安全提示，请在 Finder 里右键这个 App，选择“打开”，再在弹窗中确认“打开”。
 4. 如果右键打开仍被拦截，请进入“系统设置 -> 隐私与安全性”，在底部找到被拦截的 Skill Repo Tracker，点击“仍要打开”。
@@ -206,11 +208,13 @@ Skill Repo Tracker is a local-first macOS app for people who install, update, an
 
 Instead of treating Claude Code, Codex, Gemini, OpenCode, OpenClaw, or Hermes folders as the source of truth, the app keeps one independent Skill library at `~/SkillRepoTracker/skills`. Skills are installed there first, then copied to selected tool directories.
 
-Current source version: `v1.3.0` (not publicly released). The local acceptance build is tagged `v1.3.0-rc.1`; the download links still point to the published `v1.2.9`.
+Current version: `v1.3.0` for Apple Silicon, macOS 12+.
 
 ### v1.3.0 Highlights
 
-Repository details now include an enabled-by-default Allow backup checkbox. Disabling it keeps tracking and update detection active while every backup entry point skips the repository. Selection is independent of backup permission; counts and confirmation lists include only eligible repositories. Existing repositories default to enabled after migration, and existing snapshots are retained. See the [release notes](docs/releases/v1.3.0.md).
+Repository details now include an enabled-by-default Allow backup checkbox. Disabling it keeps tracking and update detection active while every repository ZIP backup entry point skips the repository; protective backups for Skill operations retain their existing behavior. Selection is independent of backup permission; counts and confirmation lists include only eligible repositories. Existing repositories default to enabled after migration, and existing snapshots are retained. See the [release notes](docs/releases/v1.3.0.md).
+
+First launch adds a database migration. Quit the previous app and back up its application data directory before upgrading. To downgrade, restore the pre-upgrade data copy; older apps cannot write directly to the upgraded database.
 
 ### v1.2.9 Highlights
 
@@ -264,7 +268,7 @@ This is suitable for GitHub Release test assets that users manually allow throug
 
 Install notes for the downloaded DMG:
 
-1. Download `Skill.Repo.Tracker_1.2.9_aarch64.dmg` from the [GitHub Release](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.2.9).
+1. Download `Skill.Repo.Tracker_1.3.0_aarch64.dmg` from the [GitHub Release](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.3.0).
 2. Open the DMG and drag `Skill Repo Tracker.app` into `/Applications`.
 3. On first launch, macOS may block the app because it is ad-hoc signed. Control-click the app in Finder, choose Open, then confirm Open.
 4. If it is still blocked, open System Settings -> Privacy & Security and choose Open Anyway for Skill Repo Tracker.

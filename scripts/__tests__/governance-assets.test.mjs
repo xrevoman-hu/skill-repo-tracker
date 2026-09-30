@@ -15,6 +15,18 @@ test("a complete governance asset graph is accepted", () => {
   assert.deepEqual(validate(), []);
 });
 
+test("extracted repository backup workflow retains task generation and atomic rollback review", () => {
+  const catalog = JSON.parse(
+    readFileSync(new URL("../../docs/engineering/governance-assets.json", import.meta.url)),
+  );
+  const selected = selectGovernanceContext(catalog, ["src-tauri/src/repository_backups.rs"]);
+  assert.ok(selected.invariants.includes("TASK-GEN-001"));
+  assert.ok(selected.invariants.includes("FS-ATOMIC-001"));
+  const atomic = catalog.invariants.find((invariant) => invariant.id === "FS-ATOMIC-001");
+  assert.ok(atomic.evidence.some((item) => item.path === "src-tauri/src/backups_tests.rs"
+    && item.selector === "disabling_after_staging_rolls_back_the_batch_and_preserves_previous_backup"));
+});
+
 test("published v1.2.4 incidents remain explicit machine invariants", () => {
   const catalog = JSON.parse(
     readFileSync(new URL("../../docs/engineering/governance-assets.json", import.meta.url)),

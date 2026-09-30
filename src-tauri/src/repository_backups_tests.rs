@@ -386,3 +386,233 @@ fn historical_retry_payload_reevaluates_current_backup_preference() {
         .unwrap();
     assert_eq!(count, 1, "only the historical task remains");
 }
+
+#[test]
+fn updated_and_all_modes_apply_current_eligibility_before_network_requests() {
+    for mode in ["updated", "all"] {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join("backups")).unwrap();
+        let github = Arc::new(BackupGithub::default());
+        let state = state_for_backup(root.path(), github.clone());
+        let (unbacked, latest, disabled, failed, local) = {
+            let db = state.db.lock().unwrap();
+            let unbacked = save_repo(&db, "unbacked", true);
+            let latest = save_repo(&db, "latest", true);
+            let disabled = save_repo(&db, "disabled", false);
+            let failed = save_repo(&db, "failed", true);
+            let local = save_repo(&db, "local", true);
+            db.execute(
+                "UPDATE repositories SET last_backup_sha = remote_sha WHERE id = ?1",
+                params![latest],
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE repositories SET check_status = 'failed' WHERE id = ?1",
+                params![failed],
+            )
+            .unwrap();
+            db.execute(
+                "UPDATE repositories SET source_type = 'local' WHERE id = ?1",
+                params![local],
+            )
+            .unwrap();
+            (unbacked, latest, disabled, failed, local)
+        };
+        let response = tauri::async_runtime::block_on(backup_repositories_inner(
+            BackupRepositoriesRequest {
+                mode: mode.into(),
+                repo_ids: None,
+            },
+            &state,
+        ))
+        .unwrap();
+        assert!(response.ok, "mode={mode} error={:?}", response.error);
+        let tasks = response.data.unwrap();
+        assert_eq!(tasks[0].status, "success");
+        let expected_count = if mode == "all" { 2 } else { 1 };
+        assert_eq!(
+            tasks[0].progress,
+            format!("{expected_count} / {expected_count}")
+        );
+        let requests = github.requests.lock().unwrap();
+        assert_eq!(requests.len(), expected_count * 3);
+        assert!(requests.iter().all(|path| {
+            path.contains("/unbacked") || (mode == "all" && path.contains("/latest"))
+        }));
+        let db = state.db.lock().unwrap();
+        assert_eq!(
+            load_repository(&db, &unbacked)
+                .unwrap()
+                .unwrap()
+                .last_backup_sha
+                .as_deref(),
+            Some("new-sha")
+        );
+        assert_eq!(
+            load_repository(&db, &latest)
+                .unwrap()
+                .unwrap()
+                .last_backup_sha
+                .as_deref(),
+            Some(if mode == "all" { "new-sha" } else { "old-sha" })
+        );
+        for excluded_id in [disabled, failed, local] {
+            assert!(load_repository(&db, &excluded_id)
+                .unwrap()
+                .unwrap()
+                .last_backup_sha
+                .is_none());
+        }
+    }
+}
+
+#[test]
+fn selected_mode_with_no_matching_ids_does_not_fall_back_to_all_repositories() {
+    let root = tempfile::tempdir().unwrap();
+    let github = Arc::new(BackupGithub::default());
+    let state = state_for_backup(root.path(), github.clone());
+    save_repo(&state.db.lock().unwrap(), "allowed", true);
+    for repo_ids in [None, Some(vec![]), Some(vec!["missing".to_string()])] {
+        let response = tauri::async_runtime::block_on(backup_repositories_inner(
+            BackupRepositoriesRequest {
+                mode: "selected".into(),
+                repo_ids,
+            },
+            &state,
+        ))
+        .unwrap();
+        assert!(response.ok);
+        assert!(response.data.unwrap().is_empty());
+    }
+    assert!(github.requests.lock().unwrap().is_empty());
+    assert!(!root.path().join("backups").exists());
+    assert!(crate::load_ui_tasks(&state.db.lock().unwrap())
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn missing_bound_credentials_record_failure_without_anonymous_network_fallback() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("backups")).unwrap();
+    let github = Arc::new(BackupGithub::default());
+    let state = state_for_backup(root.path(), github.clone());
+    let id = {
+        let db = state.db.lock().unwrap();
+        let id = save_repo(&db, "needs-account", true);
+        let now = utc_now();
+        db.execute(
+            "INSERT INTO github_accounts
+             (id, login, display_name, token_key, status, scopes, is_default, created_at, updated_at)
+             VALUES ('fixture-account', 'fixture', 'Fixture', 'missing-fixture-key', 'verified', '', 1, ?1, ?1)",
+            params![now],
+        )
+        .unwrap();
+        db.execute(
+            "UPDATE repositories SET github_account_id = 'fixture-account',
+             last_backup_sha = 'previous-sha' WHERE id = ?1",
+            params![id],
+        )
+        .unwrap();
+        id
+    };
+    let response = tauri::async_runtime::block_on(backup_repositories_inner(
+        BackupRepositoriesRequest {
+            mode: "selected".into(),
+            repo_ids: Some(vec![id.clone()]),
+        },
+        &state,
+    ))
+    .unwrap();
+    assert!(response.ok, "{:?}", response.error);
+    let tasks = response.data.unwrap();
+    assert_eq!(tasks[0].status, "failed");
+    assert_eq!(tasks[0].progress, "0 / 1");
+    assert!(tasks[0]
+        .log
+        .iter()
+        .any(|line| line.contains("github_token_keychain_missing")));
+    assert!(github.requests.lock().unwrap().is_empty());
+    let db = state.db.lock().unwrap();
+    assert_eq!(
+        load_repository(&db, &id)
+            .unwrap()
+            .unwrap()
+            .last_backup_sha
+            .as_deref(),
+        Some("previous-sha")
+    );
+    let manifest_path: String = db
+        .query_row("SELECT manifest_path FROM backup_manifests", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
+    assert!(manifest["items"].as_array().unwrap().is_empty());
+    assert_eq!(manifest["failures"].as_array().unwrap().len(), 1);
+    assert_eq!(manifest["failures"][0]["repo_id"], id);
+}
+
+#[test]
+fn finalization_database_failure_rolls_back_snapshot_cleans_files_and_records_failure() {
+    let root = tempfile::tempdir().unwrap();
+    let backup_root = root.path().join("backups");
+    std::fs::create_dir(&backup_root).unwrap();
+    let previous = backup_root.join("previous.zip");
+    std::fs::write(&previous, b"previous immutable backup").unwrap();
+    let github = Arc::new(BackupGithub::default());
+    let state = state_for_backup(root.path(), github.clone());
+    let id = {
+        let db = state.db.lock().unwrap();
+        let id = save_repo(&db, "transaction-failure", true);
+        db.execute(
+            "UPDATE repositories SET last_backup_sha = 'previous-sha', backup_path = ?2 WHERE id = ?1",
+            params![id, path_string(&previous)],
+        )
+        .unwrap();
+        db.execute_batch(
+            "CREATE TRIGGER reject_new_backup_manifest BEFORE INSERT ON backup_manifests
+             BEGIN SELECT RAISE(ABORT, 'injected finalization failure'); END;",
+        )
+        .unwrap();
+        id
+    };
+    let response = tauri::async_runtime::block_on(backup_repositories_inner(
+        BackupRepositoriesRequest {
+            mode: "selected".into(),
+            repo_ids: Some(vec![id.clone()]),
+        },
+        &state,
+    ))
+    .unwrap();
+    assert!(!response.ok);
+    assert_eq!(response.error.unwrap().code, "sqlite_error");
+    assert_eq!(github.requests.lock().unwrap().len(), 3);
+    assert_eq!(std::fs::read_dir(&backup_root).unwrap().count(), 1);
+    assert_eq!(
+        std::fs::read(&previous).unwrap(),
+        b"previous immutable backup"
+    );
+    let db = state.db.lock().unwrap();
+    let repo = load_repository(&db, &id).unwrap().unwrap();
+    assert_eq!(repo.remote_sha, "old-sha");
+    assert_eq!(repo.last_backup_sha.as_deref(), Some("previous-sha"));
+    assert_eq!(
+        repo.backup_path.as_deref(),
+        Some(path_string(&previous).as_str())
+    );
+    let manifests: i64 = db
+        .query_row("SELECT COUNT(*) FROM backup_manifests", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(manifests, 0);
+    let tasks = crate::load_ui_tasks(&db).unwrap();
+    assert_eq!(tasks.len(), 1, "rolled-back success task must not survive");
+    assert_eq!(tasks[0].status, "failed");
+    assert!(tasks[0]
+        .log
+        .iter()
+        .any(|line| line.contains("sqlite_error")));
+}

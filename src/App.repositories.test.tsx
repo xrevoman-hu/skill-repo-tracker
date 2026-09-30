@@ -200,7 +200,7 @@ describe("RepositorySelectionActions", () => {
 });
 
 describe("App repository pagination integration", () => {
-  it("preserves scoped selections through search, sorting, pagination and clearing", async () => {
+  async function setupScopedRepositorySelection() {
     const user = userEvent.setup();
     const service = new DemoAppService();
     const bootstrap = await service.bootstrap();
@@ -220,16 +220,24 @@ describe("App repository pagination integration", () => {
     const selectedCount = (count: number) => expect(screen.getByRole("button", { name: `备份选中（${count}）` })).toBeInTheDocument();
     const nameSearch = screen.getByPlaceholderText("搜索仓库名称...");
     const contentSearch = screen.getByPlaceholderText("搜索备注 / README...");
-    await user.type(nameSearch, "repo-60");
+    return { user, selectAll, selectedCount, nameSearch, contentSearch };
+  }
+
+  it("preserves scoped selections through name, content and repository filters", async () => {
+    const { user, selectAll, selectedCount, nameSearch, contentSearch } = await setupScopedRepositorySelection();
+    await user.click(nameSearch);
+    await user.paste("repo-60");
     await user.click(selectAll());
     await user.clear(nameSearch);
-    await user.type(contentSearch, "readme-match");
+    await user.click(contentSearch);
+    await user.paste("readme-match");
     await user.click(selectAll());
     selectedCount(31);
     await user.click(selectAll());
     selectedCount(1);
     await user.clear(contentSearch);
-    await user.type(contentSearch, "needle");
+    await user.click(contentSearch);
+    await user.paste("needle");
     await user.click(selectAll());
     selectedCount(41);
     await user.click(screen.getByRole("button", { name: "普通仓库" }));
@@ -243,6 +251,12 @@ describe("App repository pagination integration", () => {
     expect(selectAll()).toHaveAttribute("aria-checked", "mixed");
     await user.click(selectAll());
     selectedCount(60);
+  });
+
+  it("preserves selections through pagination, sorting, empty searches and clearing", async () => {
+    const { user, selectAll, selectedCount, nameSearch } = await setupScopedRepositorySelection();
+    await user.click(selectAll());
+    selectedCount(60);
     await user.click(screen.getByRole("button", { name: "下一页" }));
     await user.click(screen.getByRole("checkbox", { name: "仓库: repo-16" }));
     selectedCount(59);
@@ -254,7 +268,8 @@ describe("App repository pagination integration", () => {
     selectedCount(59);
     await user.click(selectAll());
     selectedCount(60);
-    await user.type(nameSearch, "no-matching-repository");
+    await user.click(nameSearch);
+    await user.paste("no-matching-repository");
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
     selectedCount(60);
     await user.clear(nameSearch);
