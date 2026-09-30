@@ -1,5 +1,23 @@
 # Release Notes
 
+## v1.3.0 - 仓库备份许可
+
+- 仓库详情新增默认开启的“允许备份”；关闭后继续追踪、检测更新和查看 README，备份选中、备份有更新、单仓备份、前台调度及旧任务重试均跳过该仓库。
+- 列表选择保持独立；“无需备份”有独立状态和筛选，备份数量与确认清单排除关闭项，历史快照仍保留。
+- SQLite 追加迁移使旧仓库默认开启，重新检测或追踪不会重置偏好；迁移包保存偏好，旧包缺字段不会重开已有关闭项。
+- 开关只限制仓库源码 ZIP 备份；Skill 更新、同步和删除保护所需的安全备份保持原行为。
+- 公共 `AGENTS.md` 只索引项目规则，本机资料与约定迁入被 Git 忽略的 `AGENTS-local.md`。
+- `rustls 0.23.45` 与所需的 `rustls-webpki 0.103.15` 修复 `RUSTSEC-2026-0285`；审计同时正确显示真实漏洞的公告与包版本，仍对漏洞一律失败，不降低安全门禁。
+- 开发测试依赖 `undici` 更新到最小修复补丁 `8.10.2`，处理 npm 高危审计公告。
+
+升级前请退出旧版并备份应用数据目录。首次启动会追加数据库迁移；降级须恢复升级前的数据副本，旧版不能直接写入升级后的数据库。
+
+[下载 Apple Silicon DMG](https://github.com/xrevoman-hu/skill-repo-tracker/releases/download/v1.3.0/Skill.Repo.Tracker_1.3.0_aarch64.dmg) · [完整版本说明](docs/releases/v1.3.0.md)。安装包采用 ad-hoc 签名，不是 Developer ID 签名，也没有经过 Apple notarization。首次打开若被 macOS 拦截，请在 Finder 中按住 Control 点击 App 并选择“打开”，或在“系统设置 -> 隐私与安全性”中选择“仍要打开”。
+
+English summary: v1.3.0 adds an enabled-by-default repository backup preference that is enforced across manual backups, foreground scheduling and retries. Tracking, update detection and existing snapshots are retained. Selection stays independent, migration preserves explicit preferences, and machine-specific agent conventions move to an ignored local overlay. The preference applies only to repository ZIP snapshots; protective backups for Skill operations retain their existing behavior. Quit the previous app and back up its application data before upgrading; downgrading requires restoring that pre-upgrade copy because older apps cannot write directly to the upgraded database. [Download the Apple Silicon DMG](https://github.com/xrevoman-hu/skill-repo-tracker/releases/download/v1.3.0/Skill.Repo.Tracker_1.3.0_aarch64.dmg). The package is ad-hoc signed, not Developer ID signed, and not Apple notarized. If macOS blocks first launch, Control-click the app in Finder and choose Open, or use System Settings -> Privacy & Security -> Open Anyway.
+
+The release also updates `rustls` to `0.23.45` and the required `rustls-webpki` to `0.103.15` for `RUSTSEC-2026-0285`, updates the development/test dependency `undici` to `8.10.2` for the npm high-severity findings, and preserves vulnerability identity in audit diagnostics while continuing to fail on every vulnerability.
+
 ## v1.2.7 - 依赖风险账本与安全审计闭环
 
 这个补丁版不新增产品功能，而是把 v1.2.6 之后已合入 `main` 的运行时依赖安全修复与可执行依赖风险治理交付到新的 Apple Silicon DMG。

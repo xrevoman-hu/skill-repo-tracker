@@ -18,4 +18,6 @@
 - superseded generation 可以结束，但不能覆盖更新的状态或结果。
 - 任务进行中收到新的持久领域快照时必须使旧 generation 失效；React 回灌同一快照引用或
   UI-only optimistic task overlay 不属于持久状态更新，不能误取消当前任务。
+- 持久变更取代进行中的任务后，任务结束须在新 generation 中读回已提交状态；读取同样受
+  single-flight 与 generation 保护，不能遗漏其他仓库已完成的结果或覆盖更新的用户选择。
 - timeout、取消、429、无效 JSON、Keychain/文件系统失败必须成为确定性测试。

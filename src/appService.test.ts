@@ -16,10 +16,12 @@ import { createPromptLibraryApi } from "./promptLibraryAdapter";
 const repository: UiRepository = {
   id: "repo-1",
   name: "example/repo",
+  sourceType: "github",
   type: "skill repo",
   ref: "main",
   skills: 1,
   remoteSha: "abc",
+  backupEnabled: true,
   lastBackupSha: "none",
   backupStatus: "never-backed-up",
   checkStatus: "success",
@@ -70,6 +72,7 @@ describe("AppService adapters", () => {
     };
     const transport = {
       checkRepositories: vi.fn().mockResolvedValue([repository]),
+      updateRepositoryBackupEnabled: vi.fn(),
       backupRepositories: vi.fn().mockResolvedValue([]),
       retryTask: vi.fn().mockResolvedValue([]),
       addRepository: vi.fn().mockResolvedValue([repository]),
@@ -109,6 +112,7 @@ describe("AppService adapters", () => {
   it("keeps Tauri transport outside product controllers", async () => {
     const transport = {
       checkRepositories: vi.fn().mockResolvedValue([repository]),
+      updateRepositoryBackupEnabled: vi.fn(),
       backupRepositories: vi.fn().mockResolvedValue([]),
       retryTask: vi.fn().mockResolvedValue([]),
       addRepository: vi.fn().mockResolvedValue([repository]),
@@ -176,6 +180,7 @@ describe("AppService adapters", () => {
     };
     const transport = {
       checkRepositories: vi.fn().mockResolvedValue([]),
+      updateRepositoryBackupEnabled: vi.fn(),
       backupRepositories: vi.fn().mockResolvedValue([]),
       retryTask: vi.fn().mockResolvedValue([retriedTask]),
       addRepository: vi.fn().mockResolvedValue([repository]),
@@ -274,6 +279,7 @@ describe("AppService adapters", () => {
     expect(result.repositories[0]).toMatchObject({
       id: repository.id,
       backupStatus: "backed-up-latest",
+      backupEnabled: true,
       lastBackupSha: repository.remoteSha,
     });
     expect(result.repositories[1]).toEqual(failedRepository);
@@ -281,6 +287,73 @@ describe("AppService adapters", () => {
       status: "partial-success",
       summary: "1 success, 1 skipped",
     });
+  });
+
+  it("persists the demo preference and rejects stale selected, scheduled and retry backup requests", async () => {
+    const service = new DemoAppService();
+    const base = await service.bootstrap();
+    const original = base.workspace.repositories[0];
+    const retry = { ...base.workspace.tasks[0], id: "preference-retry", kind: "Backup repositories", target: original.name, retryable: true };
+    const current = { ...base.workspace, repositories: [original], tasks: [retry] };
+    expect(original.backupEnabled).toBe(true);
+    await expect(service.updateRepositoryBackupEnabled(original.id, false, current))
+      .resolves.toMatchObject({ backupEnabled: false, lastBackupSha: original.lastBackupSha });
+    expect((await service.bootstrap()).workspace.repositories[0].backupEnabled).toBe(false);
+    const request = { ...current, repositoryIds: [original.id], backupRoot: "/backups" };
+    for (const mode of ["selected", "updated", "all"]) {
+      const backed = await service.backupRepositories({ ...request, mode });
+      expect(backed.repositories[0]).toEqual({ ...original, backupEnabled: false });
+      expect(backed.tasks).toEqual(current.tasks);
+    }
+    expect((await service.retryTask(retry.id, current)).tasks).toEqual(current.tasks);
+    expect((await service.checkRepositories(current)).repositories[0]).toMatchObject({ backupEnabled: false, checkStatus: "success" });
+    await service.updateRepositoryBackupEnabled(original.id, true, current);
+    expect((await service.backupRepositories({ ...request, mode: "selected" })).repositories[0])
+      .toMatchObject({ backupEnabled: true, lastBackupSha: original.remoteSha });
+    await expect(service.updateRepositoryBackupEnabled("missing", false, current)).rejects.toThrow("Repository does not support remote backups.");
+  });
+
+  it("includes current allowed snapshots in all-mode and rejects preferences on local repositories", async () => {
+    const service = new DemoAppService();
+    const latest = { ...repository, backupStatus: "backed-up-latest", lastBackupSha: repository.remoteSha };
+    const watching = { ...latest, id: "watching", backupEnabled: false };
+    const local = { ...latest, id: "local", sourceType: "local" };
+    const current = { ...emptyWorkspace(), repositories: [latest, watching, local] };
+    const result = await service.backupRepositories({ ...current, mode: "all", repositoryIds: [], backupRoot: "/backups" });
+    expect(result.tasks[0].progress).toBe("1 / 1");
+    expect(result.repositories[1]).toEqual(watching);
+    expect(result.repositories[2]).toEqual(local);
+    await expect(service.updateRepositoryBackupEnabled(local.id, false, current))
+      .rejects.toThrow("Repository does not support remote backups.");
+  });
+
+  it("reads committed workspace state through each adapter while preserving the latest backup preference", async () => {
+    const transport = makeTauriTransport();
+    transport.listRepositories.mockResolvedValue([repository]);
+    const tauri = new TauriAppService(transport);
+    await expect(tauri.refreshWorkspace(emptyWorkspace())).resolves.toEqual({ ...emptyWorkspace(), repositories: [repository] });
+    expect(transport.listSkills).toHaveBeenCalledOnce();
+    expect(transport.listPlugins).toHaveBeenCalledOnce();
+    expect(transport.listTasks).toHaveBeenCalledOnce();
+    const demo = new DemoAppService();
+    const current = { ...emptyWorkspace(), repositories: [repository] };
+    await expect(demo.refreshWorkspace(current)).resolves.toEqual(current);
+    await demo.backupRepositories({ ...current, mode: "selected", repositoryIds: [repository.id], backupRoot: "/backups" });
+    await demo.updateRepositoryBackupEnabled(repository.id, false, current);
+    const refreshed = await demo.refreshWorkspace(current);
+    expect(refreshed.repositories[0]).toMatchObject({ backupEnabled: false, lastBackupSha: repository.remoteSha, backupStatus: "backed-up-latest" });
+    expect(refreshed.tasks[0]).toMatchObject({ kind: "Backup repositories", status: "success" });
+    refreshed.repositories[0].name = "caller mutation";
+    expect((await demo.bootstrap()).workspace.repositories[0].name).toBe(repository.name);
+  });
+
+  it("delegates the persisted preference to Tauri without replacing the repository snapshot", async () => {
+    const transport = makeTauriTransport();
+    transport.updateRepositoryBackupEnabled.mockResolvedValue({ ...repository, backupEnabled: false });
+    const service = new TauriAppService(transport);
+    await expect(service.updateRepositoryBackupEnabled(repository.id, false, emptyWorkspace()))
+      .resolves.toEqual({ ...repository, backupEnabled: false });
+    expect(transport.updateRepositoryBackupEnabled).toHaveBeenCalledWith(repository.id, false);
   });
 
   it("uses the repository diff for Tauri add results instead of assuming the first row is new", async () => {
@@ -524,6 +597,25 @@ describe("AppService adapters", () => {
       status: "success",
       summary: "retry completed",
     });
+    const refreshed = await service.refreshWorkspace(bootstrap.workspace);
+    expect(refreshed.repositories).toContainEqual(expect.objectContaining({ id: "demo:quality/demo-skill@main" }));
+    expect(refreshed.tasks).toContainEqual(expect.objectContaining({ id: "demo-retry-failed", status: "failed" }));
+    expect(refreshed.tasks.some((task) => task.summary === "retry completed")).toBe(false);
+  });
+
+  it("rechecks the latest preference before completing a delayed demo backup retry", async () => {
+    const service = new DemoAppService({ mode: "retry-race" });
+    const base = await service.bootstrap();
+    const original = base.workspace.repositories[0];
+    const running = service.retryTask("demo-retry-failed", base.workspace);
+    await service.updateRepositoryBackupEnabled(original.id, false, base.workspace);
+    await service.addRepository({ url: "quality/new-observation", refName: "main", note: "" }, base.workspace);
+    const result = await running;
+    expect(result.tasks[0]).toMatchObject({ id: "demo-retry-failed", status: "failed" });
+    const committed = await service.refreshWorkspace(base.workspace);
+    expect(committed.repositories.find((repository) => repository.id === original.id)?.backupEnabled).toBe(false);
+    expect(committed.repositories.some((repository) => repository.name === "quality/new-observation")).toBe(true);
+    expect(committed.tasks.some((task) => task.summary === "retry completed")).toBe(false);
   });
 
   it("provides an offline prompt library seam for create, tag, search, export, and import", async () => {
@@ -651,6 +743,7 @@ const defaultSettings: AppSettings = {
 function makeTauriTransport() {
   return {
     checkRepositories: vi.fn().mockResolvedValue([] as UiRepository[]),
+    updateRepositoryBackupEnabled: vi.fn(),
     backupRepositories: vi.fn().mockResolvedValue([] as UiTask[]),
     retryTask: vi.fn().mockResolvedValue([] as UiTask[]),
     addRepository: vi.fn().mockResolvedValue([] as UiRepository[]),

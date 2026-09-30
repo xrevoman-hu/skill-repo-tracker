@@ -431,6 +431,7 @@ fn repo_record_with_source(source_type: &str) -> RepoRecord {
         last_backup_sha: None,
         last_checked: None,
         backup_status: "local-only".into(),
+        backup_enabled: true,
         check_status: "success".into(),
         url: "file:///tmp/skills".into(),
         branch: "local".into(),

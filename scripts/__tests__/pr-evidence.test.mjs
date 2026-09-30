@@ -33,7 +33,7 @@ function completeBody(overrides = {}) {
     laneRan: "- [ ] 与本变更相关的独立 lane（coverage/E2E/MSRV/性能/Release）已运行，结果/链接：",
     laneNotApplicable: "- [x] 独立 lane 不适用，原因：仅修改文档和确定性治理测试。",
     sensitive:
-      "- [x] 没有秘密、真实用户数据、`AGENTS.md`、`docs/internal/` 或宣传草稿进入 diff。",
+      "- [x] 没有秘密、真实用户数据、`AGENTS-local.md`、`docs/internal/` 或宣传草稿进入 diff。",
     ...overrides,
   };
 
@@ -210,7 +210,7 @@ test("independent lane evidence is mutually exclusive and sensitive material con
     body: completeBody({
       laneNotApplicable: "- [ ] 独立 lane 不适用，原因：",
       sensitive:
-        "- [ ] 没有秘密、真实用户数据、`AGENTS.md`、`docs/internal/` 或宣传草稿进入 diff。",
+        "- [ ] 没有秘密、真实用户数据、`AGENTS-local.md`、`docs/internal/` 或宣传草稿进入 diff。",
     }),
     requiredInvariantIds: ["TASK-GEN-001", "PATH-PERM-001"],
   });

@@ -1,7 +1,8 @@
 # Skill Repo Tracker 架构与演进边界
 
 本文是可提交、可审查的架构事实源。机器私有路径和本机约束留在不入库的
-`AGENTS.md`；产品边界、模块依赖与长期决策必须写在本文、ADR 或 `docs/rules/`。
+`AGENTS-local.md`；`AGENTS.md` 只索引项目规则。产品边界、模块依赖与长期决策必须写在本文、
+ADR 或 `docs/rules/`。
 
 ## 产品边界
 

@@ -32,6 +32,7 @@ mod prompt_migration;
 mod prompt_search;
 mod prompt_zip;
 mod prompts;
+mod repository_backups;
 mod settings_directories;
 mod skill_hash;
 #[cfg(test)]
@@ -47,6 +48,9 @@ use github_transport::{
     download_zip, fetch_github_content, fetch_remote_info, set_star_remote, validate_token_identity,
 };
 use plugins::{scan_plugins_from_directory, scan_plugins_from_zip, sync_plugins, PluginScan};
+use repository_backups::backup_repositories;
+#[cfg(test)]
+use repository_backups::backup_repositories_inner;
 use settings_directories::{
     cleanup_created_settings_directories, create_settings_directory_tree, CreatedSettingsDirectory,
 };
@@ -374,6 +378,8 @@ pub struct UiRepository {
     last_backup_sha: String,
     last_checked: String,
     backup_status: String,
+    #[serde(default = "repository_backups::default_backup_enabled")]
+    backup_enabled: bool,
     check_status: String,
     url: String,
     branch: String,
@@ -762,6 +768,8 @@ pub struct MigrationRepository {
     last_backup_sha: Option<String>,
     last_checked: Option<String>,
     backup_status: String,
+    #[serde(default)]
+    backup_enabled: Option<bool>,
     check_status: String,
     url: String,
     branch: String,
@@ -1212,6 +1220,7 @@ struct RepoRecord {
     last_backup_sha: Option<String>,
     last_checked: Option<String>,
     backup_status: String,
+    backup_enabled: bool,
     check_status: String,
     url: String,
     branch: String,
@@ -1285,6 +1294,7 @@ fn default_ref() -> String {
 }
 
 fn migrate(conn: &Connection) -> Result<(), AppError> {
+    database::preflight_core_schema(conn)?;
     prompts::preflight_prompt_schema(conn)?;
     conn.execute_batch("PRAGMA foreign_keys = ON")?;
     database::run_core_migrations(conn, migrate_legacy_schema)?;
@@ -2616,6 +2626,7 @@ fn repo_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<RepoRecord> {
         last_backup_sha: row.get("last_backup_sha")?,
         last_checked: row.get("last_checked")?,
         backup_status: row.get("backup_status")?,
+        backup_enabled: row.get("backup_enabled")?,
         check_status: row.get("check_status")?,
         url: row.get("url")?,
         branch: row.get("branch")?,
@@ -2727,6 +2738,7 @@ fn ui_repository(conn: &Connection, repo: RepoRecord) -> Result<UiRepository, Ap
         last_backup_sha: repo.last_backup_sha.unwrap_or_else(|| "none".into()),
         last_checked: local_display(repo.last_checked.as_deref()),
         backup_status: repo.backup_status,
+        backup_enabled: repo.backup_enabled,
         check_status: repo.check_status,
         url: repo.url,
         branch: repo.branch,
@@ -6331,208 +6343,6 @@ async fn check_repositories(
 }
 
 #[tauri::command]
-async fn backup_repositories(
-    request: BackupRepositoriesRequest,
-    state: State<'_, AppState>,
-) -> CommandResult<Vec<UiTask>> {
-    let app_state: &AppState = &state;
-    match backups::run_exclusive(
-        &app_state.filesystem_lock,
-        backup_repositories_inner(request, app_state),
-    )
-    .await
-    {
-        Ok(result) => result,
-        Err(error) => Ok(api_err(error)),
-    }
-}
-
-async fn backup_repositories_inner(
-    request: BackupRepositoriesRequest,
-    state: &AppState,
-) -> CommandResult<Vec<UiTask>> {
-    let (repos, settings) = {
-        let db = state.db.lock().expect("db mutex poisoned");
-        let settings = match settings_from_db(&db, github_auth_configured(&db)) {
-            Ok(settings) => settings,
-            Err(error) => return Ok(api_err(error)),
-        };
-        let repos = match load_repositories(&db) {
-            Ok(items) => items,
-            Err(error) => return Ok(api_err(error)),
-        };
-        let selected = repos
-            .into_iter()
-            .filter(|repo| repo.source_type == "github")
-            .filter(|repo| match request.mode.as_str() {
-                "selected" => request
-                    .repo_ids
-                    .as_ref()
-                    .map(|ids| ids.contains(&repo.id))
-                    .unwrap_or(false),
-                "all" => repo.check_status != "failed",
-                _ => {
-                    repo.check_status != "failed"
-                        && repo.last_backup_sha.as_deref() != Some(repo.remote_sha.as_str())
-                }
-            })
-            .collect::<Vec<_>>();
-        (selected, settings)
-    };
-
-    if repos.is_empty() {
-        return Ok(ApiResponse::ok(Vec::new()));
-    }
-
-    let backup_root = expand_tilde(&settings.backup_root);
-    let mut backup_directory = match backups::create_backup_directory(&backup_root) {
-        Ok(directory) => directory,
-        Err(error) => return Ok(api_err(error)),
-    };
-    let backup_id = backup_directory.id().to_string();
-    let backup_dir = backup_directory.path().to_path_buf();
-
-    let mut manifest_items = Vec::new();
-    let mut manifest_failures = Vec::new();
-    let mut log = vec![format!("create {}", path_string(&backup_dir))];
-    let mut successful_repo_updates = Vec::new();
-
-    for repo in &repos {
-        let auth = state.github_auth_for_repo(repo);
-        if let Err(error) = auth.usable() {
-            manifest_failures.push(serde_json::json!({
-                "repo_id": repo.id,
-                "repo": repo.name,
-                "error": error.message
-            }));
-            log.push(format_error_for_log(&repo.name, &error));
-            continue;
-        }
-        match fetch_remote_info(
-            state.adapters.github.as_ref(),
-            &repo.owner,
-            &repo.repo,
-            &repo.ref_name,
-            auth.token(),
-            auth.label(),
-        )
-        .await
-        {
-            Ok(remote) => match download_zip(
-                state.adapters.github.as_ref(),
-                &remote.owner,
-                &remote.repo,
-                &remote.sha,
-                auth.token(),
-                auth.label(),
-            )
-            .await
-            {
-                Ok(bytes) => {
-                    let sha256 = sha256_hex(&bytes);
-                    let file_name = backups::safe_zip_name(
-                        &remote.full_name,
-                        &remote.resolved_ref,
-                        &remote.sha,
-                    );
-                    match backup_directory.write_zip(&file_name, &bytes) {
-                        Ok(final_path) => {
-                            log.push(format!("download {}", path_string(&final_path)));
-                            log.push(format!("compute sha256: {sha256}"));
-                            manifest_items.push(serde_json::json!({
-                                "repo_id": repo.id,
-                                "repo": remote.full_name,
-                                "ref": remote.resolved_ref,
-                                "resolved_sha": remote.sha,
-                                "zip_path": path_string(&final_path),
-                                "size_bytes": bytes.len(),
-                                "sha256": sha256
-                            }));
-                            successful_repo_updates.push(backups::SuccessfulBackupUpdate {
-                                repo_id: repo.id.clone(),
-                                expected_remote_sha: repo.remote_sha.clone(),
-                                sha: remote.sha,
-                                path: path_string(&final_path),
-                            });
-                        }
-                        Err(error)
-                            if matches!(
-                                error.code.as_str(),
-                                "backup_ownership_changed" | "backup_cleanup_failed"
-                            ) =>
-                        {
-                            return Ok(api_err(error));
-                        }
-                        Err(error) => {
-                            manifest_failures.push(serde_json::json!({
-                                "repo_id": repo.id,
-                                "repo": repo.name,
-                                "error": error.message.clone()
-                            }));
-                            log.push(format_error_for_log(&repo.name, &error));
-                        }
-                    }
-                }
-                Err(error) => {
-                    manifest_failures.push(serde_json::json!({
-                        "repo_id": repo.id,
-                        "repo": repo.name,
-                        "error": error.message
-                    }));
-                    log.push(format!("{} download failed", repo.name));
-                }
-            },
-            Err(error) => {
-                manifest_failures.push(serde_json::json!({
-                    "repo_id": repo.id,
-                    "repo": repo.name,
-                    "error": error.message
-                }));
-                log.push(format!("{} refresh failed", repo.name));
-            }
-        }
-    }
-
-    let manifest = serde_json::json!({
-        "version": "1.0.0",
-        "backup_id": backup_id,
-        "created_at": utc_now(),
-        "mode": request.mode,
-        "backup_root": path_string(&backup_root),
-        "items": manifest_items,
-        "failures": manifest_failures
-    });
-    let mut db = state.db.lock().expect("db mutex poisoned");
-    let result = backups::finalize_backup(
-        &mut db,
-        backup_directory,
-        backups::BackupFinalization {
-            request: &request,
-            manifest: &manifest,
-            successful: &successful_repo_updates,
-            failure_count: manifest_failures.len(),
-            total_count: repos.len(),
-            log: &log,
-        },
-    );
-
-    Ok(match result {
-        Ok(items) => ApiResponse::ok(items),
-        Err(error) => {
-            insert_failed_task(
-                &db,
-                "backup",
-                "Backup repositories",
-                "Updated repositories",
-                &error,
-                log,
-            );
-            api_err(error)
-        }
-    })
-}
-
-#[tauri::command]
 async fn install_skill(
     request: SkillActionRequest,
     state: State<'_, AppState>,
@@ -8537,7 +8347,7 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
         "SELECT id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
                 last_backup_sha, last_checked, backup_status, check_status, url, branch,
                 backup_path, snapshot_time, source_type, local_path, github_account_id,
-                canonical_name, error, readme_search_text, created_at, updated_at
+                canonical_name, error, readme_search_text, created_at, updated_at, backup_enabled
          FROM repositories
          ORDER BY updated_at DESC",
     )?;
@@ -8554,6 +8364,7 @@ fn build_migration_package(conn: &Connection) -> Result<MigrationPackage, AppErr
             last_backup_sha: row.get(8)?,
             last_checked: row.get(9)?,
             backup_status: row.get(10)?,
+            backup_enabled: Some(row.get(24)?),
             check_status: row.get(11)?,
             url: row.get(12)?,
             branch: row.get(13)?,
@@ -8793,9 +8604,9 @@ fn merge_migration_package_rows(
              (id, name, owner, repo, ref_name, repo_type, skills_count, remote_sha,
               last_backup_sha, last_checked, backup_status, check_status, url, branch,
               backup_path, snapshot_time, source_type, local_path, github_account_id,
-              canonical_name, error, readme_search_text, created_at, updated_at)
+              canonical_name, error, readme_search_text, created_at, updated_at, backup_enabled)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
-                     ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24)
+                     ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, COALESCE(?25, 1))
              ON CONFLICT(id) DO UPDATE SET
               name = excluded.name,
               owner = excluded.owner,
@@ -8807,6 +8618,7 @@ fn merge_migration_package_rows(
               last_backup_sha = excluded.last_backup_sha,
               last_checked = excluded.last_checked,
               backup_status = excluded.backup_status,
+              backup_enabled = COALESCE(?25, repositories.backup_enabled),
               check_status = excluded.check_status,
               url = excluded.url,
               branch = excluded.branch,
@@ -8844,6 +8656,7 @@ fn merge_migration_package_rows(
                 repo.readme_search_text,
                 repo.created_at,
                 repo.updated_at,
+                repo.backup_enabled,
             ],
         )?;
     }
@@ -10528,7 +10341,8 @@ pub fn run() {
             list_repositories,
             add_repository,
             check_repositories,
-            backup_repositories,
+            repository_backups::backup_repositories,
+            repository_backups::update_repository_backup_enabled,
             remove_repository,
             list_skills,
             list_plugins,

@@ -11,6 +11,7 @@ import type {
   UiTask,
   UpdateSettingsRequest,
 } from "./api";
+import { isRepositoryBackupEligible, repositoryBackupTargets } from "./repositoryBackup";
 import { DemoPromptTransport } from "./demoPromptTransport";
 import {
   initialGithubAccounts,
@@ -84,8 +85,10 @@ export interface AppService {
   readonly runtime: "tauri" | "demo";
   readonly promptTransport: PromptTransport;
   bootstrap(): Promise<AppBootstrapSnapshot>;
+  refreshWorkspace(current: WorkspaceSnapshot): Promise<WorkspaceSnapshot>;
   checkRepositories(current: WorkspaceSnapshot): Promise<WorkspaceSnapshot>;
   backupRepositories(request: BackupRequest): Promise<BackupResult>;
+  updateRepositoryBackupEnabled(repoId: string, backupEnabled: boolean, current: WorkspaceSnapshot): Promise<UiRepository>;
   retryTask(taskId: string, current: WorkspaceSnapshot): Promise<WorkspaceSnapshot>;
   addRepository(
     request: AddRepositoryRequest,
@@ -105,6 +108,7 @@ type TauriTransport = Pick<
   typeof api,
   | "checkRepositories"
   | "backupRepositories"
+  | "updateRepositoryBackupEnabled"
   | "retryTask"
   | "addRepository"
   | "updateSettings"
@@ -157,6 +161,13 @@ export class TauriAppService implements AppService {
     };
   }
 
+  async refreshWorkspace(_current: WorkspaceSnapshot): Promise<WorkspaceSnapshot> {
+    const [repositories, skills, plugins, tasks] = await Promise.all([
+      this.transport.listRepositories(), this.transport.listSkills(), this.transport.listPlugins(), this.transport.listTasks(),
+    ]);
+    return { repositories, skills, plugins, tasks };
+  }
+
   async checkRepositories(_current: WorkspaceSnapshot): Promise<WorkspaceSnapshot> {
     const repositories = await this.transport.checkRepositories();
     const [skills, plugins, tasks] = await Promise.all([
@@ -173,6 +184,10 @@ export class TauriAppService implements AppService {
       : await this.transport.backupRepositories(request.mode);
     const repositories = await this.transport.listRepositories();
     return { repositories, tasks };
+  }
+
+  async updateRepositoryBackupEnabled(repoId: string, backupEnabled: boolean, _current: WorkspaceSnapshot) {
+    return this.transport.updateRepositoryBackupEnabled(repoId, backupEnabled);
   }
 
   async retryTask(taskId: string, _current: WorkspaceSnapshot): Promise<WorkspaceSnapshot> {
@@ -272,6 +287,8 @@ export class DemoAppService implements AppService {
   private readonly now: () => Date;
   private settings: AppSettings = demoSettings();
   private githubRefreshAttempts = 0;
+  private readonly backupPreferences = new Map<string, boolean>();
+  private persistedWorkspace: WorkspaceSnapshot | null = null;
   private pendingLateRetry: (() => void) | null = null;
 
   constructor(options: DemoAppServiceOptions = {}) {
@@ -282,8 +299,8 @@ export class DemoAppService implements AppService {
 
   async bootstrap(): Promise<AppBootstrapSnapshot> {
     return clone({
-      workspace: {
-        repositories: initialRepos,
+      workspace: this.persistedWorkspace ? await this.refreshWorkspace(this.persistedWorkspace) : {
+        repositories: this.applyBackupPreferences(initialRepos),
         skills: initialSkills,
         plugins: this.mode === "empty-plugins" ? [] : initialPlugins,
         tasks: this.mode === "retry-race" ? [demoRetryableTask(), ...initialTasks] : initialTasks,
@@ -295,9 +312,19 @@ export class DemoAppService implements AppService {
     });
   }
 
+  async refreshWorkspace(current: WorkspaceSnapshot): Promise<WorkspaceSnapshot> {
+    const persisted = this.persistedWorkspace ?? current;
+    return clone({ ...persisted, repositories: this.applyBackupPreferences(persisted.repositories) });
+  }
+
+  private rememberWorkspace(snapshot: WorkspaceSnapshot): WorkspaceSnapshot {
+    this.persistedWorkspace = clone({ ...snapshot, tasks: snapshot.tasks.filter((task) => !task.optimistic) });
+    return clone(this.persistedWorkspace);
+  }
+
   async checkRepositories(current: WorkspaceSnapshot): Promise<WorkspaceSnapshot> {
     const checkedAt = this.now().toISOString();
-    const repositories = current.repositories.map((repository) => ({
+    const repositories = this.applyBackupPreferences(current.repositories).map((repository) => ({
       ...repository,
       lastChecked: checkedAt,
       checkStatus: repository.checkStatus === "failed" ? "failed" : "success",
@@ -312,17 +339,20 @@ export class DemoAppService implements AppService {
       retryable: false,
       log: ["refresh all remote refs", "preserve failed repository SHA", "recalculate backup states"],
     });
-    return clone({ ...current, repositories, tasks: [task, ...current.tasks] });
+    return this.rememberWorkspace({ ...current, repositories, tasks: [task, ...current.tasks] });
   }
 
   async backupRepositories(request: BackupRequest): Promise<BackupResult> {
-    const targetIds = new Set(request.repositoryIds);
+    const currentRepositories = this.applyBackupPreferences(request.repositories);
+    const targets = repositoryBackupTargets(currentRepositories, request.mode, request.repositoryIds);
+    const targetIds = new Set(targets.map((repository) => repository.id));
+    if (!targetIds.size) return clone({ repositories: currentRepositories, tasks: request.tasks });
     const successfulIds = new Set(
-      request.repositories
+      currentRepositories
         .filter((repository) => targetIds.has(repository.id) && repository.checkStatus !== "failed")
         .map((repository) => repository.id),
     );
-    const repositories = request.repositories.map((repository) => successfulIds.has(repository.id)
+    const repositories = currentRepositories.map((repository) => successfulIds.has(repository.id)
       ? {
           ...repository,
           backupStatus: "backed-up-latest",
@@ -347,24 +377,52 @@ export class DemoAppService implements AppService {
         "update last_backup_sha for successful repositories",
       ],
     });
-    return clone({ repositories, tasks: [task, ...request.tasks] });
+    const tasks = [task, ...request.tasks];
+    this.rememberWorkspace({ repositories, skills: request.skills, plugins: request.plugins, tasks });
+    return clone({ repositories, tasks });
+  }
+
+  private applyBackupPreferences(repositories: UiRepository[]): UiRepository[] {
+    return repositories.map((repository) => ({
+      ...repository,
+      backupEnabled: this.backupPreferences.get(repository.id) ?? repository.backupEnabled,
+    }));
+  }
+
+  async updateRepositoryBackupEnabled(repoId: string, backupEnabled: boolean, current: WorkspaceSnapshot) {
+    const repository = current.repositories.find((item) => item.id === repoId);
+    if (!repository || repository.sourceType !== "github") throw new Error("Repository does not support remote backups.");
+    this.backupPreferences.set(repoId, backupEnabled);
+    return clone({ ...repository, backupEnabled });
   }
 
   async retryTask(taskId: string, current: WorkspaceSnapshot): Promise<WorkspaceSnapshot> {
     const task = current.tasks.find((candidate) => candidate.id === taskId);
     if (!task?.retryable) return clone(current);
-    if (this.mode === "retry-race") {
-      return new Promise((resolve) => {
-        this.pendingLateRetry = () => resolve(clone({
-          ...current,
-          tasks: [demoSuccessfulRetry(this.now(), task), ...current.tasks.filter((item) => item.id !== taskId)],
-        }));
-      });
+    current = { ...current, repositories: this.applyBackupPreferences(current.repositories) };
+    if (task.kind === "Backup repositories") {
+      const target = current.repositories.find((repository) => repository.id === task.target || repository.name === task.target);
+      if (target ? !isRepositoryBackupEligible(target) : !current.repositories.some(isRepositoryBackupEligible)) return clone(current);
     }
-    return clone({
-      ...current,
-      tasks: [demoSuccessfulRetry(this.now(), task), ...current.tasks.filter((item) => item.id !== taskId)],
-    });
+    const completeRetry = () => {
+      const persisted = this.persistedWorkspace ?? current;
+      const latest = this.applyBackupPreferences(persisted.repositories);
+      const target = latest.find((repository) => repository.id === task.target || repository.name === task.target);
+      if (task.kind === "Backup repositories" && (target ? !isRepositoryBackupEligible(target) : !latest.some(isRepositoryBackupEligible))) {
+        return clone({ ...current, repositories: this.applyBackupPreferences(current.repositories) });
+      }
+      const completed = demoSuccessfulRetry(this.now(), task);
+      // retry-race deliberately emits an obsolete response after a newer add;
+      // it is not a committed task record and must not enter refresh results.
+      if (this.mode !== "retry-race") {
+        this.rememberWorkspace({ ...persisted, tasks: [completed, ...persisted.tasks.filter((item) => item.id !== taskId)] });
+      }
+      return clone({ ...current, tasks: [completed, ...current.tasks.filter((item) => item.id !== taskId)] });
+    };
+    if (this.mode === "retry-race") {
+      return new Promise((resolve) => { this.pendingLateRetry = () => resolve(completeRetry()); });
+    }
+    return completeRetry();
   }
 
   addRepository(
@@ -387,6 +445,7 @@ export class DemoAppService implements AppService {
       ref: request.refName,
       skills: isSkillRepo ? 1 : 0,
       remoteSha: isSkillRepo ? "9ac12ef" : "3d20a9f",
+      backupEnabled: true,
       lastBackupSha: "none",
       lastChecked: this.now().toISOString(),
       backupStatus: "never-backed-up",
@@ -422,6 +481,7 @@ export class DemoAppService implements AppService {
         tasks: [task, ...current.tasks],
       },
     });
+    this.rememberWorkspace(result.workspace);
     const releaseLateRetry = this.pendingLateRetry;
     this.pendingLateRetry = null;
     if (!releaseLateRetry) return Promise.resolve(result);

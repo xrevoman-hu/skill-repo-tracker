@@ -266,7 +266,10 @@ test("cargo audit reconciliation proves exact unsound target scope", () => {
 });
 
 test("cargo audit reconciliation fails closed on findings and inconsistent counters", () => {
-  const vulnerability = warning({ kind: "vulnerability", advisory: { id: "RUSTSEC-2026-9999" } });
+  const vulnerability = {
+    advisory: { id: "RUSTSEC-2026-9999" }, package: warning().package,
+    versions: { patched: [], unaffected: [] }, affected: null,
+  };
   const cases = [
     [
       report({ vulnerabilities: { found: true, count: 1, list: [vulnerability] } }),
@@ -638,7 +641,7 @@ test("registry preflight requires a fresh index marker and complete yanked check
 
 test("report-only identities survive vulnerability, unknown-category, and nonzero failures", () => {
   const cases = [
-    ["vulnerability", (value) => { value.vulnerabilities = { found: true, count: 1, list: [warning({ kind: "vulnerability", advisory: { id: "RUSTSEC-2026-9999" } })] }; }, false, /vulnerabilities are never allowlisted/],
+    ["vulnerability", (value) => { value.vulnerabilities = { found: true, count: 1, list: [{ advisory: { id: "RUSTSEC-2026-9999" }, package: warning().package, versions: { patched: [], unaffected: [] }, affected: null }] }; }, false, /vulnerabilities are never allowlisted/],
     ["unknown", (value) => { value.warnings.future_kind = []; }, false, /unknown cargo audit warning category/],
     ["nonzero", () => {}, true, /cargo audit exited with status 2/],
   ];

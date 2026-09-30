@@ -1,6 +1,6 @@
 [package]
 name = "skill-repo-tracker"
-version = "1.2.9"
+version = "1.3.0"
 description = "Local-first GitHub repository and Skill update manager"
 authors = ["Skill Repo Tracker"]
 license = "MIT"

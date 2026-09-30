@@ -226,6 +226,7 @@ export type UiRepository = {
   lastBackupSha: string;
   lastChecked?: string;
   backupStatus: string;
+  backupEnabled: boolean;
   checkStatus: string;
   url?: string;
   branch?: string;
@@ -681,6 +682,8 @@ export const api = {
     command<UiRepository[]>("add_local_repository", { request: { path } }),
   checkRepositories: (repoIds?: string[]) =>
     command<UiRepository[]>("check_repositories", { request: { repoIds } }),
+  updateRepositoryBackupEnabled: (repoId: string, backupEnabled: boolean) =>
+    command<UiRepository>("update_repository_backup_enabled", { request: { repoId, backupEnabled } }),
   backupRepositories: (mode: string, repoIds?: string[]) =>
     command<UiTask[]>("backup_repositories", { request: { mode, repoIds } }),
   scanLocalSkills: (root?: string) =>

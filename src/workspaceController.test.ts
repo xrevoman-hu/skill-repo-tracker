@@ -4,7 +4,7 @@ import { createTaskCoordinator } from "./taskCoordinator";
 import { createWorkspaceController, type WorkspaceController } from "./workspaceController";
 import type { AppService, WorkspaceSnapshot } from "./appService";
 
-type WorkspaceService = Pick<AppService, "checkRepositories" | "backupRepositories" | "retryTask">
+type WorkspaceService = Pick<AppService, "checkRepositories" | "backupRepositories" | "retryTask" | "refreshWorkspace">
   & Partial<AppService>;
 
 const empty: WorkspaceSnapshot = {
@@ -36,6 +36,7 @@ describe("workspace controller", () => {
             ref: "main",
             skills: 1,
             remoteSha: "abc",
+            backupEnabled: true,
             lastBackupSha: "none",
             backupStatus: "never-backed-up",
             checkStatus: "success",
@@ -46,6 +47,7 @@ describe("workspace controller", () => {
     const service: WorkspaceService = {
       runtime: "demo",
       bootstrap: vi.fn(),
+      refreshWorkspace: vi.fn(async (current: WorkspaceSnapshot) => current),
       checkRepositories,
       backupRepositories: vi.fn(),
       retryTask: vi.fn(),
@@ -73,6 +75,7 @@ describe("workspace controller", () => {
     const service: WorkspaceService = {
       runtime: "demo",
       bootstrap: vi.fn(),
+      refreshWorkspace: vi.fn(async (current: WorkspaceSnapshot) => current),
       checkRepositories: vi.fn(() => pendingCheck.promise),
       backupRepositories,
       retryTask: vi.fn(),
@@ -113,6 +116,7 @@ describe("workspace controller", () => {
     const service: WorkspaceService = {
       runtime: "tauri",
       bootstrap: vi.fn(),
+      refreshWorkspace: vi.fn(async (current: WorkspaceSnapshot) => current),
       checkRepositories: vi.fn(async () => empty),
       backupRepositories: vi.fn(async () => ({ repositories: [], tasks: [] })),
       retryTask: vi.fn(() => pendingRetry.promise),
@@ -191,6 +195,7 @@ describe("workspace controller", () => {
     const service: WorkspaceService = {
       runtime: "demo",
       bootstrap: vi.fn(),
+      refreshWorkspace: vi.fn(async (current: WorkspaceSnapshot) => current),
       checkRepositories: vi.fn(() => pendingCheck.promise),
       backupRepositories: vi.fn(() => pendingBackup.promise),
       retryTask: vi.fn(() => pendingRetry.promise),
@@ -220,7 +225,9 @@ describe("workspace controller", () => {
     resolve(pendingCheck, pendingBackup, pendingRetry);
 
     await expect(running).resolves.toEqual({ status: "superseded" });
-    expect(publish).not.toHaveBeenCalled();
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(newer);
+    expect(service.refreshWorkspace).toHaveBeenCalledOnce();
     expect(controller.snapshot()).toBe(newer);
   });
 
@@ -229,6 +236,7 @@ describe("workspace controller", () => {
     const service: WorkspaceService = {
       runtime: "demo",
       bootstrap: vi.fn(),
+      refreshWorkspace: vi.fn(async (current: WorkspaceSnapshot) => current),
       checkRepositories: vi.fn(() => pendingCheck.promise),
       backupRepositories: vi.fn(),
       retryTask: vi.fn(),
@@ -274,6 +282,7 @@ describe("workspace controller", () => {
         ref: "main",
         skills: 1,
         remoteSha: "abc",
+        backupEnabled: true,
         lastBackupSha: "none",
         backupStatus: "never-backed-up",
         checkStatus: "success",
@@ -282,6 +291,7 @@ describe("workspace controller", () => {
     const service: WorkspaceService = {
       runtime: "demo",
       bootstrap: vi.fn(),
+      refreshWorkspace: vi.fn(async (current: WorkspaceSnapshot) => current),
       checkRepositories: vi.fn(async () => next),
       backupRepositories: vi.fn(),
       retryTask: vi.fn(),
@@ -306,4 +316,74 @@ describe("workspace controller", () => {
     expect(publish).toHaveBeenCalledOnce();
     expect(controller.snapshot()).toEqual(next);
   });
+
+  it("refreshes again after a newer mutation supersedes the first committed-state read", async () => {
+    const pendingCheck = deferred<WorkspaceSnapshot>();
+    const firstRead = deferred<WorkspaceSnapshot>();
+    const secondRead = deferred<WorkspaceSnapshot>();
+    const committedTask = { id: "backup-b", kind: "Backup repositories", target: "B", progress: "1 / 1", status: "success", summary: "B saved", retryable: false, log: [] };
+    const changed = { ...empty, tasks: [committedTask] };
+    const newer = { ...changed, plugins: [] };
+    const refreshWorkspace = vi.fn()
+      .mockImplementationOnce(() => firstRead.promise)
+      .mockImplementationOnce(() => secondRead.promise);
+    const publish = vi.fn();
+    const controller = createWorkspaceController({
+      service: { checkRepositories: vi.fn(() => pendingCheck.promise), backupRepositories: vi.fn(), retryTask: vi.fn(), refreshWorkspace },
+      coordinator: createTaskCoordinator(), initial: empty, publish,
+    });
+    const running = controller.checkRepositories();
+    controller.replaceSnapshot(changed);
+    pendingCheck.resolve(empty);
+    await vi.waitFor(() => expect(refreshWorkspace).toHaveBeenCalledOnce());
+    expect(controller.isBusy()).toBe(true);
+    controller.replaceSnapshot(newer);
+    firstRead.resolve(changed);
+    await vi.waitFor(() => expect(refreshWorkspace).toHaveBeenCalledTimes(2));
+    expect(publish).not.toHaveBeenCalled();
+    secondRead.resolve(newer);
+    await expect(running).resolves.toEqual({ status: "superseded" });
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(newer);
+    expect(controller.snapshot().tasks).toEqual([committedTask]);
+    expect(controller.isBusy()).toBe(false);
+  });
+
+  it("stops refresh convergence on lifecycle invalidation and releases the foreground lane", async () => {
+    const pendingCheck = deferred<WorkspaceSnapshot>();
+    const pendingRead = deferred<WorkspaceSnapshot>();
+    const refreshWorkspace = vi.fn(() => pendingRead.promise);
+    const publish = vi.fn();
+    const controller = createWorkspaceController({
+      service: { checkRepositories: vi.fn(() => pendingCheck.promise), backupRepositories: vi.fn(), retryTask: vi.fn(), refreshWorkspace },
+      coordinator: createTaskCoordinator(), initial: empty, publish,
+    });
+    const running = controller.checkRepositories();
+    controller.invalidate(true);
+    pendingCheck.resolve(empty);
+    await vi.waitFor(() => expect(refreshWorkspace).toHaveBeenCalledOnce());
+    controller.invalidate();
+    pendingRead.resolve(empty);
+    await expect(running).resolves.toEqual({ status: "superseded" });
+    expect(publish).not.toHaveBeenCalled();
+    expect(refreshWorkspace).toHaveBeenCalledOnce();
+    expect(controller.isBusy()).toBe(false);
+  });
+
+  it("reports refresh failures without publishing an outdated operation response", async () => {
+    const pendingCheck = deferred<WorkspaceSnapshot>();
+    const error = new Error("refresh unavailable");
+    const publish = vi.fn();
+    const controller = createWorkspaceController({
+      service: { checkRepositories: vi.fn(() => pendingCheck.promise), backupRepositories: vi.fn(), retryTask: vi.fn(), refreshWorkspace: vi.fn().mockRejectedValue(error) },
+      coordinator: createTaskCoordinator(), initial: empty, publish,
+    });
+    const running = controller.checkRepositories();
+    controller.invalidate(true);
+    pendingCheck.resolve(empty);
+    await expect(running).resolves.toEqual({ status: "failed", error });
+    expect(publish).not.toHaveBeenCalled();
+    expect(controller.isBusy()).toBe(false);
+  });
+
 });

@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type {
   Dispatch,
   MouseEvent as ReactMouseEvent,
@@ -31,12 +31,15 @@ import type {
 } from "./api";
 import { DemoAppService, TauriAppService } from "./appService";
 import type { AppService } from "./appService";
-import type { ButtonProps } from "./buttonProps";
+import { Button, Modal, Tag, statusLabel } from "./UiPrimitives";
+export { Button } from "./UiPrimitives";
 import { openGithub } from "./externalNavigation";
 import { GitHubWorkbench } from "./GitHubWorkbench";
 import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
 import { PluginInspector, PluginsView } from "./PluginsView";
 import { PromptsView } from "./PromptsView";
+import { RepositoryBackupModal, RepositorySelectionActions } from "./RepositoryBackupControls";
+import { isRepositoryBackupEligible, needsRepositoryBackup, repositoryBackupTargets } from "./repositoryBackup";
 import { RepositorySelectAll } from "./RepositorySelectAll";
 import type { PromptExportKind, PromptLeaveContext } from "./PromptsView";
 import { createPromptLibraryApi } from "./promptLibraryAdapter";
@@ -302,6 +305,12 @@ const COPY = {
     genericRepositories: "普通仓库",
     unknownType: "未知类型",
     backupStatus: "备份状态",
+    backupAllowed: "允许备份",
+    backupExcluded: "无需备份",
+    backupPreferenceHelp: "取消后，手动、批量、定时备份及重试都会跳过此仓库。已开始的下载可能继续，但不会保存为新备份；历史备份和更新检测不受影响。",
+    backupPreferenceSaved: "仓库备份设置已保存。",
+    backupPreferenceFailed: "仓库备份设置保存失败。",
+    selectedBackupExcluded: "{count} 条无需备份",
     backedLatest: "已备份最新",
     updatedNotBacked: "有更新未备份",
     checkFailed: "检测失败",
@@ -383,7 +392,7 @@ const COPY = {
     recognizedPlugins: "已识别插件",
     noPluginsFound: "未发现插件安装入口。",
     openPluginsManager: "在插件视图中打开",
-    noSkillsFound: "未发现 Skill。该仓库仍可作为普通仓库备份。",
+    noSkillsFound: "未发现 Skill。开启“允许备份”后可作为普通仓库备份。",
     openSkillsManager: "在技能管理器中打开",
     quickActions: "快捷操作",
     backupNow: "立即备份",
@@ -532,7 +541,7 @@ const COPY = {
     helpSkillsRoot: "安装、扫描和管理本地 Skills 的独立主库目录。",
     helpAutoCheckInterval: "应用打开期间自动检测远端 SHA 的间隔。",
     helpScheduleForegroundOnly: "定时任务只在 App 打开时运行，关闭后不会后台常驻。",
-    helpAutoBackupUpdatedOnly: "启用后只备份“有更新未备份”的仓库，不会备份所有仓库。",
+    helpAutoBackupUpdatedOnly: "启用后只备份允许备份且有更新或从未备份的仓库。",
     helpGithubTokenStorage: "Token 只保存到系统安全存储，不写 SQLite、manifest 或任务日志。",
     help: "说明",
     githubRateLimitHelp: "GitHub 探测会优先使用仓库绑定账号；没有绑定时使用已验证账号兜底。未认证请求通常只有 60 次/小时，认证请求通常 5,000 次/小时。超限后请等到 x-ratelimit-reset 指定时间再请求。如果仍看到 60 次/小时，说明这次请求实际落到了匿名配额，请重新验证 token 或检查系统安全存储。",
@@ -746,6 +755,12 @@ const COPY = {
     genericRepositories: "Generic repositories",
     unknownType: "Unknown type",
     backupStatus: "Backup status",
+    backupAllowed: "Allow backups",
+    backupExcluded: "No backup needed",
+    backupPreferenceHelp: "When disabled, manual, batch, scheduled backups and retries skip this repository. An active download may finish but will not be saved as a new backup. Existing backups and update checks are unaffected.",
+    backupPreferenceSaved: "Repository backup preference saved.",
+    backupPreferenceFailed: "Failed to save the repository backup preference.",
+    selectedBackupExcluded: "{count} do not need backup",
     backedLatest: "Backed up latest",
     updatedNotBacked: "Updated, not backed up",
     checkFailed: "Check failed",
@@ -827,7 +842,7 @@ const COPY = {
     recognizedPlugins: "Recognized Plugins",
     noPluginsFound: "No plugin install entries found.",
     openPluginsManager: "Open in Plugins",
-    noSkillsFound: "No Skills found. This repository remains backup eligible.",
+    noSkillsFound: "No Skills found. Enable “Allow backups” to back up this ordinary repository.",
     openSkillsManager: "Open in Skills Manager",
     quickActions: "Quick actions",
     backupNow: "Backup Now",
@@ -976,7 +991,7 @@ const COPY = {
     helpSkillsRoot: "Independent library folder for installing, scanning, and managing local Skills.",
     helpAutoCheckInterval: "Interval for checking remote SHA while the app is open.",
     helpScheduleForegroundOnly: "Schedules run only while the app is open; they do not continue after quitting.",
-    helpAutoBackupUpdatedOnly: "When enabled, only repositories with unbacked updates are backed up.",
+    helpAutoBackupUpdatedOnly: "When enabled, only allowed repositories with unbacked updates or no previous backup are backed up.",
     helpGithubTokenStorage: "Tokens are stored only in the secure system store, never in SQLite, manifests, or task logs.",
     help: "Help",
     githubRateLimitHelp: "GitHub checks prefer the repository-bound account and fall back to a verified account when none is bound. Unauthenticated requests are usually limited to 60 per hour; authenticated requests are usually 5,000 per hour. After a limit is exceeded, wait until the x-ratelimit-reset time before trying again. If you still see a 60/hour limit, this request actually used the anonymous quota; re-verify the token or check the secure system store.",
@@ -1170,67 +1185,6 @@ const COPY = {
   },
 };
 
-const STATUS_LABELS = {
-  zh: {
-    "updated-not-backed-up": "需备份",
-    "backed-up-latest": "已备份",
-    "never-backed-up": "未备份",
-    "local-only": "本地",
-    "check-failed": "检测失败",
-    "local-modified": "本地修改",
-    "update-conflict": "待处理冲突",
-    "source-unavailable": "来源不可用",
-    "update-available": "可更新",
-    "installed-latest": "最新",
-    "installed-customized": "已更新，含本地定制",
-    "not-installed": "未安装",
-    deleted: "已删除",
-    "partial-success": "部分成功",
-    success: "成功",
-    failed: "失败",
-    interrupted: "已中断",
-    "waiting-user": "等待用户处理",
-    unknown: "未知",
-    "skill repo": "技能仓库",
-    "generic repo": "普通仓库",
-    detected: "已识别",
-    "codex-marketplace": "Codex 插件市场",
-    "skills-cli": "Skills CLI",
-    "clawhub-skill": "ClawHub 单技能",
-    "structured-plugin": "结构化插件",
-    local: "本地",
-  },
-  en: {
-    "updated-not-backed-up": "needs backup",
-    "backed-up-latest": "backed latest",
-    "never-backed-up": "never backed",
-    "local-only": "local",
-    "check-failed": "check failed",
-    "local-modified": "local modified",
-    "update-conflict": "update conflict",
-    "source-unavailable": "source unavailable",
-    "update-available": "update available",
-    "installed-latest": "latest",
-    "installed-customized": "updated with local customizations",
-    "not-installed": "not installed",
-    deleted: "deleted",
-    "partial-success": "partial success",
-    success: "success",
-    failed: "failed",
-    interrupted: "interrupted",
-    "waiting-user": "waiting for user",
-    unknown: "unknown",
-    "skill repo": "skill repo",
-    "generic repo": "generic repo",
-    detected: "detected",
-    "codex-marketplace": "Codex marketplace",
-    "skills-cli": "Skills CLI",
-    "clawhub-skill": "ClawHub single Skill",
-    "structured-plugin": "structured plugin",
-    local: "local",
-  },
-};
-
 export function getCopy(language: string, key: string) {
   const localized = COPY[language === "zh" ? "zh" : "en"] as Record<string, string>;
   const english = COPY.en as Record<string, string>;
@@ -1251,11 +1205,6 @@ function errorMessage(error: unknown, fallback: string) {
 function errorCode(error: unknown) {
   if (!error || typeof error !== "object" || !("code" in error)) return "";
   return typeof error.code === "string" ? error.code : "";
-}
-
-function statusLabel(value: string, language = "zh") {
-  const labels = STATUS_LABELS[language === "zh" ? "zh" : "en"] as Record<string, string>;
-  return labels[value] || value.replaceAll("-", " ");
 }
 
 const SKILL_DESCRIPTION_ZH = {
@@ -1584,125 +1533,11 @@ function githubRateLimitHelpText(t: (key: string) => string, resetAt: string) {
   return resetAt ? `${base} ${t("githubRateLimitResetAt")}: ${resetAt}` : base;
 }
 
-export function Button({
-  children,
-  variant = "secondary",
-  onClick,
-  disabled = false,
-  className = "",
-  pending = false,
-  pendingLabel,
-  type = "button",
-  "aria-label": ariaLabel,
-  "data-autofocus": dataAutofocus,
-}: ButtonProps) {
-  return (
-    <button
-      aria-label={ariaLabel}
-      data-autofocus={dataAutofocus}
-      className={`button ${variant} ${className} ${pending ? "is-pending" : ""}`}
-      onClick={onClick}
-      disabled={disabled || pending}
-      type={type}
-    >
-      {pending ? pendingLabel || children : children}
-    </button>
-  );
-}
-
 function HelpTip({ text, label = "Help" }: { text: string; label?: string }) {
   return (
     <span aria-label={`${label}: ${text}`} className="help-tip" role="img" tabIndex={0} title={text}>
       ?
     </span>
-  );
-}
-
-function Tag({ value, tone, language = "zh" }: {
-  value: string;
-  tone?: string;
-  language?: string;
-}) {
-  return <span className={`tag ${tone || value}`}>{statusLabel(value, language)}</span>;
-}
-
-type ModalProps = {
-  title: string;
-  children: ReactNode;
-  footer: ReactNode;
-  onClose: () => void;
-  closeLabel?: string;
-};
-
-function Modal({ title, children, footer, onClose, closeLabel = "Close" }: ModalProps) {
-  const titleId = useId();
-  const bodyId = useId();
-  const modalRef = useRef<HTMLElement | null>(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
-
-  useEffect(() => {
-    const previousFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : null;
-    const modalElement = modalRef.current;
-    const focusableSelector =
-      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex]:not([tabindex="-1"])';
-    const initialFocus = modalElement?.querySelector<HTMLElement>("[data-autofocus]")
-      || modalElement?.querySelector<HTMLElement>("[autofocus]")
-      || modalElement?.querySelector<HTMLElement>(focusableSelector);
-    initialFocus?.focus();
-
-    function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        event.preventDefault();
-        onCloseRef.current();
-        return;
-      }
-      if (event.key !== "Tab" || !modalElement) return;
-      const focusable = Array.from(
-        modalElement.querySelectorAll<HTMLElement>(focusableSelector),
-      ) as HTMLElement[];
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    }
-
-    document.addEventListener("keydown", handleKeyDown);
-    return () => {
-      document.removeEventListener("keydown", handleKeyDown);
-      if (previousFocus?.isConnected) previousFocus.focus();
-    };
-  }, []);
-
-  return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        aria-describedby={bodyId}
-        aria-labelledby={titleId}
-        className="modal"
-        role="dialog"
-        aria-modal="true"
-        onMouseDown={(event) => event.stopPropagation()}
-        ref={modalRef}
-      >
-        <header className="modal-header">
-          <h2 id={titleId}>{title}</h2>
-          <button aria-label={closeLabel} className="icon-button" onClick={onClose} type="button">
-            {closeLabel}
-          </button>
-        </header>
-        <div className="modal-body" id={bodyId}>{children}</div>
-        <footer className="modal-footer">{footer}</footer>
-      </section>
-    </div>
   );
 }
 
@@ -2080,8 +1915,9 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       skill: repositories.filter((repo) => repo.type === "skill repo").length,
       generic: repositories.filter((repo) => repo.type === "generic repo").length,
       unknown: repositories.filter((repo) => repo.type === "unknown").length,
-      backed: repositories.filter((repo) => repo.backupStatus === "backed-up-latest").length,
-      updated: repositories.filter((repo) => repo.backupStatus === "updated-not-backed-up").length,
+      backed: repositories.filter((repo) => repo.backupEnabled && repo.backupStatus === "backed-up-latest").length,
+      excluded: repositories.filter((repo) => !repo.backupEnabled).length,
+      updated: repositories.filter((repo) => repo.backupEnabled && repo.backupStatus === "updated-not-backed-up").length,
       failed: repositories.filter((repo) => repo.backupStatus === "check-failed").length,
     };
   }, [repositories]);
@@ -2100,7 +1936,8 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
             (repoFilter === "generic" && repo.type === "generic repo") ||
             (repoFilter === "updated" && repo.backupStatus === "updated-not-backed-up") ||
             (repoFilter === "failed" && repo.backupStatus === "check-failed") ||
-            (repoFilter === "never" && repo.backupStatus === "never-backed-up");
+            (repoFilter === "never" && repo.backupEnabled && repo.backupStatus === "never-backed-up") ||
+            (repoFilter === "excluded" && !repo.backupEnabled);
           return matchesSearch && matchesContentSearch && matchesFilter;
         },
         compare: (left, right) => {
@@ -2207,14 +2044,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     repoIds: string[] = [],
     sourceRepositories = repositories,
   ) {
-    if (mode === "selected") {
-      const targetIds = repoIds.length ? repoIds : selectedRows;
-      return sourceRepositories.filter((repo) => targetIds.includes(repo.id) && isRepositorySelectable(repo));
-    }
-    return sourceRepositories.filter((repo) =>
-      isRepositorySelectable(repo) &&
-      ["updated-not-backed-up", "never-backed-up", "check-failed"].includes(repo.backupStatus),
-    );
+    return repositoryBackupTargets(sourceRepositories, mode, repoIds.length ? repoIds : selectedRows);
   }
 
   function resetNewRepo() {
@@ -2422,6 +2252,22 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     );
     showToast(t("syncTargetsSaved"));
     setActionPending(actionKey, false);
+  }
+
+  async function setRepositoryBackupEnabled(repo: UiRepository, enabled: boolean) {
+    const actionKey = `backup-preference:${repo.id}`;
+    if (isPending(actionKey)) return;
+    setActionPending(actionKey, true);
+    try {
+      const saved = await appService.updateRepositoryBackupEnabled(repo.id, enabled, workspaceController.snapshot());
+      workspaceController.invalidate(true);
+      setRepositories((items) => items.map((item) => item.id === saved.id ? { ...item, backupEnabled: saved.backupEnabled } : item));
+      showToast(t("backupPreferenceSaved"));
+    } catch (error: unknown) {
+      showToast(errorMessage(error, t("backupPreferenceFailed")));
+    } finally {
+      setActionPending(actionKey, false);
+    }
   }
 
   function applyNoteUpdate(
@@ -2931,7 +2777,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         refName: newRepo.ref || "main",
         note: newRepo.note,
       }, workspaceController.snapshot());
-      workspaceController.invalidate();
+      workspaceController.invalidate(true);
       setRepositories(result.workspace.repositories);
       setSkills(result.workspace.skills);
       setPlugins(result.workspace.plugins);
@@ -2964,6 +2810,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     const current = workspaceController.snapshot();
     const targetRepos = backupTargetRepos(mode, repoIds, current.repositories);
     const targetIds = targetRepos.map((repo) => repo.id);
+    if (!targetIds.length) return;
     const optimisticTaskId = beginOptimisticTask(actionKey, {
       kind: "Backup repositories",
       target: mode === "selected" ? "Selected repositories" : "Updated repositories",
@@ -3615,6 +3462,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
               <h3>{t("backupStatus")}</h3>
               <Legend tone="green" label={t("backedLatest")} value={counts.backed} />
               <Legend tone="orange" label={t("updatedNotBacked")} value={counts.updated} />
+              <Legend tone="gray" label={t("backupExcluded")} value={counts.excluded} />
               <Legend tone="red" label={t("checkFailed")} value={counts.failed} />
               <Legend tone="gray" label={t("unknown")} value={counts.unknown} />
             </section>
@@ -3832,6 +3680,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
               copyUrl={copyUrl}
               openPluginDetail={openPluginEntry}
               onSaveNote={(repo, note) => saveItemNote("repository", repo, note)}
+              onSetBackupEnabled={setRepositoryBackupEnabled}
               isPending={isPending}
               language={language}
               t={t}
@@ -3940,7 +3789,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       )}
 
       {modal?.type === "backup" && (
-        <BackupModal
+        <RepositoryBackupModal
           targetRepos={backupTargetRepos(modal.mode || "updated", modal.repoIds || [])}
           backupRoot={backupRoot}
           onClose={() => setModal(null)}
@@ -4064,40 +3913,6 @@ function EmptyState({ title, body, actionLabel, onAction }: {
   );
 }
 
-type RepositorySelectionActionsProps = {
-  selectedCount: number;
-  otherPageCount: number;
-  onBackup: () => void;
-  onClear: () => void;
-  t: (key: string) => string;
-};
-
-export function RepositorySelectionActions({
-  selectedCount,
-  otherPageCount,
-  onBackup,
-  onClear,
-  t,
-}: RepositorySelectionActionsProps) {
-  return (
-    <>
-      <Button disabled={selectedCount === 0} onClick={onBackup}>
-        {formatCopy(t("backupSelectedCount"), { count: selectedCount })}
-      </Button>
-      {selectedCount > 0 && (
-        <span className="repository-selection-status">
-          {otherPageCount > 0 && (
-            <span>{formatCopy(t("selectedOnOtherPages"), { count: otherPageCount })}</span>
-          )}
-          <button className="selection-clear-button" onClick={onClear} type="button">
-            {t("clearSelection")}
-          </button>
-        </span>
-      )}
-    </>
-  );
-}
-
 type ToolbarProps = {
   activeTab: string;
   search: string;
@@ -4162,14 +3977,11 @@ function Toolbar({
   t,
 }: ToolbarProps) {
   const titleKey = navItems.find((item) => item.id === activeTab)?.labelKey || "nav.repositories";
-  const needsBackup = repositories.filter((repo) =>
-    isRepositorySelectable(repo) && ["updated-not-backed-up", "never-backed-up"].includes(repo.backupStatus),
-  ).length;
-  const selectedBackupableRepositories = repositories.filter(
-    (repo) => selectedRows.includes(repo.id) && isRepositorySelectable(repo),
-  );
+  const needsBackup = repositories.filter(needsRepositoryBackup).length;
+  const selectedRepositories = repositories.filter((repo) => selectedRows.includes(repo.id) && isRepositorySelectable(repo));
+  const selectedBackupableRepositories = selectedRepositories.filter(isRepositoryBackupEligible);
   const currentRepositoryPageIdSet = new Set(currentRepositoryPageIds);
-  const otherPageSelectedCount = selectedBackupableRepositories.filter(
+  const otherPageSelectedCount = selectedRepositories.filter(
     (repository) => !currentRepositoryPageIdSet.has(repository.id),
   ).length;
   const updatedSkills = skills.filter((skill) =>
@@ -4205,7 +4017,8 @@ function Toolbar({
             }
             onClear={clearSelectedRows}
             otherPageCount={otherPageSelectedCount}
-            selectedCount={selectedBackupableRepositories.length}
+            selectedCount={selectedRepositories.length}
+            backupCount={selectedBackupableRepositories.length}
             t={t}
           />
           <Button variant="primary" onClick={openAddRepoModal}>
@@ -4370,6 +4183,7 @@ export function RepositoriesView({
     ["updated", t("updated")],
     ["never", t("neverBacked")],
     ["failed", t("checkFailed")],
+    ["excluded", t("backupExcluded")],
   ];
   const rangeStart = totalItems === 0 ? 0 : (page - 1) * pageSize + 1;
   const rangeEnd = totalItems === 0 ? 0 : Math.min(totalItems, page * pageSize);
@@ -4481,7 +4295,7 @@ export function RepositoriesView({
                       <Tag value={repo.checkStatus || "unknown"} language={language} />
                     </td>
                     <td>
-                      <Tag value={repo.backupStatus} language={language} />
+                      <Tag value={repo.backupEnabled ? repo.backupStatus : "backup-excluded"} language={language} />
                     </td>
                     <td>
                       <div className="row-actions">
@@ -4492,7 +4306,7 @@ export function RepositoriesView({
                             setSelectedRepoId(repo.id);
                             setModal({ type: "backup", mode: "selected", repoIds: [repo.id] });
                           }}
-                          disabled={!isRepositorySelectable(repo)}
+                          disabled={!isRepositoryBackupEligible(repo)}
                           title={`${t("backup")}: ${repoName}`}
                           type="button"
                         >
@@ -4598,6 +4412,7 @@ type InspectorProps = {
   copyUrl: (url: string) => void | Promise<void>;
   openPluginDetail: (plugin: SkillPluginReference) => void;
   onSaveNote: (repo: UiRepository, note: string) => void | Promise<void>;
+  onSetBackupEnabled: (repo: UiRepository, enabled: boolean) => void | Promise<void>;
   isPending: (key: string) => boolean;
   language: string;
   t: Translate;
@@ -4614,6 +4429,7 @@ function Inspector({
   copyUrl,
   openPluginDetail,
   onSaveNote,
+  onSetBackupEnabled,
   isPending,
   language,
   t,
@@ -4695,12 +4511,22 @@ function Inspector({
       </Section>
 
       <Section title={t("backupSnapshot")}>
+        {repo.sourceType === "github" && <>
+          <label className="checkbox-row">
+            <input type="checkbox" checked={repo.backupEnabled}
+              disabled={isPending(`backup-preference:${repo.id}`)}
+              onChange={(event) => onSetBackupEnabled(repo, event.target.checked)} />
+            <span>{t("backupAllowed")}</span>
+          </label>
+          <p className="empty-note">{t("backupPreferenceHelp")}</p>
+        </>}
+
         <Detail label={t("lastBackupSha")} value={displayValue(repo.lastBackupSha, language)} mono />
         <Detail label={t("remoteSha")} value={displayValue(repo.remoteSha, language)} mono />
         <Detail label={t("checkStatusLabel")} value={<Tag value={repo.checkStatus || "unknown"} language={language} />} />
         <Detail
           label={t("backupStatus")}
-          value={<Tag value={repo.backupStatus} language={language} />}
+          value={<Tag value={repo.backupEnabled ? repo.backupStatus : "backup-excluded"} language={language} />}
         />
         <Detail label={t("backupPath")} value={displayValue(repo.backupPath, language)} />
         <Detail label={t("snapshotTime")} value={displayValue(repo.snapshotTime, language)} />
@@ -4766,7 +4592,7 @@ function Inspector({
 
       <Section title={t("quickActions")}>
         <div className="action-grid">
-          <Button onClick={() => setModal({ type: "backup", mode: "selected", repoIds: [repo.id] })} disabled={!isRepositorySelectable(repo)}>
+          <Button onClick={() => setModal({ type: "backup", mode: "selected", repoIds: [repo.id] })} disabled={!isRepositoryBackupEligible(repo)}>
             {t("backupNow")}
           </Button>
           <Button onClick={() => openBackupFolder(repo.id)} disabled={!hasManifest}>{t("openBackupFolder")}</Button>
@@ -6191,93 +6017,6 @@ function GitHubAccountTokenModal({ onClose, onSaveToken, pending, t }: GitHubAcc
   );
 }
 
-type BackupModalProps = {
-  targetRepos: UiRepository[];
-  backupRoot: string;
-  onClose: () => void;
-  onConfirm: () => void | Promise<void>;
-  mode: string;
-  pending: boolean;
-  language: string;
-  t: Translate;
-};
-
-function BackupModal({
-  targetRepos,
-  backupRoot,
-  onClose,
-  onConfirm,
-  mode,
-  pending,
-  language,
-  t,
-}: BackupModalProps) {
-  const backupableRepos = targetRepos.filter((repo) => repo.backupStatus !== "check-failed");
-  const skippedRepos = targetRepos.filter((repo) => repo.backupStatus === "check-failed");
-  const neverBackedCount = backupableRepos.filter((repo) => repo.backupStatus === "never-backed-up").length;
-  const updatedCount = backupableRepos.filter((repo) => repo.backupStatus === "updated-not-backed-up").length;
-  return (
-    <Modal
-      title={mode === "selected" ? t("backupSelectedTitle") : t("backupUpdatedTitle")}
-      onClose={onClose}
-      closeLabel={t("close")}
-      footer={
-        <>
-          <Button onClick={onClose}>{t("cancel")}</Button>
-          <Button
-            variant="primary"
-            onClick={onConfirm}
-            disabled={!backupableRepos.length}
-            pending={pending}
-            pendingLabel={t("backingUp")}
-          >
-            {t("confirmBackup")}
-          </Button>
-        </>
-      }
-    >
-      <div className="backup-summary">
-        <div>
-          <strong>{backupableRepos.length}</strong>
-          <span>{t("willBeBackedUp")}</span>
-        </div>
-        <div>
-          <strong>{neverBackedCount}</strong>
-          <span>{t("neverBacked")}</span>
-        </div>
-        <div>
-          <strong>{updatedCount}</strong>
-          <span>{t("updated")}</span>
-        </div>
-        <div>
-          <strong>{skippedRepos.length}</strong>
-          <span>{t("checkFailedSkipped")}</span>
-        </div>
-      </div>
-      <div className="result-box">
-        <strong>{t("outputDirectory")}</strong>
-        <p>{backupRoot}/2026-06-14_101212</p>
-        <p>{t("outputDirectoryText")}</p>
-      </div>
-      <div className="result-box">
-        <strong>{t("targetRepositories")}</strong>
-        {targetRepos.length ? (
-          <ul className="target-list">
-            {targetRepos.slice(0, 8).map((repo) => (
-              <li key={repo.id}>
-                <span>{repo.name}</span>
-                <Tag value={repo.backupStatus} language={language} />
-              </li>
-            ))}
-            {targetRepos.length > 8 && <li>+ {targetRepos.length - 8}</li>}
-          </ul>
-        ) : (
-          <p>{t("noFilteredRepositoriesText")}</p>
-        )}
-      </div>
-    </Modal>
-  );
-}
 
 type SkillUpdateConflictModalProps = {
   skill?: {

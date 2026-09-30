@@ -157,5 +157,5 @@ PR 只声明实际验证过的层；Release 继续通过 local manifest 与 remo
 | 确定性验证 | `npm run verify` |
 | 发布实物合同 | `docs/rules/testing-release.md` |
 
-README 只解释用户需要的安装和使用信息；本机 `AGENTS.md` 只保存私有约束并索引上述 tracked
-事实源，二者都不复制一套新的治理合同。
+README 只解释用户需要的安装和使用信息；`AGENTS.md` 索引上述 tracked 项目事实源；
+不入库的 `AGENTS-local.md` 只保存本机私有约定，三者都不复制一套新的治理合同。

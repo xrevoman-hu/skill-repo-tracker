@@ -977,3 +977,63 @@ fn commit_failure_rolls_back_all_rows_and_cleans_files() {
         assert_eq!(count, 0, "table={table}");
     }
 }
+
+#[test]
+fn disabling_after_staging_rolls_back_the_batch_and_preserves_previous_backup() {
+    let root = tempfile::tempdir().unwrap();
+    let old_path = root.path().join("previous.zip");
+    std::fs::write(&old_path, b"previous backup").unwrap();
+    let mut connection = backup_database();
+    connection
+        .execute(
+            "UPDATE repositories SET last_backup_sha = 'previous-sha', backup_path = ?1,
+         backup_enabled = 0 WHERE id = 'repo-1'",
+            params![old_path.to_string_lossy()],
+        )
+        .unwrap();
+    let mut directory = super::create_backup_directory(root.path()).unwrap();
+    let new_directory_path = directory.path().to_path_buf();
+    let new_zip = directory.write_zip("new.zip", b"new backup").unwrap();
+    let request = crate::BackupRepositoriesRequest {
+        mode: "selected".into(),
+        repo_ids: Some(vec!["repo-1".into()]),
+    };
+    let successful = [super::SuccessfulBackupUpdate {
+        repo_id: "repo-1".into(),
+        expected_remote_sha: "old-sha".into(),
+        sha: "new-sha".into(),
+        path: new_zip.to_string_lossy().into_owned(),
+    }];
+    let manifest = serde_json::json!({ "version": "1.0.0", "items": [] });
+    let error = super::finalize_backup(
+        &mut connection,
+        directory,
+        super::BackupFinalization {
+            request: &request,
+            manifest: &manifest,
+            successful: &successful,
+            failure_count: 0,
+            total_count: 1,
+            log: &[],
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.code, "backup_repository_changed");
+    assert!(!new_directory_path.exists());
+    assert_eq!(std::fs::read(&old_path).unwrap(), b"previous backup");
+    let (enabled, sha, path): (bool, String, String) = connection.query_row(
+        "SELECT backup_enabled, last_backup_sha, backup_path FROM repositories WHERE id = 'repo-1'",
+        [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    ).unwrap();
+    assert!(!enabled);
+    assert_eq!(sha, "previous-sha");
+    assert_eq!(path, old_path.to_string_lossy());
+    for table in ["backup_jobs", "backup_manifests"] {
+        let count: i64 = connection
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+}

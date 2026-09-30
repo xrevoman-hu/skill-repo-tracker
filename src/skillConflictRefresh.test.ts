@@ -39,6 +39,7 @@ const repositories: UiRepository[] = [{
   ref: "main",
   skills: 1,
   remoteSha: "remote-new",
+  backupEnabled: true,
   lastBackupSha: "none",
   backupStatus: "never-backed-up",
   checkStatus: "success",

@@ -348,7 +348,7 @@ function advisoryId(value, label, errors) {
 }
 
 function auditIdentity(value, kind, index, errors) {
-  const label = `${kind} warning ${index}`;
+  const label = kind === "vulnerability" ? `vulnerability ${index}` : `${kind} warning ${index}`;
   const advisory = advisoryId(value, label, errors);
   const package_ = value?.package;
   if (!package_ || typeof package_ !== "object" || Array.isArray(package_)) {
@@ -357,7 +357,8 @@ function auditIdentity(value, kind, index, errors) {
   }
   const { name, version, source } = package_;
   let canonical = true;
-  if (value?.kind !== kind) {
+  // RustSec Vulnerability has no kind field; Warning must match its category.
+  if (kind !== "vulnerability" && value?.kind !== kind) {
     errors.push(`${label} kind must be exactly ${kind}`);
     canonical = false;
   }
@@ -515,9 +516,10 @@ export function reconcileCargoAuditReport(ledger, report, metadataByTarget, opti
       errors.push("cargo audit vulnerability found flag does not match list contents");
     }
     if (vulnerabilities.list.length > 0) {
-      const ids = vulnerabilities.list.map(
-        (entry, index) => auditIdentity(entry, "vulnerability", index, errors)?.advisory,
-      ).filter(Boolean).sort();
+      const ids = vulnerabilities.list
+        .map((entry, index) => auditIdentity(entry, "vulnerability", index, errors))
+        .filter(Boolean)
+        .map((identity) => `${identity.advisory} ${identity.name}@${identity.version}`).sort();
       errors.push(`cargo audit vulnerabilities are never allowlisted: ${ids.join(", ") || "unknown"}`);
     }
   }
