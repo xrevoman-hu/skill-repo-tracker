@@ -69,7 +69,9 @@ const CRITICAL_PACKAGE_SCRIPTS = {
   "github:governance:check": "node scripts/github-governance-check.mjs",
   "release:verify": "node scripts/release-verify.mjs",
   preview: "vite preview --host 127.0.0.1",
-  "tauri:build": "tauri build",
+  tauri: "node scripts/native-command.mjs tauri",
+  "tauri:dev": "node scripts/native-command.mjs tauri dev",
+  "tauri:build": "node scripts/native-command.mjs tauri build",
 };
 
 test("repository boundaries reject private material and runtime build tools", () => {
@@ -281,14 +283,14 @@ test("platform Tauri overlays and custom build logic cannot escape the governed 
     "alternate Tauri config is forbidden; keep src-tauri/tauri.conf.json as the only effective config: src-tauri/tauri.macos.conf.json",
   ]);
   assert.deepEqual(
-    validateTauriBuildScriptPolicy("fn main() {\n    tauri_build::build();\n}\n"),
+    validateTauriBuildScriptPolicy(readFileSync(new URL("../../src-tauri/build.rs", import.meta.url), "utf8")),
     [],
   );
   assert.match(
     validateTauriBuildScriptPolicy(
       "fn main() { println!(\"cargo:rustc-env=TAURI_CONFIG=unsafe\"); tauri_build::build(); }\n",
     )[0],
-    /exact default Tauri build contract/,
+    /exact reviewed native\/Tauri build contract/,
   );
 });
 

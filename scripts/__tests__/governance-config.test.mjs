@@ -69,7 +69,9 @@ const CRITICAL_PACKAGE_SCRIPTS = {
   "github:governance:check": "node scripts/github-governance-check.mjs",
   "release:verify": "node scripts/release-verify.mjs",
   preview: "vite preview --host 127.0.0.1",
-  "tauri:build": "tauri build",
+  tauri: "node scripts/native-command.mjs tauri",
+  "tauri:dev": "node scripts/native-command.mjs tauri dev",
+  "tauri:build": "node scripts/native-command.mjs tauri build",
 };
 
 test("architecture production inventory excludes dedicated test modules", () => {
@@ -173,6 +175,23 @@ test("runtime toolchain requires the exact pinned Node and npm versions", () => 
       "running npm is 11.0.0; expected 10.9.8",
     ],
   );
+});
+
+test("Vitest worker concurrency is bounded without a discovery or timeout escape", () => {
+  const source = readFileSync(new URL("../../vitest.config.ts", import.meta.url), "utf8");
+  assert.deepEqual(validateVitestConfigPolicy(source), []);
+  assert.match(source, /maxWorkers: 2,/);
+  for (const mutation of [
+    source.replace("    maxWorkers: 2,\n", ""),
+    source.replace("maxWorkers: 2", "maxWorkers: 8"),
+    source.replace("maxWorkers: 2", 'maxWorkers: "100%"'),
+    source.replace("maxWorkers: 2", "maxWorkers: Number(process.env.TEST_WORKERS) || 2"),
+    source.replace("maxWorkers: 2,", "maxWorkers: 2,\n    testTimeout: 30000,"),
+    source.replace("maxWorkers: 2,", 'maxWorkers: 2,\n    include: ["src/always-green.test.ts"],'),
+  ]) {
+    assert.notEqual(mutation, source);
+    assert.match(validateVitestConfigPolicy(mutation)[0], /test and coverage discovery/);
+  }
 });
 
 test("typecheck and test discovery configurations cannot silently shrink", () => {

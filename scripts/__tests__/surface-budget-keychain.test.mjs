@@ -133,5 +133,8 @@ test("only the canonical adapters.rs Entry constructor seam may touch keyring", 
 });
 
 test("the checked-in Keychain adapter matches the exact namespace contract", () => {
-  assert.deepEqual(discoverKeychainSurface(repositoryRoot), expected);
+  assert.deepEqual(discoverKeychainSurface(repositoryRoot), [
+    "service=Skill Repo Tracker E0 Credential Access;account=vault:<id>",
+    ...expected,
+  ]);
 });

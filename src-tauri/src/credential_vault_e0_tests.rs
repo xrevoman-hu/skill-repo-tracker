@@ -133,6 +133,7 @@ fn e0_sqlcipher_reports_actual_algorithms_without_weakening_defaults() {
             .expect("SQLCipher pragma must return a value")
     };
     let cipher_version = query("cipher_version");
+    let provider = query("cipher_provider");
     let kdf = query("cipher_kdf_algorithm");
     let hmac = query("cipher_hmac_algorithm");
     let iterations: u32 = query("kdf_iter").parse().expect("numeric KDF iterations");
@@ -140,9 +141,10 @@ fn e0_sqlcipher_reports_actual_algorithms_without_weakening_defaults() {
         .parse()
         .expect("numeric page size");
     let use_hmac = query("cipher_use_hmac");
-    assert!(cipher_version.starts_with("4.5.7 "));
+    assert!(cipher_version.starts_with("4.19.0 "));
     assert!(cipher_version.contains("community"));
-    assert_eq!(rusqlite::version(), "3.45.3");
+    assert_eq!(rusqlite::version(), "3.53.4");
+    assert_eq!(provider, "commoncrypto");
     assert_eq!(kdf, "PBKDF2_HMAC_SHA512");
     assert_eq!(hmac, "HMAC_SHA512");
     assert_eq!(iterations, 256_000);
@@ -153,7 +155,7 @@ fn e0_sqlcipher_reports_actual_algorithms_without_weakening_defaults() {
         .expect("read temporary-store setting");
     assert_eq!(temp_store, 2);
     eprintln!(
-        "E0 engine: SQLCipher={cipher_version}, SQLite={}, KDF={kdf}/{iterations}, \
+        "E0 engine: SQLCipher={cipher_version}, SQLite={}, provider={provider}, KDF={kdf}/{iterations}, \
          HMAC={hmac}, page_size={page_size}, first_write_ms={}",
         rusqlite::version(),
         started.elapsed().as_millis()

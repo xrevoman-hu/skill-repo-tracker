@@ -206,6 +206,7 @@ fn native_unix_socket_has_private_mode_native_peers_and_bounded_lines() {
         .set_nonblocking(true)
         .expect("bound accept to deadline");
 
+    let owned_socket_path = socket_path.clone();
     let server = thread::spawn(move || {
         for expected_id in [1, 2] {
             let mut stream = accept_before_deadline(&listener).expect("accept E0 client");
@@ -227,6 +228,11 @@ fn native_unix_socket_has_private_mode_native_peers_and_bounded_lines() {
         stream
             .write_all(b"frame_too_large\n")
             .expect("return fixed E0 framing error");
+        // Retire the owned endpoint, as the production Endpoint drop does.
+        // Closing the listener alone does not remove its filesystem entry.
+        drop(stream);
+        drop(listener);
+        fs::remove_file(owned_socket_path).expect("retire owned E0 socket path");
     });
 
     for id in [1, 2] {
@@ -250,6 +256,7 @@ fn native_unix_socket_has_private_mode_native_peers_and_bounded_lines() {
     assert_eq!(read_bounded_line(&oversized).unwrap(), b"frame_too_large\n");
     drop(oversized);
     server.join().expect("E0 transport server terminated");
+    assert!(!socket_path.exists(), "E0 socket path was not retired");
     assert!(
         UnixStream::connect(&socket_path).is_err(),
         "E0 listener remained available after termination"

@@ -51,6 +51,24 @@ export function discoverDirBuilderPathSites(relative, masked, ownerAt) {
     ...[...masked.matchAll(chainPattern)].map((match) => match.index),
     ...[...masked.matchAll(bindingPattern)].map((match) => match.index),
   ];
+  const privateOwners = {
+    "src-tauri/src/credential_runtime.rs": "prepare_root",
+    "src-tauri/src/credential_ipc.rs": "bind_listener",
+    "src-tauri/src/credential_leases.rs": "open",
+  };
+  if (Object.hasOwn(privateOwners, relative) && creates.length !== 0) {
+    throw new Error(`${relative} credential DirBuilder must create a single private directory`);
+  }
+  const privatePattern = new RegExp(
+    `\\b${CONSTRUCTOR_SOURCE}\\s*\\(\\s*\\)\\s*\\.\\s*mode\\s*\\(\\s*0o700\\s*\\)\\s*\\.\\s*create\\s*\\(`,
+    "g",
+  );
+  for (const match of masked.matchAll(privatePattern)) {
+    if (privateOwners[relative] !== ownerAt(match.index)) {
+      throw new Error(`${relative} private DirBuilder requires its reviewed credential owner`);
+    }
+    creates.push(match.index);
+  }
   if (creates.length !== calls.length) {
     throw new Error(
       `${relative} DirBuilder values must remain statically bound to recursive(true).create(path)`,

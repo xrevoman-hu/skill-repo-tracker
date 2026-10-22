@@ -1,6 +1,9 @@
 # 数据与安全 Rules
 
-- token 只进 Keychain；禁止写入 SQLite、日志、文档、fixture、ZIP 或迁移包。
+- 原 GitHub token 只进 Keychain；禁止写入普通 SQLite、日志、文档、fixture、ZIP 或迁移包。
+- ADR 0010 的凭据 E0 使用独立 SQLCipher 库保存虚构秘密与附件；不改普通 SQLite/导出包边界。
+  主密码不持久保存；独立 Agent 码只进固定凭据 Keychain namespace，不能作为库解密密钥。
+  后端交付前重验解锁/共享状态；准备中的结果不可越过锁定或撤权。产品日志/错误不得含秘密。
 - fixture 必须脱敏且虚构，不能复制用户目录或真实 GitHub 返回。
 - 导出提示词正文前明确说明明文边界并二次确认。
 - SQLite schema 先执行旧幂等升级，再记录编号迁移；已发布迁移只追加不重写。旧应用遇到

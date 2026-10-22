@@ -18,7 +18,9 @@ const CRITICAL_PACKAGE_SCRIPTS = {
   "github:governance:check": "node scripts/github-governance-check.mjs",
   "release:verify": "node scripts/release-verify.mjs",
   preview: "vite preview --host 127.0.0.1",
-  "tauri:build": "tauri build",
+  tauri: "node scripts/native-command.mjs tauri",
+  "tauri:dev": "node scripts/native-command.mjs tauri dev",
+  "tauri:build": "node scripts/native-command.mjs tauri build",
 };
 const PRIVATE_PATHS = [
   /^AGENTS-local\.md$/,

@@ -13,7 +13,8 @@ GitHub Security Advisory 私密报告；若不可用，只提交不含敏感数�
 ## Security boundaries
 
 - GitHub token 仅存 macOS Keychain。
-- SQLite/导出包不主动包含凭据、本地源码、源码 ZIP 或任务日志。
+- 普通 SQLite 与现有导出包不主动包含凭据、本地源码、源码 ZIP 或任务日志；
+  凭据模块只在独立 SQLCipher 库保存凭据，E0 仍只接受隔离虚构资料。
 - 打开备份目录只接受稳定 ID/根目录意图，由后端重建并 canonicalize；导入、目录选择等
   明确由用户选定路径的 command 仍必须在后端重新校验类型、范围和访问边界。
 - Skill 删除仅限本应用已登记的同步副本。

@@ -25,6 +25,7 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
 ## 验证 lane
 
 - 确定性门禁：`npm run verify`。
+- Vitest 固定 `maxWorkers: 2`；测试范围、超时和断言不变。
 - 执行范围：`tsconfig.json`、`vitest.config.ts`、`src-tauri/Cargo.toml`、Tauri config 与
   `build.rs` 是精确合同；`vite.config.mjs` 锁定唯一生产入口，`playwright.config.ts` 锁定
   `e2e/`、Chromium 与 DemoAppService web server。禁止 Vitest projects/workspace、

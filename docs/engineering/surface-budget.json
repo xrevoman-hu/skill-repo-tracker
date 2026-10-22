@@ -788,8 +788,9 @@
     "rustDependencies": [
       {
         "id": "dev:rusqlite={\"defaultFeatures\":true,\"features\":[\"backup\",\"bundled-sqlcipher-vendored-openssl\"],\"optional\":false,\"package\":\"rusqlite\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
-        "status": "active",
-        "purpose": "ADR 0009: test-only SQLCipher and encrypted backup experiments; normal production SQLite features remain unchanged. Cargo test feature unification intentionally also exercises existing database regressions."
+        "status": "retiring",
+        "purpose": "ADR 0009: test-only SQLCipher and encrypted backup experiments; normal production SQLite features remain unchanged. Cargo test feature unification intentionally also exercises existing database regressions.",
+        "retirementReason": "ADR 0010 unifies production and tests on fixed external SQLCipher 4.19.0/CommonCrypto instead of ordinary bundled SQLite or the old dev-only vendored OpenSSL provider."
       },
       {
         "id": "build:tauri-build={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"tauri-build\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
@@ -848,8 +849,9 @@
       },
       {
         "id": "normal:rusqlite={\"defaultFeatures\":true,\"features\":[\"bundled\",\"chrono\"],\"optional\":false,\"package\":\"rusqlite\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
-        "status": "active",
-        "purpose": "Reviewed production dependency rusqlite; additions require explicit dependency, permission, and attack-surface review."
+        "status": "retiring",
+        "purpose": "Reviewed production dependency rusqlite; additions require explicit dependency, permission, and attack-surface review.",
+        "retirementReason": "ADR 0010 unifies production and tests on fixed external SQLCipher 4.19.0/CommonCrypto instead of ordinary bundled SQLite or the old dev-only vendored OpenSSL provider."
       },
       {
         "id": "normal:serde_json={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"serde_json\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
@@ -905,6 +907,21 @@
         "id": "normal:zip={\"defaultFeatures\":false,\"features\":[\"deflate\"],\"optional\":false,\"package\":\"zip\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
         "status": "active",
         "purpose": "Reviewed production dependency zip; additions require explicit dependency, permission, and attack-surface review."
+      },
+      {
+        "id": "normal:rusqlite={\"defaultFeatures\":true,\"features\":[\"backup\",\"bundled\",\"chrono\",\"sqlcipher\"],\"optional\":false,\"package\":\"rusqlite\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "ADR 0010: one external fixed SQLCipher provider for production and tests; bundled supplies compatible pregenerated bindings, not an alternate SQLite runtime."
+      },
+      {
+        "id": "build:serde_json={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"serde_json\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "ADR 0010: parse the fixed native build receipt; build-time only, no new runtime network or filesystem authority."
+      },
+      {
+        "id": "build:sha2={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"sha2\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "ADR 0010: verify native artifact hashes against the fixed build receipt; build-time only."
       }
     ],
     "rustTaskSites": [
@@ -957,6 +974,11 @@
         "id": "src-tauri/src/prompt_search.rs:std::thread::spawn:spawn_watchdog#1",
         "status": "active",
         "purpose": "A bounded one-shot search timeout watchdog is explicitly disarmed and joined; it is not a recurring worker."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:std::thread::spawn:run_host#1",
+        "status": "active",
+        "purpose": "ADR 0010: one explicitly started E0 listener thread, joined on host exit; bounded local requests and lease cleanup share the host state mutex."
       }
     ],
     "rustPathSites": [
@@ -2089,6 +2111,276 @@
         "id": "src-tauri/src/temp_artifacts.rs:rusqlite::Connection::open:open#1",
         "status": "active",
         "purpose": "Open the application SQLite database used to register and reconcile governed temporary artifacts."
+      },
+      {
+        "id": "src-tauri/src/credential_auth.rs:libc::getentropy:random_id#1",
+        "status": "active",
+        "purpose": "ADR 0010: Generate 32 bytes using the operating system entropy source; no caller-selected random provider."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::canonicalize:verify_peer#1",
+        "status": "active",
+        "purpose": "ADR 0010: Verify the local peer UID and executable before sending shared access material; no network or alternate executable is trusted."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::canonicalize:verify_peer#2",
+        "status": "active",
+        "purpose": "ADR 0010: Verify the local peer UID and executable before sending shared access material; no network or alternate executable is trusted."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::canonicalize:verify_root#1",
+        "status": "active",
+        "purpose": "ADR 0010: Validate the canonical private E0 root and exact ownership marker before accessing any endpoint."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::remove_file:bind_listener#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create the private bounded local endpoint, hold its single-host lock, and remove only its stale owned socket after acquiring the lock."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::remove_file:drop#1",
+        "status": "active",
+        "purpose": "ADR 0010: Remove only the endpoint whose device and inode still match the current host."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::set_permissions:bind_listener#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create the private bounded local endpoint, hold its single-host lock, and remove only its stale owned socket after acquiring the lock."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::symlink_metadata:bind_listener#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create the private bounded local endpoint, hold its single-host lock, and remove only its stale owned socket after acquiring the lock."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::symlink_metadata:bind_listener#2",
+        "status": "active",
+        "purpose": "ADR 0010: Create the private bounded local endpoint, hold its single-host lock, and remove only its stale owned socket after acquiring the lock."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::symlink_metadata:connect_host#1",
+        "status": "active",
+        "purpose": "ADR 0010: Connect only to the derived private same-user socket after root and path validation."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::symlink_metadata:drop#1",
+        "status": "active",
+        "purpose": "ADR 0010: Remove only the endpoint whose device and inode still match the current host."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:fs::symlink_metadata:private_path#1",
+        "status": "active",
+        "purpose": "ADR 0010: Require non-symlink paths owned by the current UID with exact private permissions."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:libc::flock:bind_listener#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create the private bounded local endpoint, hold its single-host lock, and remove only its stale owned socket after acquiring the lock."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:libc::geteuid:endpoint_directory#1",
+        "status": "active",
+        "purpose": "ADR 0010: Use the current UID in the fixed short endpoint namespace; the remainder derives from explicit root and vault identity."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:libc::geteuid:private_path#1",
+        "status": "active",
+        "purpose": "ADR 0010: Require non-symlink paths owned by the current UID with exact private permissions."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:libc::geteuid:verify_peer#1",
+        "status": "active",
+        "purpose": "ADR 0010: Verify the local peer UID and executable before sending shared access material; no network or alternate executable is trusted."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:libc::getpeereid:verify_peer#1",
+        "status": "active",
+        "purpose": "ADR 0010: Verify the local peer UID and executable before sending shared access material; no network or alternate executable is trusted."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:libc::getsockopt:verify_peer#1",
+        "status": "active",
+        "purpose": "ADR 0010: Verify the local peer UID and executable before sending shared access material; no network or alternate executable is trusted."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:libc::proc_pidpath:verify_peer#1",
+        "status": "active",
+        "purpose": "ADR 0010: Verify the local peer UID and executable before sending shared access material; no network or alternate executable is trusted."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:OpenOptions::new:bind_listener#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create the private bounded local endpoint, hold its single-host lock, and remove only its stale owned socket after acquiring the lock."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:OpenOptions::new:create_private#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create a new exclusive 0600 no-follow file for owned vault metadata and materialized leases."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:OpenOptions::new:read_private#1",
+        "status": "active",
+        "purpose": "ADR 0010: Open only a validated private ordinary file using no-follow and bounded reads."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:OpenOptions::open:bind_listener#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create the private bounded local endpoint, hold its single-host lock, and remove only its stale owned socket after acquiring the lock."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:OpenOptions::open:create_private#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create a new exclusive 0600 no-follow file for owned vault metadata and materialized leases."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:OpenOptions::open:read_private#1",
+        "status": "active",
+        "purpose": "ADR 0010: Open only a validated private ordinary file using no-follow and bounded reads."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:Path::exists:bind_listener#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create the private bounded local endpoint, hold its single-host lock, and remove only its stale owned socket after acquiring the lock."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:Path::is_dir:private_path#1",
+        "status": "active",
+        "purpose": "ADR 0010: Require non-symlink paths owned by the current UID with exact private permissions."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:Path::is_file:read_private#1",
+        "status": "active",
+        "purpose": "ADR 0010: Open only a validated private ordinary file using no-follow and bounded reads."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:Path::metadata:read_private#1",
+        "status": "active",
+        "purpose": "ADR 0010: Open only a validated private ordinary file using no-follow and bounded reads."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:std::fs::DirBuilder::create:bind_listener#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create the private bounded local endpoint, hold its single-host lock, and remove only its stale owned socket after acquiring the lock."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:UnixListener::bind:bind_listener#1",
+        "status": "active",
+        "purpose": "ADR 0010: Create the private bounded local endpoint, hold its single-host lock, and remove only its stale owned socket after acquiring the lock."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:UnixStream::connect:connect_host#1",
+        "status": "active",
+        "purpose": "ADR 0010: Connect only to the derived private same-user socket after root and path validation."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:File::open:persist#1",
+        "status": "active",
+        "purpose": "ADR 0010: Atomically replace and sync the non-secret lease ledger in the owned lease root."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:fs::remove_file:release#1",
+        "status": "active",
+        "purpose": "ADR 0010: Delete only a ledger-registered private ordinary lease file and persist removal; no directory scan or recursive deletion."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:fs::rename:persist#1",
+        "status": "active",
+        "purpose": "ADR 0010: Atomically replace and sync the non-secret lease ledger in the owned lease root."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:fs::symlink_metadata:release#1",
+        "status": "active",
+        "purpose": "ADR 0010: Delete only a ledger-registered private ordinary lease file and persist removal; no directory scan or recursive deletion."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:Path::exists:open#1",
+        "status": "active",
+        "purpose": "ADR 0010: Recover only registered owned lease records and a validated interrupted ledger; create the private lease directory if absent."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:Path::exists:open#2",
+        "status": "active",
+        "purpose": "ADR 0010: Recover only registered owned lease records and a validated interrupted ledger; create the private lease directory if absent."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:Path::is_file:release#1",
+        "status": "active",
+        "purpose": "ADR 0010: Delete only a ledger-registered private ordinary lease file and persist removal; no directory scan or recursive deletion."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:std::fs::DirBuilder::create:open#1",
+        "status": "active",
+        "purpose": "ADR 0010: Recover only registered owned lease records and a validated interrupted ledger; create the private lease directory if absent."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:File::open:persist_sharing#1",
+        "status": "active",
+        "purpose": "ADR 0010: Atomically persist sharing state in the validated E0 root; remove only the validated owned pending file."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:fs::canonicalize:prepare_root#1",
+        "status": "active",
+        "purpose": "ADR 0010: Accept an empty or already marked explicit canonical root, create its private ownership marker, and reject unrelated data."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:fs::read_dir:prepare_root#1",
+        "status": "active",
+        "purpose": "ADR 0010: Accept an empty or already marked explicit canonical root, create its private ownership marker, and reject unrelated data."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:fs::remove_file:persist_sharing#1",
+        "status": "active",
+        "purpose": "ADR 0010: Atomically persist sharing state in the validated E0 root; remove only the validated owned pending file."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:fs::rename:persist_sharing#1",
+        "status": "active",
+        "purpose": "ADR 0010: Atomically persist sharing state in the validated E0 root; remove only the validated owned pending file."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:Path::exists:open#1",
+        "status": "active",
+        "purpose": "ADR 0010: Read the explicit owned sharing state before host initialization; no application-data lookup."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:Path::exists:persist_sharing#1",
+        "status": "active",
+        "purpose": "ADR 0010: Atomically persist sharing state in the validated E0 root; remove only the validated owned pending file."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:Path::exists:prepare_root#1",
+        "status": "active",
+        "purpose": "ADR 0010: Accept an empty or already marked explicit canonical root, create its private ownership marker, and reject unrelated data."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:Path::exists:prepare_root#2",
+        "status": "active",
+        "purpose": "ADR 0010: Accept an empty or already marked explicit canonical root, create its private ownership marker, and reject unrelated data."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:std::fs::DirBuilder::create:prepare_root#1",
+        "status": "active",
+        "purpose": "ADR 0010: Accept an empty or already marked explicit canonical root, create its private ownership marker, and reject unrelated data."
+      },
+      {
+        "id": "src-tauri/src/credential_store.rs:rusqlite::Connection::open_with_flags:keyed#1",
+        "status": "active",
+        "purpose": "ADR 0010: Open the independent governed SQLCipher vault at the host-derived path, then apply and verify its key; never open AppState SQLite."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:fs::remove_file:remove_pending#1",
+        "status": "active",
+        "purpose": "ADR 0010: inspect and remove only the fixed interrupted ledger.new in the private owned lease directory; reject non-regular, symlink, foreign-owner or non-0600 entries and retain them on failure."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:fs::symlink_metadata:remove_pending#1",
+        "status": "active",
+        "purpose": "ADR 0010: inspect and remove only the fixed interrupted ledger.new in the private owned lease directory; reject non-regular, symlink, foreign-owner or non-0600 entries and retain them on failure."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:Path::is_file:remove_pending#1",
+        "status": "active",
+        "purpose": "ADR 0010: inspect and remove only the fixed interrupted ledger.new in the private owned lease directory; reject non-regular, symlink, foreign-owner or non-0600 entries and retain them on failure."
       }
     ],
     "keychainEntries": [
@@ -2101,6 +2393,11 @@
         "id": "service=Skill Repo Tracker;account=github-token",
         "status": "active",
         "purpose": "Read and retire the legacy GitHub token only through the reviewed macOS Keychain service and account."
+      },
+      {
+        "id": "service=Skill Repo Tracker E0 Credential Access;account=vault:<id>",
+        "status": "active",
+        "purpose": "ADR 0010: one shared Agent access code in an isolated service with bounded ASCII vault ID; separate from master password and legacy GitHub token accounts."
       }
     ],
     "runtimeInputs": [
@@ -2203,6 +2500,16 @@
         "id": "rust:src-tauri/src/lib.rs:std::env::var:SRT_DEBUG_WINDOW_WIDTH#1",
         "status": "active",
         "purpose": "Debug-build-only acceptance window width input."
+      },
+      {
+        "id": "rust:src-tauri/src/credential_ipc.rs:std::env::current_exe:<current-executable>#1",
+        "status": "active",
+        "purpose": "ADR 0010: obtain the current executable solely to verify local IPC peer identity before authentication material is delivered."
+      },
+      {
+        "id": "rust:src-tauri/src/credential_runtime.rs:std::env::args_os:<credential-cli>#1",
+        "status": "active",
+        "purpose": "ADR 0010: parse only the two explicit E0 modes with mandatory isolated root and vault ID before ordinary GUI startup."
       }
     ],
     "tauriPlugins": [

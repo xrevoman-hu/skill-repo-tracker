@@ -7,6 +7,8 @@ import { dirname, delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { VERIFY_PLAN, validateVerifyPlan } from "./verify-plan.mjs";
+import { prepareCredentialNative } from "./credential-native-build.mjs";
+import { nativeLinkEnvironment } from "./credential-native-environment.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cargoBin = join(homedir(), ".cargo", "bin");
@@ -23,10 +25,15 @@ if (planErrors.length > 0) {
   process.exit(1);
 }
 
+let nativePrepared = false;
 for (const { label, command: commandName, args } of VERIFY_PLAN) {
   const command = commandName === "node" ? process.execPath : commandName;
   console.log(`\n=== ${label} ===`);
   try {
+    if (commandName === "cargo" && !nativePrepared) {
+      Object.assign(env, nativeLinkEnvironment(prepareCredentialNative(ROOT)));
+      nativePrepared = true;
+    }
     execFileSync(command, args, {
       cwd: ROOT,
       env,

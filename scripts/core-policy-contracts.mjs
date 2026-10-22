@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { resolve } from "node:path";
 
@@ -39,6 +40,7 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: "jsdom",
+    maxWorkers: 2,
     setupFiles: ["./src/testSetup.ts"],
     css: false,
     exclude: [...configDefaults.exclude, "scripts/__tests__/**", "e2e/**"],
@@ -248,12 +250,17 @@ const EXPECTED_CI_WORKFLOW = {
         TRACKED_DEPENDENCY_OVERRIDE_STEP,
         TOOLCHAIN_OVERRIDE_STEP,
         {
+          name: "Set up Node.js for native preparation",
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+          with: { "node-version": "${{ env.NODE_VERSION }}", "package-manager-cache": false },
+        },
+        {
           name: "Install the declared minimum Rust version",
           run: "rustup toolchain install 1.88.0 --profile minimal",
         },
         {
           name: "Compile every target at MSRV",
-          run: "cargo +1.88.0 check --locked --all-targets --all-features --manifest-path src-tauri/Cargo.toml",
+          run: "node scripts/native-command.mjs check-msrv",
         },
       ],
     },
@@ -485,9 +492,11 @@ export function isAlternateTauriConfigPath(path) {
 }
 
 export function validateTauriBuildScriptPolicy(contents) {
-  return contents === "fn main() {\n    tauri_build::build();\n}\n"
+  // ADR 0010: exact native integrity checks followed by the existing Tauri build.
+  const reviewed = "fd51a39260793bd4c4c13cdc6e803b67d65bfa6103eb7dbebd51a1d967f5fd55";
+  return createHash("sha256").update(contents).digest("hex") === reviewed
     ? []
-    : ["src-tauri/build.rs must remain the exact default Tauri build contract"];
+    : ["src-tauri/build.rs must remain the exact reviewed native/Tauri build contract"];
 }
 
 export function validateRepositoryAutomationPolicy({ workflowPaths, dependabotContents }) {
@@ -560,4 +569,12 @@ export function validateTrustedPolicyWorkflowPolicy(contents) {
     "trusted policy",
     EXPECTED_TRUSTED_POLICY_WORKFLOW,
   );
+}
+
+// ADR 0010: this build-only native source can fetch and execute compiler tools.
+// Keep the complete reviewed implementation pinned, alongside explicit negative tests.
+export function validateCredentialNativeSourcePolicy(contents) {
+  const expected = "d0dbdb76770f5ee044478fc72294cee44364290e3cce7c23b816d2e416d9fe34";
+  return createHash("sha256").update(contents).digest("hex") === expected
+    ? [] : ["native preparation must remain the exact reviewed pinned-source contract"];
 }

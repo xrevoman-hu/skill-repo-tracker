@@ -293,23 +293,56 @@ function assertCanonicalAdapters(structural, literal) {
   }
 }
 
+function assertCredentialAccessStore(structural, literal) {
+  if (/\b(?:pub\s+)?use\b[^;]*\bkeyring\b|\btype\s+\w+[^;=]*=\s*keyring\s*::/.test(structural)) {
+    throw new Error("credential Keychain aliases are forbidden");
+  }
+  const services = [...literal.matchAll(/\bconst\s+SERVICE\s*:\s*&str\s*=\s*"([^"]*)"\s*;/g)];
+  if (services.length !== 1 || services[0][1] !== "Skill Repo Tracker E0 Credential Access") {
+    throw new Error("credential Keychain service must remain the reviewed isolated namespace");
+  }
+  const expectedId = '!value.is_empty()&&value.len()<=64&&value.bytes().all(|b|b.is_ascii_alphanumeric()||b==b\'-\')';
+  if (singleFunctionBody(structural, literal, "valid_id") !== expectedId) {
+    throw new Error("credential Keychain account validator must remain bounded ASCII");
+  }
+  const expectedEntry = 'if!valid_id(vault_id){returnErr("invalid_vault_id");}' +
+    'keyring::Entry::new(SERVICE,&format!("vault:{vault_id}"))' +
+    '.map_err(|_|"credential_store_unavailable")';
+  if (singleFunctionBody(structural, literal, "entry") !== expectedEntry ||
+      [...structural.matchAll(/\bkeyring\s*::\s*Entry\s*::\s*new\s*\(/g)].length !== 1) {
+    throw new Error("credential Keychain must use one validated account entry seam");
+  }
+  for (const [, type, member] of structural.matchAll(/\bkeyring\s*::\s*(\w+)(?:\s*::\s*(\w+))?/g)) {
+    if (!(type === "Entry" && (!member || member === "new")) && !(type === "Error" && member === "NoEntry")) {
+      throw new Error("credential Keychain contains an unreviewed API");
+    }
+  }
+}
+
 export function discoverKeychainSurface(root) {
   let libViews;
   let adapterViews;
+  let credentialViews;
   for (const absolute of productionRustFiles(root)) {
     const relative = path.relative(root, absolute).split(path.sep).join("/");
     const views = rustViews(readFileSync(absolute, "utf8"));
     if (relative === "src-tauri/src/lib.rs") libViews = views;
     if (relative === "src-tauri/src/adapters.rs") adapterViews = views;
-    if (/\bkeyring\s*::/.test(views.structural) && relative !== "src-tauri/src/adapters.rs") {
+    if (relative === "src-tauri/src/credential_auth.rs") credentialViews = views;
+    if (/\bkeyring\s*::/.test(views.structural) && !["src-tauri/src/adapters.rs", "src-tauri/src/credential_auth.rs"].includes(relative)) {
       throw new Error(
         `${relative} keyring references are restricted to src-tauri/src/adapters.rs`,
       );
     }
   }
   if (!libViews || !adapterViews) throw new Error("canonical Keychain source files are missing");
-  if (!/\bkeyring\s*::/.test(adapterViews.structural)) return [];
+  const credentialSurface = [];
+  if (credentialViews && /\bkeyring\s*::/.test(credentialViews.structural)) {
+    assertCredentialAccessStore(credentialViews.structural, credentialViews.literal);
+    credentialSurface.push("service=Skill Repo Tracker E0 Credential Access;account=vault:<id>");
+  }
+  if (!/\bkeyring\s*::/.test(adapterViews.structural)) return credentialSurface;
   assertCanonicalLib(libViews.structural, libViews.literal);
   assertCanonicalAdapters(adapterViews.structural, adapterViews.literal);
-  return [...KEYCHAIN_SURFACE];
+  return [...KEYCHAIN_SURFACE, ...credentialSurface].sort();
 }

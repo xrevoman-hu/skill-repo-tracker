@@ -7,6 +7,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { RUST_COVERAGE_TEST_FILE_PATTERN } from "./source-classification.mjs";
+import { prepareCredentialNative } from "./credential-native-build.mjs";
+import { nativeLinkEnvironment } from "./credential-native-environment.mjs";
 
 export { RUST_COVERAGE_TEST_FILE_PATTERN } from "./source-classification.mjs";
 
@@ -23,8 +25,8 @@ export function validateCoverageToolVersion(output) {
   }
 }
 
-function run(args) {
-  execFileSync(cargo, args, { cwd: ROOT, stdio: "inherit", env: process.env });
+function run(args, nativeEnv) {
+  execFileSync(cargo, args, { cwd: ROOT, stdio: "inherit", env: { ...process.env, ...nativeLinkEnvironment(nativeEnv) } });
 }
 
 function main() {
@@ -48,7 +50,7 @@ function main() {
     "--lcov",
     "--output-path",
     "coverage/rust.lcov",
-  ]);
+  ], prepareCredentialNative(ROOT));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

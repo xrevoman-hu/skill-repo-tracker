@@ -432,6 +432,12 @@
       "principles": [2, 3, 4, 5, 7],
       "reviewOnChange": [
         "src-tauri/src/database.rs",
+        "src-tauri/src/credential_auth.rs",
+        "src-tauri/src/credential_ipc.rs",
+        "src-tauri/src/credential_leases.rs",
+        "src-tauri/src/credential_mcp.rs",
+        "src-tauri/src/credential_runtime.rs",
+        "src-tauri/src/credential_store.rs",
         "src-tauri/src/github_accounts.rs",
         "src-tauri/src/prompt_migration.rs",
         "src-tauri/src/prompt_zip.rs",
@@ -863,6 +869,84 @@
           {
             "path": "src-tauri/src/database.rs",
             "selector": "published_core_schema_fixtures_upgrade_without_data_loss"
+          }
+        ]
+      }
+    },
+    {
+      "id": "adr-0010-credential-native-runtime",
+      "kind": "decision",
+      "path": "docs/adr/0010-credential-native-runtime.md",
+      "status": "active",
+      "checksum": "sha256:8e324205f29d8a2f9bf167f4435f3f0db093327148b55c7389f2c559828436b7",
+      "principles": [
+        1,
+        2,
+        4,
+        5,
+        7
+      ],
+      "reviewOnChange": [
+        "src-tauri/Cargo.toml",
+        "src-tauri/Cargo.lock",
+        "src-tauri/build.rs",
+        "src-tauri/src/main.rs",
+        "src-tauri/src/credential_auth.rs",
+        "src-tauri/src/credential_ipc.rs",
+        "src-tauri/src/credential_leases.rs",
+        "src-tauri/src/credential_mcp.rs",
+        "src-tauri/src/credential_runtime.rs",
+        "src-tauri/src/credential_runtime_tests.rs",
+        "src-tauri/src/credential_store.rs",
+        "scripts/credential-native-build.mjs",
+        "scripts/credential-native-environment.mjs",
+        "scripts/credential-runtime-policy.mjs",
+        "scripts/native-command.mjs",
+        "scripts/verify.mjs",
+        "scripts/rust-coverage.mjs",
+        "scripts/release-verify.mjs",
+        "scripts/surface-budget-keychain.mjs",
+        "scripts/surface-budget-runtime-inputs.mjs",
+        "scripts/surface-budget-rust.mjs",
+        "scripts/surface-budget-rust-dir-builder.mjs",
+        "scripts/core-policy-contracts.mjs",
+        "scripts/__tests__/credential-native-policy.test.mjs",
+        "scripts/__tests__/credential-runtime-policy.test.mjs"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": [
+          "verify",
+          "ci"
+        ],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/credential-native-policy.test.mjs",
+            "selector": "native preparation rejects source, environment, cache and compiler bypasses"
+          },
+          {
+            "path": "scripts/__tests__/credential-native-policy.test.mjs",
+            "selector": "native build contract rejects removed integrity checks, alternate libraries and Tauri overrides"
+          },
+          {
+            "path": "scripts/__tests__/credential-runtime-policy.test.mjs",
+            "selector": "credential Unix sockets are inventoried only in the dedicated adapter and never permit network aliases"
+          },
+          {
+            "path": "scripts/__tests__/credential-runtime-policy.test.mjs",
+            "selector": "credential CLI and executable identity inputs require exact files and functions"
+          },
+          {
+            "path": "scripts/__tests__/credential-runtime-policy.test.mjs",
+            "selector": "credential Keychain namespace cannot widen or acquire an additional Entry seam"
+          },
+          {
+            "path": "scripts/__tests__/credential-runtime-policy.test.mjs",
+            "selector": "credential directories permit only mode 0700 at their exact owner functions"
+          },
+          {
+            "path": "scripts/__tests__/credential-native-policy.test.mjs",
+            "selector": "native linker environment cannot inherit a pkg-config or dynamic-library override"
           }
         ]
       }

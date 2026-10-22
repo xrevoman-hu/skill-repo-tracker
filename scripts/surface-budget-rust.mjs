@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { isRustProductionSourcePath } from "./source-classification.mjs";
 import { discoverDirBuilderPathSites } from "./surface-budget-rust-dir-builder.mjs";
+import { credentialLocalTransport } from "./credential-runtime-policy.mjs";
 
 const TASK_APIS = new Set([
   "async_std::task::spawn",
@@ -415,7 +416,9 @@ function rustPathSites(relative, source, masked) {
       `${relative} must not define local Rust macros that can hide governed execution primitives`,
     );
   }
-  if (RAW_NETWORK_TOKEN.test(masked) || UNAPPROVED_TRANSPORT_TOKEN.test(masked)) {
+  const localTransport = credentialLocalTransport(relative, masked, (position) =>
+    functionAt(enclosingFunctions(masked), position));
+  if (RAW_NETWORK_TOKEN.test(localTransport.masked) || UNAPPROVED_TRANSPORT_TOKEN.test(masked)) {
     throw new Error(`${relative} must not use raw or unapproved network transports`);
   }
   if (
@@ -494,7 +497,7 @@ function rustPathSites(relative, source, masked) {
 
   const functions = enclosingFunctions(masked);
   const counts = new Map();
-  const sites = [];
+  const sites = [...localTransport.sites];
   const inventoryCalls = (referencePattern, callPattern, normalize, label) => {
     const references = [...masked.matchAll(referencePattern)];
     const calls = [...masked.matchAll(callPattern)];
@@ -586,7 +589,9 @@ function rustPathSites(relative, source, masked) {
     let cursor = reference.index + reference[0].length;
     while (/\s/.test(masked[cursor] ?? "")) cursor += 1;
     if (masked[cursor] !== "(") {
-      if (!["c_int", "stat"].includes(reference[1])) {
+      const allowedTypes = relative === "src-tauri/src/credential_ipc.rs"
+        ? ["c_int", "stat", "pid_t", "socklen_t"] : ["c_int", "stat"];
+      if (!allowedTypes.includes(reference[1])) {
         throw new Error(`${relative} libc primitive must remain a canonical direct call`);
       }
       continue;

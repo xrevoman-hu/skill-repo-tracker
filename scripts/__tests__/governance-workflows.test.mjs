@@ -69,7 +69,9 @@ const CRITICAL_PACKAGE_SCRIPTS = {
   "github:governance:check": "node scripts/github-governance-check.mjs",
   "release:verify": "node scripts/release-verify.mjs",
   preview: "vite preview --host 127.0.0.1",
-  "tauri:build": "tauri build",
+  tauri: "node scripts/native-command.mjs tauri",
+  "tauri:dev": "node scripts/native-command.mjs tauri dev",
+  "tauri:build": "node scripts/native-command.mjs tauri build",
 };
 
 const CHECKOUT_NODE24_SHA = "3d3c42e5aac5ba805825da76410c181273ba90b1";
@@ -273,8 +275,8 @@ test("CI workflow keeps every required gate fail-closed and exact", () => {
       ),
     ],
     [
-      "remove the locked MSRV flag",
-      valid.replace("cargo +1.88.0 check --locked", "cargo +1.88.0 check"),
+      "bypass native preparation and the locked MSRV scope",
+      valid.replace("node scripts/native-command.mjs check-msrv", "cargo +1.88.0 check"),
     ],
   ]) {
     assert.ok(
@@ -397,7 +399,7 @@ test("weekly resilience workflow keeps repeats and the performance gate fail-clo
     [
       "remove performance command",
       valid.replace(
-        "run: cargo test --release --locked --manifest-path src-tauri/Cargo.toml prompt_library_release_performance_gate -- --ignored --nocapture --test-threads=1",
+        "run: node scripts/native-command.mjs performance",
         "run: true",
       ),
     ],

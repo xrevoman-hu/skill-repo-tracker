@@ -8,8 +8,13 @@ ADR 或 `docs/rules/`。
 
 Skill Repo Tracker 是 local-first macOS 桌面应用：React/TypeScript 负责交互，
 Tauri command 是进程边界，Rust 服务负责 SQLite、Keychain、文件系统和 GitHub
-访问。SQLite 保存非敏感元数据；GitHub token 只存 macOS Keychain。Web demo
+访问。原有普通 SQLite 保存非敏感元数据；GitHub token 只存 macOS Keychain。Web demo
 必须通过 `DemoAppService` 提供数据，不能在 View 内散布运行时分支。
+
+凭据 E0 按 ADR 0010 使用独立 SQLCipher 库与同一可执行文件的早期 STDIO/本机宿主模式；
+六个凭据模块从现有 `main.rs` 可达，不能启动真实 `AppState` 迁移。生产引擎准备与校验
+由唯一原生构建模块复用；原有普通库、GitHub token 与非敏感迁移包的内容边界保持。
+宿主与租约策略归 domain；Keychain、IPC、MCP 协议和独立库归 adapter，adapter 不反向依赖宿主。
 
 ## 依赖方向
 

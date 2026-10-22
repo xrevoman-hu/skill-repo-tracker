@@ -1,5 +1,10 @@
 # 权限预算 Rules
 
+ADR 0010 仅增加凭据 E0 的精确本机例外：`credential_ipc.rs` 中受限 Unix socket 与对端
+身份校验、`credential_auth.rs` 中固定独立 Keychain namespace、唯一 CLI 参数入口和
+自有隔离库/lease 目录。固定 SQLCipher 原生源准备属于构建工具，不是应用网络权限；
+应用仍不得通过 TCP、任意进程或任意文件路径绕过下面的既有边界。原 GitHub adapter 不变。
+
 | 类型 | 当前允许范围 | 变更要求 |
 |---|---|---|
 | Tauri commands | `src-tauri/src/lib.rs` 注册清单 | 输入校验、负向测试、PR 声明 |

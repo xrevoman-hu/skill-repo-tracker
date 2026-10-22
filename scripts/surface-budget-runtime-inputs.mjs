@@ -3,6 +3,7 @@ import path from "node:path";
 import ts from "typescript";
 
 import { isRustProductionSourcePath } from "./source-classification.mjs";
+import { credentialRuntimeInputAllowed } from "./credential-runtime-policy.mjs";
 
 const QUERY_HELPERS = new Set(["initialParam", "initialFreeParam"]);
 const STORAGE_NAMES = new Set(["localStorage", "sessionStorage", "indexedDB", "Storage"]);
@@ -438,8 +439,12 @@ function analyzeRustFile(relative, source) {
     throw new Error(`${relative} environment input must use the exact std::env path`);
   }
   for (const name of FORBIDDEN_RUST_ENV_FUNCTIONS) {
-    if (new RegExp(`\\bstd\\s*::\\s*env\\s*::\\s*${name}\\s*\\(`).test(masked)) {
-      throw new Error(`${relative} unconditional std::env::${name} environment input is forbidden`);
+    for (const match of masked.matchAll(new RegExp(`\\bstd\\s*::\\s*env\\s*::\\s*${name}\\s*\\(`, "g"))) {
+      if (!credentialRuntimeInputAllowed(relative, rustFunctionAt(functions, match.index), name)) {
+        throw new Error(`${relative} unconditional std::env::${name} environment input is forbidden`);
+      }
+      if (callArguments(source, masked, match) !== "") throw new Error("credential runtime input must take no arguments");
+      inputs.push({ api: `std::env::${name}`, key: name === "args_os" ? "<credential-cli>" : "<current-executable>", position: match.index });
     }
   }
 
@@ -451,7 +456,9 @@ function analyzeRustFile(relative, source) {
     const name = match[1];
     if (
       ["var", "var_os", "temp_dir", "consts"].includes(name) ||
-      allowedPureFunctions.has(name)
+      allowedPureFunctions.has(name) ||
+      (credentialRuntimeInputAllowed(relative, rustFunctionAt(functions, match.index), name) &&
+        masked.slice(match.index + match[0].length).trimStart().startsWith("("))
     ) {
       continue;
     }

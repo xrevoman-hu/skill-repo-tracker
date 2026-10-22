@@ -34,6 +34,8 @@ import {
   validateFinalReleaseMetadata,
   validateLocalReleaseSource,
 } from "./release-source-policy.mjs";
+import { prepareCredentialNative } from "./credential-native-build.mjs";
+import { nativeLinkEnvironment } from "./credential-native-environment.mjs";
 
 export {
   buildLocalMainFetchArguments,
@@ -605,6 +607,7 @@ function localPhase(version) {
   run("npm", ["run", "verify"]);
   run("npm", ["run", "coverage:check"]);
   run("npm", ["run", "test:e2e"]);
+  const nativeOptions = { env: { ...process.env, ...nativeLinkEnvironment(prepareCredentialNative(ROOT)) } };
   run(cargoExecutable(), [
     "+1.88.0",
     "check",
@@ -613,7 +616,7 @@ function localPhase(version) {
     "--all-features",
     "--manifest-path",
     "src-tauri/Cargo.toml",
-  ]);
+  ], nativeOptions);
   run(cargoExecutable(), [
     "test",
     "--release",
@@ -625,7 +628,7 @@ function localPhase(version) {
     "--ignored",
     "--nocapture",
     "--test-threads=1",
-  ]);
+  ], nativeOptions);
   run("npm", ["run", "tauri:build", "--", "--bundles", "app,dmg"]);
 
   const bundleRoot = join(ROOT, "src-tauri/target/release/bundle");

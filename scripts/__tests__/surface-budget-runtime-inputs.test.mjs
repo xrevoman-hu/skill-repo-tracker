@@ -173,6 +173,8 @@ test("the checked-in runtime input surface matches every live query and environm
     "frontend:src/App.tsx:query:selectedSkill#1",
     "frontend:src/App.tsx:query:tab#1",
     "frontend:src/App.tsx:query:theme#1",
+    "rust:src-tauri/src/credential_ipc.rs:std::env::current_exe:<current-executable>#1",
+    "rust:src-tauri/src/credential_runtime.rs:std::env::args_os:<credential-cli>#1",
     "rust:src-tauri/src/lib.rs:env!:CARGO_PKG_VERSION#1",
     "rust:src-tauri/src/lib.rs:env!:CARGO_PKG_VERSION#2",
     "rust:src-tauri/src/lib.rs:std::env::temp_dir:<platform-temp>#1",

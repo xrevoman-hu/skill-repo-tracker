@@ -99,11 +99,11 @@ const EXPECTED_WEEKLY_RESILIENCE_WORKFLOW = {
         },
         {
           name: "Repeat race and filesystem suites",
-          run: 'for attempt in 1 2 3; do\n  echo "repeat attempt ${attempt}/3"\n  npm test\n  cargo test --locked --all-features --manifest-path src-tauri/Cargo.toml\ndone\n',
+          run: 'for attempt in 1 2 3; do\n  echo "repeat attempt ${attempt}/3"\n  npm test\n  node scripts/native-command.mjs rust-tests\ndone\n',
         },
         {
           name: "Run the 10,000 prompts / 100 MiB release performance gate",
-          run: "cargo test --release --locked --manifest-path src-tauri/Cargo.toml prompt_library_release_performance_gate -- --ignored --nocapture --test-threads=1",
+          run: "node scripts/native-command.mjs performance",
         },
       ],
     },

@@ -408,6 +408,27 @@
         "src-tauri/src/prompt_zip.rs",
         "src-tauri/src/prompts.rs"
       ]
+    },
+    {
+      "id": "rust-credential-runtime",
+      "runtime": "rust",
+      "layer": "rust-domain",
+      "ownerRule": "docs/rules/data-security.md",
+      "decisions": ["docs/adr/0010-credential-native-runtime.md"],
+      "paths": ["src-tauri/src/credential_runtime.rs", "src-tauri/src/credential_leases.rs"]
+    },
+    {
+      "id": "rust-credential-adapters",
+      "runtime": "rust",
+      "layer": "rust-adapter",
+      "ownerRule": "docs/rules/data-security.md",
+      "decisions": ["docs/adr/0010-credential-native-runtime.md"],
+      "paths": [
+        "src-tauri/src/credential_auth.rs",
+        "src-tauri/src/credential_ipc.rs",
+        "src-tauri/src/credential_mcp.rs",
+        "src-tauri/src/credential_store.rs"
+      ]
     }
   ],
   "dependencyExceptions": [
