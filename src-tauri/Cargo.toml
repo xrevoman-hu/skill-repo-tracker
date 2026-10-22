@@ -41,4 +41,5 @@ walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
+rusqlite = { version = "0.32", features = ["backup", "bundled-sqlcipher-vendored-openssl"] }
 tauri = { version = "2", features = ["test"] }

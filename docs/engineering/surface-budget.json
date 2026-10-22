@@ -787,6 +787,11 @@
     ],
     "rustDependencies": [
       {
+        "id": "dev:rusqlite={\"defaultFeatures\":true,\"features\":[\"backup\",\"bundled-sqlcipher-vendored-openssl\"],\"optional\":false,\"package\":\"rusqlite\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
+        "status": "active",
+        "purpose": "ADR 0009: test-only SQLCipher and encrypted backup experiments; normal production SQLite features remain unchanged. Cargo test feature unification intentionally also exercises existing database regressions."
+      },
+      {
         "id": "build:tauri-build={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"tauri-build\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
         "status": "active",
         "purpose": "Reviewed Cargo build dependency tauri-build; identity, source, default features, and features are immutable without an explicit surface change."

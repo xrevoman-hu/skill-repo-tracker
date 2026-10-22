@@ -2,6 +2,10 @@ use rusqlite::{params, Connection};
 
 use crate::{utc_now, AppError};
 
+#[cfg(test)]
+#[path = "credential_vault_e0_tests.rs"]
+mod credential_vault_e0_tests;
+
 const CORE_SCHEMA_BASELINE_VERSION: i64 = 1;
 const CORE_SCHEMA_BASELINE_NAME: &str = "legacy-v1.2.2-baseline";
 const BACKUP_PREFERENCE_VERSION: i64 = 2;

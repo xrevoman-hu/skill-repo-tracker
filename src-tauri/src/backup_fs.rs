@@ -1,5 +1,9 @@
 use std::{fs, io, path::Path};
 
+#[cfg(test)]
+#[path = "credential_ssh_e0_tests.rs"]
+mod credential_ssh_e0_tests;
+
 #[cfg(unix)]
 use std::{
     ffi::CString,

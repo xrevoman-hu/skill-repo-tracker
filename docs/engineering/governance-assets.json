@@ -788,6 +788,32 @@
       }
     },
     {
+      "id": "adr-0009-credential-vault-e0",
+      "kind": "decision",
+      "path": "docs/adr/0009-credential-vault-e0.md",
+      "status": "active",
+      "checksum": "sha256:fce88d3afdf30cdc1733718088346d7a980bc23ccf4c8704f9af1044228e5caf",
+      "principles": [
+        1,
+        2,
+        4,
+        5,
+        7
+      ],
+      "reviewOnChange": [
+        "src-tauri/Cargo.toml",
+        "src-tauri/Cargo.lock",
+        "src-tauri/src/credential_vault_e0_tests.rs",
+        "src-tauri/src/credential_ssh_e0_tests.rs",
+        "src-tauri/src/credential_native_e0_tests.rs"
+      ],
+      "enforcement": {
+        "mode": "review",
+        "gates": [],
+        "evidence": []
+      }
+    },
+    {
       "id": "core-schema-v1-1-12",
       "kind": "fixture",
       "path": "src-tauri/tests/fixtures/core-schema/v1.1.12.sql",

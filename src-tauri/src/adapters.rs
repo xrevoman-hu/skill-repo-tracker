@@ -379,3 +379,6 @@ mod tests {
         );
     }
 }
+#[cfg(test)]
+#[path = "credential_native_e0_tests.rs"]
+mod credential_native_e0_tests;
