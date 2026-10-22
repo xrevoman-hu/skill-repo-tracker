@@ -28,34 +28,54 @@ export function CredentialDetail({ record, transport, language, onClose, onEdit,
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [inspection, setInspection] = useState<CredentialFileInspection | null>(null);
-  const session = useRef<string>(newCredentialSessionId());
+  const session = useRef("");
   const currentVerified = useRef("");
+  const nativeReady = useRef<CredentialTransport | null>(null);
   const active = useRef(true);
   const exportGeneration = useRef(0);
   const drawer = useRef<HTMLElement | null>(null);
 
-  function invalidate() {
-    const previous = session.current;
+  function resetDetails() {
     session.current = newCredentialSessionId();
     currentVerified.current = "";
     setShown({}); setVerified(false); setVerify(null); setPassword(""); setPending(false); setInspection(null);
+  }
+  function focusUnavailable() { setError(credentialError("window_focus_unavailable", language)); }
+  function canUseSecrets() {
+    if (!transport.onBlur || nativeReady.current === transport) return true;
+    focusUnavailable();
+    return false;
+  }
+  function invalidate() {
+    const previous = session.current;
+    resetDetails();
     void transport.request({ action: "invalidate_session", sessionId: previous }).catch(() => {
       if (active.current) setError(zh ? "未能确认验证会话已结束，请锁定凭据库。" : "Could not confirm session invalidation. Lock the vault.");
     });
   }
   useEffect(() => {
     active.current = true;
-    session.current = newCredentialSessionId();
-    currentVerified.current = "";
-    setShown({}); setVerified(false); setVerify(null); setPassword(""); setPending(false); setInspection(null);
+    nativeReady.current = null;
+    resetDetails();
+    let disposed = false;
+    let unlisten: (() => void | Promise<void>) | undefined;
+    const release = () => { if (unlisten) void Promise.resolve().then(unlisten).catch(() => undefined); };
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     drawer.current?.querySelector<HTMLButtonElement>("button")?.focus();
-    const blur = () => invalidate();
+    const blur = () => { if (!disposed) invalidate(); };
     window.addEventListener("blur", blur);
+    if (transport.onBlur) void transport.onBlur(blur).then((stop) => {
+      unlisten = stop;
+      if (disposed) release();
+      else nativeReady.current = transport;
+    }).catch(() => { if (!disposed) focusUnavailable(); });
     return () => {
+      disposed = true;
       active.current = false;
+      nativeReady.current = null;
       exportGeneration.current += 1;
       window.removeEventListener("blur", blur);
+      release();
       const previous = session.current;
       session.current = "";
       currentVerified.current = "";
@@ -101,7 +121,7 @@ export function CredentialDetail({ record, transport, language, onClose, onEdit,
     }
   }
   async function chooseExport(field: string) {
-    if (pending) return;
+    if (pending || !canUseSecrets()) return;
     const token = ++exportGeneration.current;
     setPending(true); setError("");
     try {
@@ -113,6 +133,7 @@ export function CredentialDetail({ record, transport, language, onClose, onEdit,
     finally { if (active.current && token === exportGeneration.current) setPending(false); }
   }
   async function requestAction(action: SecretAction) {
+    if (!canUseSecrets()) return;
     setError("");
     if (!session.current || currentVerified.current !== session.current) { setVerify(action); return; }
     const id = session.current;
@@ -122,7 +143,7 @@ export function CredentialDetail({ record, transport, language, onClose, onEdit,
     finally { if (valid(id)) setPending(false); }
   }
   async function authenticate() {
-    if (!verify || pending) return;
+    if (!verify || pending || !canUseSecrets()) return;
     const action = verify;
     const id = session.current;
     setPending(true); setError("");

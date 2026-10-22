@@ -132,7 +132,7 @@ type TauriTransport = Pick<
 export class TauriAppService implements AppService {
   readonly runtime = "tauri" as const;
   readonly promptTransport: PromptTransport = api;
-  readonly credentialTransport: CredentialTransport = { request: api.credentialRequest };
+  readonly credentialTransport: CredentialTransport = { request: api.credentialRequest, onBlur: api.onCredentialBlur };
 
   constructor(private readonly transport: TauriTransport = api) {}
 

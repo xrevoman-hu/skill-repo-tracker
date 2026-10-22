@@ -43,7 +43,7 @@ function validateTauriImport(relative, declaration, fail) {
     ) {
       fail(
         declaration,
-        `${expectedModule} must keep its one reviewed ${expectedName} import in ${expectedFile}`,
+        `Tauri API ${expectedModule} must keep its one reviewed ${expectedName} import in ${expectedFile}`,
       );
     }
   };
@@ -51,6 +51,12 @@ function validateTauriImport(relative, declaration, fail) {
     exactNamedImport("src/api.ts", moduleName, "invoke");
   } else if (moduleName === "@tauri-apps/api/window") {
     exactNamedImport("src/App.tsx", moduleName, "getCurrentWindow");
+  } else if (moduleName === "@tauri-apps/api/event") {
+    exactNamedImport("src/api.ts", moduleName, "listen");
+    if (declaration.importClause?.name || declaration.importClause?.isTypeOnly ||
+        (bindings && ts.isNamedImports(bindings) && bindings.elements.some((entry) => entry.isTypeOnly))) {
+      fail(declaration, "Tauri credential blur requires one runtime named listen import");
+    }
   } else {
     fail(declaration, `Tauri API module ${moduleName} is outside the reviewed IPC adapters`);
   }
@@ -155,6 +161,54 @@ function staticPropertyName(name) {
   return null;
 }
 
+function exactObjectProperties(node, names) {
+  if (!ts.isObjectLiteralExpression(node) || node.properties.length !== names.length) return null;
+  const values = new Map();
+  for (const property of node.properties) {
+    if (!ts.isPropertyAssignment(property)) return null;
+    const name = staticPropertyName(property.name);
+    if (!names.includes(name) || values.has(name)) return null;
+    values.set(name, property.initializer);
+  }
+  return values;
+}
+
+function isCredentialBlurCall(node, relative) {
+  if (relative !== "src/api.ts" || !ts.isCallExpression(node) || node.questionDotToken ||
+      node.typeArguments?.length || !ts.isIdentifier(node.expression) || node.expression.text !== "listen" ||
+      node.arguments.length !== 3) return false;
+  const [event, handler, options] = node.arguments;
+  if (!ts.isStringLiteralLike(event) || event.text !== "tauri://blur" ||
+      !ts.isIdentifier(handler) || handler.text !== "handler") return false;
+  const outer = exactObjectProperties(options, ["target"]);
+  const target = outer && exactObjectProperties(outer.get("target"), ["kind", "label"]);
+  if (!target || !ts.isStringLiteralLike(target.get("kind")) || target.get("kind").text !== "Window" ||
+      !ts.isStringLiteralLike(target.get("label")) || target.get("label").text !== "main") return false;
+  const wrapper = node.parent;
+  if (!ts.isArrowFunction(wrapper) || wrapper.body !== node || wrapper.modifiers?.length ||
+      wrapper.parameters.length !== 1) return false;
+  const parameter = wrapper.parameters[0];
+  if (!ts.isIdentifier(parameter.name) || parameter.name.text !== "handler" ||
+      parameter.dotDotDotToken || parameter.questionToken || parameter.initializer || parameter.modifiers?.length ||
+      !parameter.type || !ts.isFunctionTypeNode(parameter.type) || parameter.type.parameters.length ||
+      parameter.type.type.kind !== ts.SyntaxKind.VoidKeyword) return false;
+  const property = wrapper.parent;
+  if (!ts.isPropertyAssignment(property) || staticPropertyName(property.name) !== "onCredentialBlur" ||
+      property.initializer !== wrapper || !ts.isObjectLiteralExpression(property.parent)) return false;
+  if (property.parent.properties.some((entry) =>
+    ts.isSpreadAssignment(entry) || (entry.name && ts.isComputedPropertyName(entry.name)),
+  ) ||
+      property.parent.properties.filter((entry) => staticPropertyName(entry.name) === "onCredentialBlur").length !== 1) return false;
+  const declaration = property.parent.parent;
+  if (!ts.isVariableDeclaration(declaration) || declaration.initializer !== property.parent ||
+      !ts.isIdentifier(declaration.name) || declaration.name.text !== "api") return false;
+  const declarations = declaration.parent;
+  const statement = declarations.parent;
+  return ts.isVariableDeclarationList(declarations) && Boolean(declarations.flags & ts.NodeFlags.Const) &&
+    ts.isVariableStatement(statement) && ts.isSourceFile(statement.parent) &&
+    statement.modifiers?.length === 1 && statement.modifiers[0].kind === ts.SyntaxKind.ExportKeyword;
+}
+
 function resolvesToScheduleModule(relative, specifier) {
   if (!specifier.startsWith(".")) return false;
   const resolved = path.posix
@@ -199,6 +253,8 @@ function analyzeFile(relative, source) {
   const violations = [];
   const visitedImports = new Set();
   let scheduleImports = 0;
+  let credentialBlurImports = 0;
+  let credentialBlurCalls = 0;
   const line = (node) =>
     sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
   const fail = (node, message) => violations.push(`${relative}:${line(node)} ${message}`);
@@ -237,6 +293,7 @@ function analyzeFile(relative, source) {
 
     if (ts.isImportDeclaration(node) && ts.isStringLiteralLike(node.moduleSpecifier)) {
       if (isTauriApiModule(node.moduleSpecifier.text)) validateTauriImport(relative, node, fail);
+      if (node.moduleSpecifier.text === "@tauri-apps/api/event") credentialBlurImports += 1;
       if (resolvesToScheduleModule(relative, node.moduleSpecifier.text)) {
         const bindings = node.importClause?.namedBindings;
         if (!bindings || !ts.isNamedImports(bindings)) {
@@ -351,6 +408,14 @@ function analyzeFile(relative, source) {
     if (ts.isPropertyAccessExpression(node) && TAURI_EVENT_METHODS.has(node.name.text)) {
       fail(node, `Tauri event method ${node.name.text} is forbidden; use governed commands`);
     }
+    if (ts.isIdentifier(node) && node.text === "listen") {
+      const imported = ts.isImportSpecifier(node.parent) && node.parent.name === node &&
+        !node.parent.propertyName && node.parent.parent.parent.parent.moduleSpecifier?.text === "@tauri-apps/api/event";
+      if (!imported) {
+        if (isCredentialBlurCall(node.parent, relative) && node.parent.expression === node) credentialBlurCalls += 1;
+        else fail(node, "Tauri listen may only be the exact api.onCredentialBlur adapter; aliases and shadowing are forbidden");
+      }
+    }
     if (ts.isIdentifier(node) && node.text === "getCurrentWindow") {
       const importBinding = ts.isImportSpecifier(node.parent) && node.parent.name === node;
       const call = ts.isCallExpression(node.parent) && node.parent.expression === node;
@@ -408,6 +473,10 @@ function analyzeFile(relative, source) {
   };
   visit(sourceFile);
   if (violations.length > 0) throw new Error(violations[0]);
+  if ((credentialBlurCalls || credentialBlurImports) &&
+      (credentialBlurCalls !== 1 || credentialBlurImports !== 1)) {
+    throw new Error(`${relative} requires exactly one Tauri credential blur import and adapter`);
+  }
   if (schedules.length > 0 && scheduleImports !== 1) {
     throw new Error(
       `${relative} foreground schedules require exactly one canonical named import; found ${scheduleImports}`,
@@ -422,16 +491,18 @@ function analyzeFile(relative, source) {
       counts.set(api, index);
       return { api, id: `${relative}:${api}#${index}` };
     });
-  return { definitions, schedules, timers };
+  return { definitions, schedules, timers, credentialBlur: credentialBlurCalls === 1 };
 }
 
 export function discoverFrontendTimerSurface(root) {
   const definitions = [];
   const recurringTimers = [];
   const timerCalls = [];
+  let credentialBlur = false;
   for (const absolute of productionTypeScriptFiles(root)) {
     const relative = path.relative(root, absolute).split(path.sep).join("/");
     const result = analyzeFile(relative, readFileSync(absolute, "utf8"));
+    credentialBlur ||= result.credentialBlur;
     definitions.push(...result.definitions);
     recurringTimers.push(...result.schedules);
     recurringTimers.push(
@@ -444,5 +515,5 @@ export function discoverFrontendTimerSurface(root) {
       `expected exactly one canonical ${FOREGROUND_SCHEDULE} definition; found ${definitions.length}`,
     );
   }
-  return { recurringTimers, timerCalls };
+  return { recurringTimers, timerCalls, credentialBlur };
 }

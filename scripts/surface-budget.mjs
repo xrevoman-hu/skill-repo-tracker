@@ -430,6 +430,14 @@ export function discoverRepositorySurface(root) {
       }
     }
   }
+  if (frontendTimers.credentialBlur) {
+    const prefix = "src-tauri/capabilities/default.json#default:permission=";
+    for (const permission of ["core:event:allow-listen", "core:event:allow-unlisten"]) {
+      if (!capabilityPermissions.includes(`${prefix}${permission}`)) {
+        throw new Error(`Tauri credential blur requires the reviewed main-window capability: ${permission}`);
+      }
+    }
+  }
   return {
     settingsFields: uniqueSorted([
       ...rustStructFields(rustLib, "AppSettings"),

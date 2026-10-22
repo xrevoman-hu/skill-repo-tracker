@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { CredentialRequest, CredentialResults } from "./credentialTypes";
 
 type ApiError = {
@@ -634,10 +635,10 @@ export type UpdateSettingsRequest = Pick<
   | "autoBackupEnabled"
 > & { skillsRoot?: string };
 
-const runningInTauri = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
+export const isDesktopRuntime = () => typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 
 async function command<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
-  if (!runningInTauri()) {
+  if (!isDesktopRuntime()) {
     throw new Error("Tauri backend is not available in browser preview.");
   }
   const response = await invoke<ApiResponse<T>>(name, args);
@@ -649,9 +650,9 @@ async function command<T>(name: string, args: Record<string, unknown> = {}): Pro
   return response.data as T;
 }
 
-export const isDesktopRuntime = runningInTauri;
-
 export const api = {
+  onCredentialBlur: (handler: () => void) =>
+    listen("tauri://blur", handler, { target: { kind: "Window", label: "main" } }),
   credentialRequest: <R extends CredentialRequest>(request: R) =>
     command<CredentialResults[R["action"]]>("credential_request", { request }),
   listRepositories: () => command<UiRepository[]>("list_repositories"),

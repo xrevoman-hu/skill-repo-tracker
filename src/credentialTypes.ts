@@ -104,6 +104,7 @@ export type CredentialResults = {
 };
 export interface CredentialTransport {
   request<R extends CredentialRequest>(request: R): Promise<CredentialResults[R["action"]]>;
+  onBlur?: (handler: () => void) => Promise<() => void | Promise<void>>;
 }
 
 export function credentialDurabilityNotice(zh: boolean): string {
@@ -115,25 +116,29 @@ export function newCredentialSessionId(): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+const INVALID_PASSWORD: [string, string] = ["主密码不正确，或凭据库无法验证。", "The password or vault could not be verified."];
+const RECORD_CHANGED: [string, string] = ["记录已更新，请重新加载后编辑。", "This record changed. Reload it before editing."];
+const SESSION_EXPIRED: [string, string] = ["当前记录的验证已失效，请重新验证。", "Verification expired. Verify this record again."];
 const ERRORS: Record<string, [string, string]> = {
+  window_focus_unavailable: ["无法确认窗口状态，请关闭详情后重试。", "Window state is unavailable. Close these details and retry."],
   too_many_file_leases: ["临时文件数量已达上限，请释放文件租约后重试。", "Release file leases before requesting more files."],
   export_cleanup_failed: ["导出暂存清理未完成，凭据库已锁定。请在设置中重试清理。", "Export staging cleanup is incomplete. The vault is locked; retry cleanup in Settings."],
   file_export_cleanup_failed: ["原文件已导出，但暂存清理未完成，凭据库已锁定。请在设置中重试清理。", "The original file was exported, but staging cleanup is incomplete. The vault is locked; retry cleanup in Settings."],
   vault_locked: ["凭据库已锁定，请重新解锁。", "Unlock the credential vault first."],
   vault_unavailable: ["暂时无法打开凭据库，原有数据未被修改。", "The vault is unavailable. Existing data has not changed."],
-  vault_verification_failed: ["主密码不正确，或凭据库无法验证。", "The password or vault could not be verified."],
-  password_or_vault_invalid: ["主密码不正确，或凭据库无法验证。", "The password or vault could not be verified."],
+  vault_verification_failed: INVALID_PASSWORD,
+  password_or_vault_invalid: INVALID_PASSWORD,
   password_retry_later: ["验证失败次数过多，请稍后重试。", "Too many failed attempts. Please wait before retrying."],
-  invalid_password: ["主密码不正确，或凭据库无法验证。", "The password or vault could not be verified."],
+  invalid_password: INVALID_PASSWORD,
   password_length_invalid: ["主密码至少 12 个字符，且不能超过 1024 个 UTF-8 字节。", "Use at least 12 characters and at most 1024 UTF-8 bytes."],
   password_confirmation_mismatch: ["两次主密码输入不一致。", "The passwords do not match."],
   record_not_found: ["这条凭据已不存在，请刷新列表。", "This credential no longer exists. Refresh the list."],
-  record_conflict: ["记录已更新，请重新加载后编辑。", "This record changed. Reload it before editing."],
-  record_version_conflict: ["记录已更新，请重新加载后编辑。", "This record changed. Reload it before editing."],
-  revision_conflict: ["记录已更新，请重新加载后编辑。", "This record changed. Reload it before editing."],
-  session_invalid: ["当前记录的验证已失效，请重新验证。", "Verification expired. Verify this record again."],
-  session_invalidated: ["当前记录的验证已失效，请重新验证。", "Verification expired. Verify this record again."],
-  human_session_invalid: ["当前记录的验证已失效，请重新验证。", "Verification expired. Verify this record again."],
+  record_conflict: RECORD_CHANGED,
+  record_version_conflict: RECORD_CHANGED,
+  revision_conflict: RECORD_CHANGED,
+  session_invalid: SESSION_EXPIRED,
+  session_invalidated: SESSION_EXPIRED,
+  human_session_invalid: SESSION_EXPIRED,
   human_verification_required: ["请重新验证当前记录的主密码。", "Verify the master password for this record again."],
   stale_generation: ["操作已失效，请重新选择记录。", "This operation expired. Select the record again."],
   human_session_limit: ["请锁定后重新解锁凭据库，再继续验证。", "Lock and unlock the vault before verifying again."],

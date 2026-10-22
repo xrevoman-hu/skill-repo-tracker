@@ -9,6 +9,12 @@ ADR 0012 追加正式凭据 GUI 的精确同程序子进程入口及 macOS 原�
 模式、应用自有目录、私有管道，不能传任意命令或秘密 argv；原生剪贴板只能在受审查的
 凭据模块使用。此例外不放开通用 Shell、全局 Keychain、远程服务或后台 daemon。
 
+为兑现 ADR 0012 的失焦清屏，`src/api.ts` 只允许一个 `onCredentialBlur` adapter：精确 named
+`listen` import、`tauri://blur` 和 `{ target: { kind: "Window", label: "main" } }`，通过 AppService
+交给凭据详情，不把通用事件 API 暴露给 View。禁止别名、转传、重导出、动态事件/target 或第二次调用。
+该订阅独立要求已有 `core:event:allow-listen` 与 `core:event:allow-unlisten`；订阅未就绪或失败时
+禁止秘密操作，卸载及迟到订阅都要清理。除此受审查通知与现有关闭保护外，event IPC 继续禁止。
+
 ADR 0013 追加原生文件对话框的单次意图、独立加密备份/恢复事务和固定本机 OpenSSL 文件
 检查。WebView 不提交导出/恢复路径；只接受已登记的字段、选择 ID 及动作。检查进程只使用
 固定系统程序与参数模板，清空继承环境，口令走 stdin、输出有界并超时回收，不引入网络。
