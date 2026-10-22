@@ -1,8 +1,7 @@
 use rusqlite::{params, Connection};
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+#[cfg(debug_assertions)]
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::{utc_now, AppError};
 
