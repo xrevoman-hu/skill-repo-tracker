@@ -294,60 +294,6 @@ const EXPECTED_CI_WORKFLOW = {
   },
 };
 
-const EXPECTED_TRUSTED_POLICY_WORKFLOW = {
-  name: "Trusted policy",
-  on: {
-    pull_request_target: {
-      branches: ["main"],
-      types: ["opened", "reopened", "synchronize", "edited", "labeled", "unlabeled"],
-    },
-  },
-  permissions: { contents: "read", "pull-requests": "read" },
-  concurrency: {
-    group: "trusted-policy-${{ github.repository }}-${{ github.event.pull_request.number }}",
-    "cancel-in-progress": true,
-  },
-  env: { NODE_VERSION: "22.23.1" },
-  jobs: {
-    guard: {
-      name: "Trusted policy / guard",
-      "runs-on": "ubuntu-latest",
-      "timeout-minutes": 10,
-      steps: [
-        {
-          name: "Checkout trusted base code only",
-          uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-          with: {
-            ref: "${{ github.event.pull_request.base.sha }}",
-            "fetch-depth": 1,
-            "persist-credentials": false,
-          },
-        },
-        {
-          name: "Set up pinned Node.js",
-          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
-          with: {
-            "node-version": "${{ env.NODE_VERSION }}",
-            "package-manager-cache": false,
-          },
-        },
-        {
-          name: "Evaluate trusted base policy against the PR head",
-          env: {
-            GITHUB_TOKEN: "${{ github.token }}",
-            PR_NUMBER: "${{ github.event.pull_request.number }}",
-            PR_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
-            PR_BASE_REF: "${{ github.event.pull_request.base.ref }}",
-            PR_EVENT_ACTION: "${{ github.event.action }}",
-            PR_EVENT_LABEL: "${{ github.event.label.name }}",
-          },
-          run: "node scripts/trusted-policy-guard.mjs",
-        },
-      ],
-    },
-  },
-};
-
 const EXPECTED_GITHUB_ACTIONS_DEPENDABOT_ENTRY = {
   "package-ecosystem": "github-actions",
   directory: "/",
@@ -593,14 +539,6 @@ export function validateRepositoryAutomationPolicy({ workflowPaths, dependabotCo
 
 export function validateCiWorkflowPolicy(contents) {
   return validateExactWorkflowPolicy(contents, "CI", EXPECTED_CI_WORKFLOW);
-}
-
-export function validateTrustedPolicyWorkflowPolicy(contents) {
-  return validateExactWorkflowPolicy(
-    contents,
-    "trusted policy",
-    EXPECTED_TRUSTED_POLICY_WORKFLOW,
-  );
 }
 
 // ADR 0010: this build-only native source can fetch and execute compiler tools.

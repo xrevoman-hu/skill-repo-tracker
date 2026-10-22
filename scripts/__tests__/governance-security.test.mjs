@@ -43,7 +43,6 @@ import {
   validateRepositoryAutomationPolicy,
   validateSecurityAuditWorkflowPolicy,
   validatePlaywrightConfigPolicy,
-  validateTrustedPolicyWorkflowPolicy,
   validateTypeScriptConfigPolicy,
   validateTauriBuildScriptPolicy,
   validateViteConfigPolicy,

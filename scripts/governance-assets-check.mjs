@@ -5,7 +5,6 @@ import { join } from "node:path";
 import {
   compareGovernanceAssetCatalogs,
   validateGovernanceAssetCatalog,
-  validatePullRequestTemplate,
 } from "./governance-assets.mjs";
 import {
   VERIFY_PLAN,
@@ -19,7 +18,7 @@ import { checkRepositorySurfaceBudget } from "./surface-budget.mjs";
 import { checkRepositoryModuleMap, MODULE_MAP_PATH } from "./module-map.mjs";
 import { gitPathExistsAtRef, listRepositoryFiles } from "./git-paths.mjs";
 import { checkRepositoryDependencyRisks } from "./dependency-risk.mjs";
-import { policyRemovalPhase, validatePolicyRemovalPlan } from "./governance-policy-removal.mjs";
+import { validatePolicyRemovalPlan } from "./governance-policy-removal.mjs";
 import { checkSurfaceBudgetHistory } from "./surface-budget-history.mjs";
 
 export const GOVERNANCE_ASSET_PATH = "docs/engineering/governance-assets.json";
@@ -85,13 +84,7 @@ export function checkGovernanceAssets(
   });
   errors.push(...policyErrors);
   errors.push(...checkRepositoryDependencyRisks(root, { baseRef }));
-  const pullRequestTemplate = join(root, ".github/pull_request_template.md");
-  const templateRetired = policyErrors.length === 0 && catalog.policyRemovals.length === 1 &&
-    policyRemovalPhase(catalog) === "retired";
   errors.push(
-    ...(templateRetired ? [] : existsSync(pullRequestTemplate)
-      ? validatePullRequestTemplate(readFileSync(pullRequestTemplate, "utf8"))
-      : ["pull request template is missing: .github/pull_request_template.md"]),
     ...validateVerifyPlanDocument(VERIFY_PLAN_DOCUMENT),
     ...validateVerifyPlan(VERIFY_PLAN),
   );

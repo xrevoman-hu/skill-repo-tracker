@@ -4,7 +4,6 @@ import { authorizedPolicyDrop, getMainOnlyPlan, policyRemovalPhase,
   validateMainOnlyPolicyCatalog, validatePolicyRemovalPlan, validatePolicyRemovalTransition,
 } from "../governance-policy-removal.mjs";
 import { compareGovernanceAssetCatalogs, validateGovernanceAssetCatalog } from "../governance-assets.mjs";
-import { extractTrustedGovernanceEvidencePaths } from "../trusted-policy-guard.mjs";
 import { beforePolicy, stageA, stageB, find, planOptions, ADR_BYTES } from "./governance-policy-removal-fixtures.mjs";
 import { validate, validCatalog } from "./governance-assets-fixtures.mjs";
 
@@ -110,18 +109,6 @@ test("policy entries metadata and full retired tombstones are permanently immuta
     item.unreviewed = true;
     assert.match(compareGovernanceAssetCatalogs(current, stageB()).join("\n"), /immutable|record changed/);
   }
-});
-
-test("trusted parser accepts schema two retiring evidence and preserves schema one history", () => {
-  const legacy = beforePolicy();
-  for (const asset of legacy.assets) asset.enforcement ??= { evidence: [] };
-  assert.ok(extractTrustedGovernanceEvidencePaths(JSON.stringify(legacy)).includes("scripts/__tests__/pr-evidence.test.mjs"));
-  const current = stageA();
-  for (const asset of current.assets) asset.enforcement ??= { evidence: [] };
-  assert.ok(extractTrustedGovernanceEvidencePaths(JSON.stringify(current)).includes("scripts/__tests__/pr-evidence.test.mjs"));
-  const retired = stageB();
-  for (const asset of retired.assets) asset.enforcement ??= { evidence: [] };
-  assert.ok(!extractTrustedGovernanceEvidencePaths(JSON.stringify(retired)).includes("scripts/__tests__/pr-evidence.test.mjs"));
 });
 
 test("current catalog schema two leaves ordinary governance contracts enforced", () => {

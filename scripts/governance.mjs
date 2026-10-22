@@ -40,7 +40,6 @@ import {
   validateRepositoryAutomationPolicy,
   validateReleaseWorkflowPolicy,
   validateSecurityAuditWorkflowPolicy,
-  validateTrustedPolicyWorkflowPolicy,
   validateTypeScriptConfigPolicy,
   validateTauriBuildScriptPolicy,
   validateViteConfigPolicy,
@@ -68,7 +67,6 @@ export {
   validateRepositoryAutomationPolicy,
   validateReleaseWorkflowPolicy,
   validateSecurityAuditWorkflowPolicy,
-  validateTrustedPolicyWorkflowPolicy,
   validateTypeScriptConfigPolicy,
   validateTauriBuildScriptPolicy,
   validateViteConfigPolicy,
@@ -1277,9 +1275,6 @@ export function checkBoundaries(root = REPOSITORY_ROOT) {
         break;
       case ".github/workflows/security-audit.yml":
         errors.push(...validateSecurityAuditWorkflowPolicy(contents));
-        break;
-      case ".github/workflows/trusted-policy.yml":
-        errors.push(...validateTrustedPolicyWorkflowPolicy(contents));
         break;
       case ".github/workflows/weekly-resilience.yml":
         errors.push(...validateWeeklyResilienceWorkflowPolicy(contents));

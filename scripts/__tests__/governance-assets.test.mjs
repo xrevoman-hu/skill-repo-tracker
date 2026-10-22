@@ -6,7 +6,6 @@ import test from "node:test";
 import {
   compareGovernanceAssetCatalogs,
   selectGovernanceContext,
-  validatePullRequestTemplate,
 } from "../governance-assets.mjs";
 
 import { fileContents, trackedFiles, validCatalog, validate } from "./governance-assets-fixtures.mjs";
@@ -650,43 +649,4 @@ test("context selection loads global assets and only matching Rules, ADRs, and i
     assets: ["adr-scheduling", ...globalAssets, "rule-scheduling"].sort(),
     invariants: ["TASK-GEN-001"],
   });
-});
-
-test("the PR template keeps the Bug learning and cost-budget evidence fields", () => {
-  const valid = [
-    "## 变更类型",
-    "Bug 修复",
-    "非 Bug 变更",
-    "## 变更目的",
-    "用户问题/产品价值",
-    "非目标",
-    "验收层",
-    "## 可复现证据",
-    "## 根因与同类扫描",
-    "## 状态与权限预算",
-    "## Rule / ADR / Invariant",
-    "## Skip / flaky 债务",
-    "## 验证",
-    "已复审资产/高风险不变量 ID：",
-    "`npm run verify`",
-    "与本变更相关的独立 lane（coverage/E2E/MSRV/性能/Release）已运行，结果/链接：",
-    "独立 lane 不适用，原因：",
-    "没有秘密、真实用户数据、`AGENTS-local.md`、`docs/internal/` 或宣传草稿进入 diff",
-  ].join("\n");
-  assert.deepEqual(validatePullRequestTemplate(valid), []);
-  assert.deepEqual(validatePullRequestTemplate(valid.replace("## 根因与同类扫描", "")), [
-    "pull request template is missing required evidence marker: ## 根因与同类扫描",
-  ]);
-  for (const marker of [
-    "## 变更类型",
-    "Bug 修复",
-    "非 Bug 变更",
-    "用户问题/产品价值",
-    "非目标",
-    "验收层",
-  ]) {
-    assert.deepEqual(validatePullRequestTemplate(valid.replace(marker, "")), [
-      `pull request template is missing required evidence marker: ${marker}`,
-    ]);
-  }
 });

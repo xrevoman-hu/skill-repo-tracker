@@ -81,8 +81,8 @@
     "hotSpots": {
       "scripts/governance.mjs": {
         "status": "active",
-        "maxLines": 1348,
-        "maxBytes": 48005,
+        "maxLines": 1343,
+        "maxBytes": 47790,
         "targetLines": 1200,
         "adr": "docs/adr/0008-executable-governance-assets.md"
       }

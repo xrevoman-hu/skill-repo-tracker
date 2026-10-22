@@ -44,7 +44,6 @@ import {
   validateRepositoryAutomationPolicy as validateAutomationPolicy,
   validateSecurityAuditWorkflowPolicy,
   validatePlaywrightConfigPolicy,
-  validateTrustedPolicyWorkflowPolicy,
   validateTypeScriptConfigPolicy,
   validateTauriBuildScriptPolicy,
   validateViteConfigPolicy,
@@ -53,7 +52,7 @@ import {
   validateWeeklyResilienceWorkflowPolicy,
 } from "../governance.mjs";
 
-const validateRepositoryAutomationPolicy = (options) => validateAutomationPolicy({ catalog: catalogFixture(), ...options });
+const validateRepositoryAutomationPolicy = (options) => validateAutomationPolicy({ catalog: catalogFixture("retired"), ...options });
 
 const CRITICAL_PACKAGE_SCRIPTS = {
   typecheck: "tsc --noEmit",
@@ -83,7 +82,6 @@ const WORKFLOW_PATHS = [
   ".github/workflows/ci.yml",
   ".github/workflows/release-gate.yml",
   ".github/workflows/security-audit.yml",
-  ".github/workflows/trusted-policy.yml",
   ".github/workflows/weekly-resilience.yml",
 ];
 
@@ -287,37 +285,6 @@ test("CI workflow keeps every required gate fail-closed and exact", () => {
     );
   }
   assert.match(validateCiWorkflowPolicy("jobs: [")[0], /CI workflow is invalid YAML/);
-});
-
-test("trusted policy workflow is an exact base-only machine contract", () => {
-  const valid = readFileSync(
-    new URL("../../.github/workflows/trusted-policy.yml", import.meta.url),
-    "utf8",
-  );
-  assert.match(valid, /package-manager-cache: false/);
-  assert.deepEqual(validateTrustedPolicyWorkflowPolicy(valid), []);
-
-  for (const [label, mutation] of [
-    ["extra privileged job", `${valid}\n  unsafe:\n    permissions: { contents: write }\n    runs-on: ubuntu-latest\n    steps: [{ run: true }]\n`],
-    ["job permission override", valid.replace("    runs-on: ubuntu-latest", "    permissions: { contents: write }\n    runs-on: ubuntu-latest")],
-    ["checkout PR head", valid.replace("github.event.pull_request.base.sha", "github.event.pull_request.head.sha")],
-    ["execute another command", valid.replace("        run: node scripts/trusted-policy-guard.mjs", "        run: node scripts/trusted-policy-guard.mjs\n      - run: true")],
-    ["remove edited trigger", valid.replace(", edited,", ",")],
-    ["restore Checks API write access", valid.replace("  pull-requests: read", "  pull-requests: read\n  checks: write")],
-    ["rename the native required job", valid.replace("    name: Trusted policy / guard", "    name: dispatch")],
-    ["restore implicit package-manager caching", valid.replace("          package-manager-cache: false\n", "")],
-  ]) {
-    assert.ok(
-      validateTrustedPolicyWorkflowPolicy(mutation).includes(
-        "trusted policy workflow must match the complete fail-closed template",
-      ),
-      label,
-    );
-  }
-  assert.match(
-    validateTrustedPolicyWorkflowPolicy("jobs: [")[0],
-    /trusted policy workflow is invalid YAML/,
-  );
 });
 
 test("security audit workflow keeps registry and Cargo audits fail-closed and scheduled", () => {
@@ -544,10 +511,13 @@ updates:
     parsed.updates.find((entry) => entry["package-ecosystem"] === ecosystem)["open-pull-requests-limit"] = 1;
     assert.ok(validateRepositoryAutomationPolicy({ workflowPaths, dependabotContents: JSON.stringify(parsed) }).length);
   }
-  const finalPaths = workflowPaths.filter((path) => !path.endsWith("trusted-policy.yml"));
-  assert.deepEqual(validateRepositoryAutomationPolicy({ catalog: catalogFixture("retired"), workflowPaths: finalPaths,
+  const transitionalPaths = [...workflowPaths, ".github/workflows/trusted-policy.yml"];
+  assert.equal(workflowPaths.length, 4);
+  assert.equal(transitionalPaths.length, 5);
+  assert.deepEqual(validateRepositoryAutomationPolicy({ catalog: catalogFixture("retiring"), workflowPaths: transitionalPaths,
     dependabotContents: actualDependabot }), []);
-  assert.ok(validateRepositoryAutomationPolicy({ workflowPaths: finalPaths, dependabotContents: actualDependabot }).length);
-  assert.ok(validateRepositoryAutomationPolicy({ catalog: catalogFixture("retired"), workflowPaths,
+  assert.ok(validateRepositoryAutomationPolicy({ catalog: catalogFixture("retiring"), workflowPaths,
+    dependabotContents: actualDependabot }).length);
+  assert.ok(validateRepositoryAutomationPolicy({ workflowPaths: transitionalPaths,
     dependabotContents: actualDependabot }).length);
 });

@@ -112,7 +112,7 @@
     { "id": "github-governance", "status": "active", "kind": "package-script", "ref": "github:governance:check", "capabilities": ["remote-governance-state"] },
     { "id": "release", "status": "active", "kind": "package-script", "ref": "release:verify", "capabilities": ["local-artifact-contract", "remote-artifact-contract"] },
     { "id": "ci", "status": "active", "kind": "workflow", "ref": ".github/workflows/ci.yml", "capabilities": ["clean-runner-verify", "clean-runner-coverage", "clean-runner-msrv"] },
-    { "id": "trusted-policy", "status": "retiring", "kind": "workflow", "ref": ".github/workflows/trusted-policy.yml", "capabilities": ["base-sourced-policy-review"],
+    { "id": "trusted-policy", "status": "retired", "kind": "workflow", "ref": ".github/workflows/trusted-policy.yml", "capabilities": ["base-sourced-policy-review"],
       "retirement": { "policyRemoval": "main-only-2026-10", "reason": "采用仅main快进推送，明确退出PR前置与正文机器审查；新push检查不具有等价保护能力" } },
     { "id": "weekly", "status": "active", "kind": "workflow", "ref": ".github/workflows/weekly-resilience.yml", "capabilities": ["flaky-repetition", "release-performance"] },
     { "id": "security", "status": "active", "kind": "workflow", "ref": ".github/workflows/security-audit.yml", "capabilities": ["npm-security-audit", "cargo-security-audit"] }
@@ -452,27 +452,11 @@
       "principles": [6, 7],
       "enforcement": {
         "mode": "mixed",
-        "gates": ["github-governance", "ci", "trusted-policy"],
+        "gates": ["github-governance", "ci"],
         "evidence": [
           {
             "path": "scripts/__tests__/github-governance-check.test.mjs",
             "selector": "accepts an active main ruleset with every required protection"
-          },
-          {
-            "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
-            "selector": "trusted default-branch script publishes success on the exact PR head"
-          },
-          {
-            "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
-            "selector": "trusted workflow executes only base code and grants only the required write scope"
-          },
-          {
-            "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
-            "selector": "native job runner maps policy success and failure to fail-closed exit codes"
-          },
-          {
-            "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
-            "selector": "governance evidence assertion changes require a fresh governance-reviewed label"
           },
           {
             "path": "scripts/__tests__/github-governance-check.test.mjs",
@@ -530,7 +514,7 @@
       "id": "pr-evidence-template",
       "kind": "template",
       "path": ".github/pull_request_template.md",
-      "status": "retiring",
+      "status": "retired",
       "retirement": { "policyRemoval": "main-only-2026-10", "reason": "采用仅main快进推送，明确退出PR前置与正文机器审查；新push检查不具有等价保护能力" },
       "principles": [3, 4, 5, 7],
       "enforcement": {
@@ -1597,7 +1581,7 @@
     },
     {
       "id": "PR-EVIDENCE-001",
-      "status": "retiring",
+      "status": "retired",
       "retirement": { "policyRemoval": "main-only-2026-10", "reason": "采用仅main快进推送，明确退出PR前置与正文机器审查；新push检查不具有等价保护能力" },
       "principles": [3, 4, 5, 6, 7],
       "rule": "rule-testing-release",
@@ -1658,7 +1642,6 @@
         "scripts/core-policy-contracts.mjs",
         "scripts/workflow-policy-contracts.mjs",
         "scripts/github-governance-check.mjs",
-        "scripts/trusted-policy-guard.mjs",
         "docs/engineering/github-governance.md"
       ],
       "evidence": [
@@ -1673,14 +1656,6 @@
         {
           "path": "scripts/__tests__/github-governance-check.test.mjs",
           "selector": "reports every missing remote control"
-        },
-        {
-          "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
-          "selector": "critical changes fail closed until governance-reviewed is present"
-        },
-        {
-          "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
-          "selector": "API failures also publish a failure check when the event head is valid"
         },
         {
           "path": "scripts/__tests__/github-governance-check.test.mjs",
@@ -1711,13 +1686,13 @@
           "selector": "known inactive workflows remain outside the active workflow allowlist"
         }
       ],
-      "gates": ["verify", "github-governance", "ci", "trusted-policy"],
+      "gates": ["verify", "github-governance", "ci"],
       "introducedBy": "b8b5308d1163f4ca4708f889e4e8d4d64c62a910",
       "retireWhen": "GitHub is no longer the repository, CI, security update, or Release control plane"
     },
     {
       "id": "TRUSTED-SUITE-001",
-      "status": "retiring",
+      "status": "retired",
       "retirement": { "policyRemoval": "main-only-2026-10", "reason": "采用仅main快进推送，明确退出PR前置与正文机器审查；新push检查不具有等价保护能力" },
       "principles": [2, 3, 4, 6, 7],
       "rule": "rule-testing-release",

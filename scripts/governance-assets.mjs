@@ -43,26 +43,6 @@ const ASSET_KINDS = new Set([
 const ASSET_STATUSES = new Set(["active", "superseded"]);
 const GATE_STATUSES = new Set(["active", "retiring", "retired"]);
 const ENFORCEMENT_MODES = new Set(["automated", "mixed", "review"]);
-const REQUIRED_PR_TEMPLATE_MARKERS = [
-  "## 变更类型",
-  "Bug 修复",
-  "非 Bug 变更",
-  "## 变更目的",
-  "用户问题/产品价值",
-  "非目标",
-  "验收层",
-  "## 可复现证据",
-  "## 根因与同类扫描",
-  "## 状态与权限预算",
-  "## Rule / ADR / Invariant",
-  "## Skip / flaky 债务",
-  "## 验证",
-  "已复审资产/高风险不变量 ID：",
-  "`npm run verify`",
-  "与本变更相关的独立 lane（coverage/E2E/MSRV/性能/Release）已运行，结果/链接：",
-  "独立 lane 不适用，原因：",
-  "没有秘密、真实用户数据、`AGENTS-local.md`、`docs/internal/` 或宣传草稿进入 diff",
-];
 
 function duplicates(values) {
   const seen = new Set();
@@ -533,12 +513,4 @@ export function selectGovernanceContext(catalog, changedPaths) {
     assets: [...selectedAssets].sort(),
     invariants: selectedInvariants.map((invariant) => invariant.id).sort(),
   };
-}
-
-export function validatePullRequestTemplate(contents) {
-  return REQUIRED_PR_TEMPLATE_MARKERS.flatMap((marker) =>
-    contents.includes(marker)
-      ? []
-      : [`pull request template is missing required evidence marker: ${marker}`],
-  );
 }

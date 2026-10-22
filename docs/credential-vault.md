@@ -1,6 +1,6 @@
 # 凭据库使用指南
 
-本文对应准备中的 1.4.0 macOS 版本。已完成的本地候选验收及剩余限制见[验收状态](#验收状态)，
+本文介绍 1.4.0 macOS 凭据库。已完成的本地候选验收及剩余限制见[验收状态](#验收状态)，
 不代表所有 Agent 或 Windows 可用。正式下载仍以 [README](../README.md) 为准。
 
 ## 创建、保存和查看
@@ -91,7 +91,8 @@ SSH 可登录、证书受公共信任、主机名匹配、未被吊销或可以�
 ## 验收状态
 
 截至 2026-10-23，以下结果来自本机合成凭据验收。PASS 仅覆盖列出的候选版本和通道，
-不代表远端 SSH 登录、任意客户端配置或正式版本已发布。macOS 凭据 GUI 的本轮验收与测试资源清理已完成。
+不代表远端 SSH 登录或任意客户端配置，也不替代正式包的构建、签名与远端下载复核。
+macOS 凭据 GUI 的本轮候选验收与测试资源清理已完成。
 
 | 范围 | 候选与结果 | 已验证能力及边界 |
 | --- | --- | --- |
@@ -114,11 +115,12 @@ SSH 可登录、证书受公共信任、主机名匹配、未被吊销或可以�
   不提供同一账号下恶意程序的全面隔离。
 - 浏览器预览仅使用内存演示资料，不写正式加密库或系统钥匙串，也不实际复制秘密或导出文件；请勿输入真实凭据。
 
-The 1.4.0 vault is in preparation for macOS. A master password protects a separate encrypted
+The 1.4.0 vault is a macOS feature. A master password protects a separate encrypted
 database; a different app-managed Keychain code grants configured local Agents shared read access.
 Record types cover websites, SSH, database instances, individual database accounts, email,
 TLS certificates, API tokens and generic credentials.
 Manual unlock is required after reopening the app. Use the selected Agent guide and per-record
 locator; configuration generation is not connection acceptance. Returned secrets may enter Agent
 history. File leases expire, while explicit exports remain user-managed. See the [acceptance matrix](#验收状态)
-for candidate-specific results and partial or blocked capabilities. Windows remains blocked; 1.4.0 is not yet released.
+for candidate-specific results and partial or blocked capabilities. Windows remains blocked;
+final-package verification is independent of candidate acceptance.
