@@ -37,6 +37,9 @@ catalog、ADR 摘要和分页任一无法核验则失败。搜索最多 1,000 �
 surface-budget.json，不执行历史脚本；当前源代码发现与登记仍须匹配。catalog、架构、
 coverage 继续用同一个 V 累计比较。
 
+[ADR 0015](../adr/0015-surface-history-correction.md) 单独接受一个已固定旧父边的两项 purpose
+文案错误；完整前后记录与摘要必须匹配，不改写历史、不变更累计 V，也不放宽其他父边或当前源码登记。
+
 ## 两阶段迁移
 
 1. A：schema 2 catalog 登记不可变 main-only-2026-10 计划；旧 PR template asset、Trusted

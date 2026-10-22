@@ -119,6 +119,31 @@
   ],
   "assets": [
     {
+      "id": "adr-0015-surface-history-correction",
+      "kind": "decision",
+      "path": "docs/adr/0015-surface-history-correction.md",
+      "status": "active",
+      "checksum": "sha256:7f1475b0c750644b9ec5d20ce062a320df92e12c57c46e4c63bdea8f9ae021e7",
+      "principles": [2, 3, 4, 5, 6, 7],
+      "reviewOnChange": [
+        "scripts/surface-history-correction.mjs",
+        "scripts/surface-budget-history.mjs",
+        "scripts/surface-budget.mjs",
+        "scripts/governance-assets-check.mjs",
+        "scripts/__tests__/surface-budget-history.test.mjs",
+        "docs/engineering/surface-budget.json",
+        "docs/engineering/governance-assets.json"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          { "path": "scripts/__tests__/surface-budget-history.test.mjs", "selector": "surface history correction accepts only the approved complete historical Git edge" },
+          { "path": "scripts/__tests__/surface-budget-history.test.mjs", "selector": "surface history correction rejects altered records anchors and unapproved edges" }
+        ]
+      }
+    },
+    {
       "id": "adr-0014-main-only",
       "kind": "decision",
       "path": "docs/adr/0014-main-only-governance.md",

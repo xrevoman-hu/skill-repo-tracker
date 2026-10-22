@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { compareSurfaceBudgets, SURFACE_CATEGORIES } from "./surface-budget.mjs";
+import { compareSurfaceHistoryEdge, isSurfaceCorrectionEdge,
+  SURFACE_HISTORY_CORRECTION } from "./surface-history-correction.mjs";
 
 const BUDGET_PATH = "docs/engineering/surface-budget.json";
 const MAX_COMMITS = 1000;
@@ -79,6 +81,19 @@ function readBudget(root, sha) {
   return budget;
 }
 
+function readCorrectionDecision(root) {
+  const decision = SURFACE_HISTORY_CORRECTION.decision;
+  try {
+    const catalog = JSON.parse(readFileSync(join(root, "docs/engineering/governance-assets.json"), "utf8"));
+    const matches = Array.isArray(catalog?.assets)
+      ? catalog.assets.filter((asset) => asset?.id === decision.id) : [];
+    if (matches.length !== 1) throw new Error("decision registration is missing or duplicated");
+    return { decisionText: readFileSync(join(root, decision.path), "utf8"), decisionAsset: matches[0] };
+  } catch {
+    throw new Error("surface history correction cannot read its unique registered ADR 0015");
+  }
+}
+
 export function checkSurfaceBudgetHistory(root, { baseRef, headRef = "HEAD", currentBudget } = {}) {
   try {
     if (git(root, ["rev-parse", "--is-shallow-repository"]) !== "false") {
@@ -98,7 +113,9 @@ export function checkSurfaceBudgetHistory(root, { baseRef, headRef = "HEAD", cur
         return [`surface history must be a complete single-parent chain at ${sha}`];
       }
       const next = readBudget(root, sha);
-      const errors = compareSurfaceBudgets(next, previous);
+      const context = { parentSha: previousSha, commitSha: sha, budgetPath: BUDGET_PATH };
+      const decision = isSurfaceCorrectionEdge(context) ? readCorrectionDecision(root) : {};
+      const errors = compareSurfaceHistoryEdge(next, previous, { ...context, ...decision });
       if (errors.length) return errors.map(error => `surface history ${sha}: ${error}`);
       previous = next;
       previousSha = sha;

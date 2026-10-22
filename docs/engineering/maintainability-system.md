@@ -118,6 +118,8 @@ main-only 不再自动审查 PR 正文，不能声称字段已被原 PR gate 验
 - published fixture 只允许追加新版本，不重写历史版本。
 - 产品表面积按 active -> retiring(reason) -> 后续提交删除，新增实体从 active 开始；
   V 到 HEAD 逐边读取固定 JSON 并检查工作树末边，不执行历史代码，当前源码登记仍须匹配。
+  仅 [ADR 0015](../adr/0015-surface-history-correction.md) 接受指定旧父边的两项用途文案错误；
+  完整锚点与记录须精确匹配，其他差异及后续提交仍按原合同拒绝。
 - 临时 test waiver 只允许 tracked ledger 中最长 30 天的 active ID，并且只能隔离独立 lane；
   active scope 不可改写，过期即失败，retired tombstone 永久保留，主测试仍禁止 skip；依赖风险
   active 最长 90 天且不可延期，只能退休后另建 ID。

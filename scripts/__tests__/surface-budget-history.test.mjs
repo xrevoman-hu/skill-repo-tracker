@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -11,6 +12,7 @@ import {
 import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
   checkSurfaceBudgetHistory,
@@ -22,6 +24,7 @@ import {
   discoverRepositorySurface,
 } from "../surface-budget.mjs";
 import { emptyCategories, writeMinimalSurfaceRepository } from "./surface-budget-fixtures.mjs";
+import { compareSurfaceHistoryEdge, SURFACE_HISTORY_CORRECTION } from "../surface-history-correction.mjs";
 
 const BUDGET_PATH = "docs/engineering/surface-budget.json";
 const SURFACE_ID = "fixture_setting";
@@ -93,6 +96,26 @@ function assertFailure(errors, ...expectedParts) {
   for (const part of expectedParts) {
     assert.ok(errors.some(error => error.includes(part)), `${part}\n${errors.join("\n")}`);
   }
+}
+
+function historicalCorrection() {
+  const root = fileURLToPath(new URL("../../", import.meta.url));
+  const approved = SURFACE_HISTORY_CORRECTION;
+  const read = sha => JSON.parse(execFileSync("git", ["show", `${sha}:${BUDGET_PATH}`], {
+    cwd: root, encoding: "utf8", maxBuffer: 8 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"],
+  }));
+  const catalog = JSON.parse(readFileSync(join(root, "docs/engineering/governance-assets.json"), "utf8"));
+  return { root, approved, previous: read(approved.parentSha), current: read(approved.commitSha),
+    context: {
+      parentSha: approved.parentSha, commitSha: approved.commitSha, budgetPath: BUDGET_PATH,
+      decisionText: readFileSync(join(root, approved.decision.path), "utf8"),
+      decisionAsset: catalog.assets.find(asset => asset.id === approved.decision.id),
+    } };
+}
+
+function completeEntryDigest(entry) {
+  const ordered = Object.fromEntries(Object.keys(entry).sort().map(key => [key, entry[key]]));
+  return createHash("sha256").update(JSON.stringify(ordered), "utf8").digest("hex");
 }
 
 test("surface history accepts the complete new active, retiring, then deletion chain", t => {
@@ -323,9 +346,10 @@ test("valid registration history does not replace current source discovery", t =
   assertFailure(checkRepositorySurfaceBudget(repo.root), "unregistered timerCalls surface: src/App.tsx:setTimeout#1");
 });
 
-test("surface history accepts the nine exact credential entities through their original lifecycle order", t => {
+test("surface history accepts a synthetic nine-entity lifecycle structure, not a historical replay", t => {
   const repo = repository(t);
-  // Public identifiers, with the original relative transition order; no local commit SHA is a fixture.
+  // Exact public IDs, but synthetic purposes and commits: this checks lifecycle structure only.
+  // The approved historical correction has separate tests using complete real Git JSON below.
   const dependency = 'dev:rusqlite={"defaultFeatures":true,"features":["backup","bundled-sqlcipher-vendored-openssl"],"optional":false,"package":"rusqlite","source":{"kind":"registry","registry":"crates-io"},"target":null}';
   const leases = [
     "src-tauri/src/credential_leases.rs:Path::exists:open#1",
@@ -360,6 +384,128 @@ test("surface history accepts the nine exact credential entities through their o
   assert.deepEqual(checkSurfaceBudgetHistory(repo.root, { baseRef: base }), []);
   repo.commit(budget());
   assert.deepEqual(checkSurfaceBudgetHistory(repo.root, { baseRef: base }), []);
+});
+
+test("surface history correction accepts only the approved complete historical Git edge", () => {
+  const { root, approved, previous, current, context } = historicalCorrection();
+  assert.equal(approved.parentSha, "cd9c09bb82ff848f8ff2d0bd8d8eb3f435af6a9e");
+  assert.equal(approved.commitSha, "d2cb71239eb930e882ce5717a86a1a5fe2f3b5a1");
+  assert.equal(approved.budgetPath, BUDGET_PATH);
+  assert.equal(approved.category, "rustPathSites");
+  assert.equal(approved.records.length, 2);
+  assert.ok(Object.isFrozen(approved) && Object.isFrozen(approved.records));
+  const hashes = [
+    ["1d12172b0b8e229b0953fbd4ee2e83af24cd515eb8efc7058c8e2a0aae2a6f9e", "8837e26c2eeb3d427166f106c59689aa46fcf210959aaf955bbb2f966e0cfc48"],
+    ["81ee35dacb7b4cab96062979b8564355304cd224e9ddf8d5c63aec900f1af7fe", "844b130dc6f33a11d7785bf73511102b76452c1bec259b6776ffbd174f77acec"],
+  ];
+  for (const [index, record] of approved.records.entries()) {
+    const before = previous.categories.rustPathSites.find(entry => entry.id === record.id);
+    const after = current.categories.rustPathSites.find(entry => entry.id === record.id);
+    assert.deepEqual([completeEntryDigest(before), completeEntryDigest(after)], hashes[index]);
+    assert.deepEqual([record.beforeSha256, record.afterSha256], hashes[index]);
+    assert.deepEqual(before, record.before);
+    assert.deepEqual(after, record.after);
+    assert.ok(Object.isFrozen(record) && Object.isFrozen(record.before) && Object.isFrozen(record.after));
+  }
+  assert.equal(createHash("sha256").update(context.decisionText).digest("hex"),
+    "7f1475b0c750644b9ec5d20ce062a320df92e12c57c46e4c63bdea8f9ae021e7");
+  assert.ok(Object.values(previous.categories).flat().length > 2, "replay the full historical budget, not two toy entries");
+  assert.deepEqual(compareSurfaceBudgets(current, previous).sort(), approved.records.map(record =>
+    `active rustPathSites surface purpose changed in place: ${record.id}`).sort());
+  const snapshots = JSON.stringify({ previous, current });
+  assert.deepEqual(compareSurfaceHistoryEdge(current, previous, context), []);
+  assert.equal(JSON.stringify({ previous, current }), snapshots, "comparison must not rewrite either snapshot");
+  assert.deepEqual(checkSurfaceBudgetHistory(root, {
+    baseRef: approved.parentSha, headRef: approved.commitSha, currentBudget: current,
+  }), []);
+});
+
+test("surface history correction rejects altered records anchors and unapproved edges", () => {
+  const { approved, previous, current, context } = historicalCorrection();
+  for (const patch of [
+    { parentSha: "1".repeat(40) }, { commitSha: "2".repeat(40) },
+    { budgetPath: "docs/engineering/another-budget.json" },
+    { parentSha: undefined }, { commitSha: undefined },
+  ]) {
+    assertFailure(compareSurfaceHistoryEdge(current, previous, { ...context, ...patch }), "purpose changed in place");
+  }
+  const badAssets = [undefined, ...[
+    { id: "other-decision" }, { kind: "rule" }, { status: "retiring" },
+    { path: "docs/adr/9999-another.md" }, { checksum: `sha256:${"0".repeat(64)}` },
+  ].map(patch => ({ ...context.decisionAsset, ...patch }))];
+  for (const decisionAsset of badAssets) {
+    assertFailure(compareSurfaceHistoryEdge(current, previous, { ...context, decisionAsset }), "exact registered Accepted ADR");
+  }
+  for (const decisionText of [undefined, `${context.decisionText}\n`, context.decisionText.replace("Accepted", "Proposed")]) {
+    assertFailure(compareSurfaceHistoryEdge(current, previous, { ...context, decisionText }), "exact registered Accepted ADR");
+  }
+  for (const record of approved.records) {
+    for (const side of ["before", "after"]) {
+      const patches = [
+        { id: `${record.id}-other` }, { purpose: `${record[side].purpose} ` },
+        { status: side === "before" ? "retiring" : "active" },
+        { retirementReason: "Different reason" }, { extra: "Not part of the approved record" },
+      ];
+      for (const patch of patches) {
+        const prior = structuredClone(previous), next = structuredClone(current);
+        const entries = (side === "before" ? prior : next).categories.rustPathSites;
+        const index = entries.findIndex(entry => entry.id === record.id);
+        entries[index] = { ...entries[index], ...patch };
+        assert.notEqual(completeEntryDigest(entries[index]), record[`${side}Sha256`]);
+        assertFailure(compareSurfaceHistoryEdge(next, prior, context), `${side} record differs: ${record.id}`);
+      }
+      for (const change of ["duplicate", "wrong-category", "missing-purpose"]) {
+        const prior = structuredClone(previous), next = structuredClone(current);
+        const selected = side === "before" ? prior : next;
+        const index = selected.categories.rustPathSites.findIndex(entry => entry.id === record.id);
+        if (change === "duplicate") selected.categories.rustPathSites.push(structuredClone(record[side]));
+        else if (change === "wrong-category") {
+          selected.categories.rustTaskSites.push(selected.categories.rustPathSites.splice(index, 1)[0]);
+        } else delete selected.categories.rustPathSites[index].purpose;
+        assertFailure(compareSurfaceHistoryEdge(next, prior, context), `${side} record differs: ${record.id}`);
+      }
+    }
+  }
+});
+
+test("surface history correction cannot be reused for new commits or a dirty final edge", t => {
+  const { root, approved, previous, current, context } = historicalCorrection();
+  const files = {
+    [approved.decision.path]: context.decisionText,
+    "docs/engineering/governance-assets.json": JSON.stringify({ assets: [context.decisionAsset] }),
+  };
+  const replay = repository(t);
+  const base = replay.commit(previous, { files });
+  const newCommit = replay.commit(current);
+  assert.notEqual(newCommit, approved.commitSha);
+  assertFailure(checkSurfaceBudgetHistory(replay.root, { baseRef: base }), newCommit, "purpose changed in place");
+  const dirty = repository(t);
+  const dirtyBase = dirty.commit(previous, { files });
+  dirty.write(BUDGET_PATH, JSON.stringify(current));
+  assertFailure(checkSurfaceBudgetHistory(dirty.root, { baseRef: dirtyBase }), "working tree", "purpose changed in place");
+  const following = structuredClone(current);
+  following.categories.rustPathSites.find(entry => entry.id === approved.records[0].id).purpose += " later rewrite";
+  assertFailure(checkSurfaceBudgetHistory(root, {
+    baseRef: approved.parentSha, headRef: approved.commitSha, currentBudget: following,
+  }), "working tree", "retiring rustPathSites surface purpose changed in place");
+});
+
+test("surface history correction preserves every unrelated lifecycle refusal on the approved edge", () => {
+  const { previous, current, context } = historicalCorrection();
+  const unrelated = "unrelated_surface_correction_fixture";
+  const cases = [
+    [[active(unrelated)], [], "removed without first being marked retiring"],
+    [[], [retiring(unrelated)], "must start active"],
+    [[retiring(unrelated)], [active(unrelated)], "cannot return to active"],
+    [[active(unrelated)], [{ ...active(unrelated), purpose: "Changed" }], "purpose changed in place"],
+    [[retiring(unrelated)], [{ ...retiring(unrelated), retirementReason: "Changed" }], "retirementReason changed in place"],
+  ];
+  for (const [oldEntries, newEntries, expected] of cases) {
+    const prior = structuredClone(previous), next = structuredClone(current);
+    prior.categories.settingsFields.push(...oldEntries);
+    next.categories.settingsFields.push(...newEntries);
+    assertFailure(compareSurfaceHistoryEdge(next, prior, context), expected, unrelated);
+  }
 });
 
 test("surface history accepts exactly 1000 committed edges and rejects 1001 without truncating", t => {
