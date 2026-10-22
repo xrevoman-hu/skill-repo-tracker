@@ -168,6 +168,8 @@ impl Leases {
         let path = self.directory.join(format!("{id}.key"));
         let write = (|| {
             let mut file = crate::credential_ipc::create_private(&path)?;
+            #[cfg(test)]
+            let bytes = tests::write_prefix(&mut file, bytes)?;
             file.write_all(bytes)
                 .and_then(|()| file.sync_all())
                 .map_err(|_| "lease_write_failed")
@@ -176,6 +178,8 @@ impl Leases {
             self.release(&id)?;
             return Err(error);
         }
+        #[cfg(test)]
+        tests::pause("before_delivery");
         Ok(
             json!({"leaseId":id,"recordId":record_id,"assetVersion":version,
             "path":path,"expiresAt":expires_at,"leaseSeconds":LEASE_SECONDS}),
@@ -239,3 +243,7 @@ impl Leases {
         self.deadlines.insert(id.to_owned(), Instant::now());
     }
 }
+
+#[cfg(test)]
+#[path = "credential_leases_tests.rs"]
+pub(crate) mod tests;

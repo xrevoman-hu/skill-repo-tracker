@@ -5,8 +5,8 @@
   "hotSpots": {
     "src/App.tsx": {
       "status": "active",
-      "maxLines": 6272,
-      "maxBytes": 239541,
+      "maxLines": 6270,
+      "maxBytes": 239508,
       "targetLines": 700,
       "adr": "docs/adr/0007-staged-modularization.md"
     },

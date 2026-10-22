@@ -400,7 +400,7 @@ describe("maintenance embedded in credential settings", () => {
       if (request.action === "change_password") { current = { ...current, locked: true }; return current; }
       return undefined;
     });
-    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} />);
+    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} copyText={vi.fn()} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Create backup" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Create backup" }));
     await user.type(screen.getByLabelText("Master password", { exact: true }), master);

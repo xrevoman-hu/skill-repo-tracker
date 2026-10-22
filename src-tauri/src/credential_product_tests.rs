@@ -3,6 +3,324 @@ use std::os::unix::fs::PermissionsExt;
 
 const PASSWORD: &str = "synthetic-product-master-only";
 
+#[cfg(test)]
+mod lifecycle {
+    //! Real test-binary children run the production host and IPC. The barriers are
+    //! cfg(test) only; this is process/filesystem evidence, not a packaged-app run.
+    use super::*;
+    use std::{
+        io::{BufRead, BufReader},
+        os::unix::process::ExitStatusExt,
+        process::{Child, ChildStdin, Command, Stdio},
+        sync::mpsc::{self, Receiver},
+        thread::{self, JoinHandle},
+    };
+
+    const CHILD_MODE: &str = "SRT_CREDENTIAL_LIFECYCLE_TEST_CHILD";
+    const FILE_BYTES: &[u8] =
+        b"synthetic original attachment\0\xff\r\nwith preserved trailing bytes\n";
+
+    struct RunningHost {
+        child: Child,
+        input: ChildStdin,
+        output: Receiver<Value>,
+        reader: Option<JoinHandle<()>>,
+        auth: String,
+        vault_id: String,
+    }
+
+    impl RunningHost {
+        fn spawn(test: &str, root: &Path, barrier: &Path, stage: &str) -> Self {
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", test, "--nocapture", "--test-threads=1"])
+                .env(CHILD_MODE, test)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let input = child.stdin.take().unwrap();
+            let stdout = child.stdout.take().unwrap();
+            let (send, output) = mpsc::channel();
+            let reader = thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    // libtest adds its own text around the production JSON frames.
+                    if let Some(start) = line.find('{') {
+                        if let Ok(value) = serde_json::from_str(&line[start..]) {
+                            if send.send(value).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                }
+            });
+            let mut host = Self {
+                child,
+                input,
+                output,
+                reader: Some(reader),
+                auth: String::new(),
+                vault_id: String::new(),
+            };
+            host.send(&json!({"root":root,"barrier":barrier,"stage":stage}));
+            let fixture_auth = host.receive();
+            assert_eq!(fixture_auth["event"], "test_auth");
+            host.auth = fixture_auth["auth"].as_str().unwrap().to_owned();
+            let ready = host.receive();
+            assert_eq!(ready["event"], "ready");
+            assert_eq!(ready["locked"], true);
+            host.vault_id = ready["vaultId"].as_str().unwrap().to_owned();
+            host
+        }
+
+        fn send(&mut self, request: &Value) {
+            crate::credential_protocol::write_line(&mut self.input, request).unwrap();
+        }
+
+        fn receive(&self) -> Value {
+            self.output.recv_timeout(Duration::from_secs(15)).unwrap()
+        }
+
+        fn control(&mut self, request: &Value) -> Value {
+            self.send(request);
+            let response = self.receive();
+            assert_eq!(response["ok"], true, "control failed: {response}");
+            response["result"].clone()
+        }
+
+        fn kill(&mut self) {
+            self.child.kill().unwrap();
+            assert_eq!(self.child.wait().unwrap().signal(), Some(libc::SIGKILL));
+            self.reader.take().unwrap().join().unwrap();
+        }
+
+        fn stop(&mut self) {
+            self.control(&json!({"action":"shutdown"}));
+            assert!(self.child.wait().unwrap().success());
+            self.reader.take().unwrap().join().unwrap();
+        }
+    }
+
+    impl Drop for RunningHost {
+        fn drop(&mut self) {
+            if self.child.try_wait().ok().flatten().is_none() {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+            }
+            if let Some(reader) = self.reader.take() {
+                let _ = reader.join();
+            }
+        }
+    }
+
+    fn child_host() {
+        crate::credential_auth::memory_tests::install();
+        let config = crate::credential_protocol::read_line(&mut io::stdin().lock())
+            .unwrap()
+            .unwrap();
+        let root = PathBuf::from(config["root"].as_str().unwrap());
+        let id = prepare_root(&root, false).unwrap();
+        // A process-local fake Keychain holds only this child's synthetic code.
+        // The control and IPC paths below remain the production implementation.
+        let auth = credential_auth::production_establish(&id, false).unwrap();
+        crate::credential_leases::tests::install(
+            PathBuf::from(config["barrier"].as_str().unwrap()),
+            config["stage"].as_str().unwrap().to_owned(),
+        );
+        crate::credential_protocol::write_line(
+            &mut io::stdout().lock(),
+            &json!({"event":"test_auth","auth":auth}),
+        )
+        .unwrap();
+        run(&root).unwrap();
+    }
+
+    fn wait_for_barrier(directory: &Path, stage: &str) {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            if fs::read_to_string(directory.join("reached")).is_ok_and(|value| value == stage) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "host did not reach {stage}");
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn roundtrip(root: &Path, id: &str, request: &Value) -> Result<Value, &'static str> {
+        let mut stream = credential_ipc::connect_host(root, id)?;
+        credential_ipc::write_ipc(&mut stream, request)?;
+        credential_ipc::read_ipc(&mut stream, credential_ipc::FRAME_LIMIT)?
+            .ok_or("missing_test_response")
+    }
+
+    fn crash_scenario(stage: &str) {
+        let current = thread::current();
+        let test = current.name().unwrap();
+        if std::env::var(CHILD_MODE).as_deref() == Ok(test) {
+            child_host();
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().canonicalize().unwrap();
+        let root = parent.join("vault");
+        let barrier = parent.join("barrier");
+        fs::create_dir(&barrier).unwrap();
+        let mut host = RunningHost::spawn(test, &root, &barrier, stage);
+        host.control(&json!({"action":"create","password":PASSWORD,"confirmPassword":PASSWORD}));
+        let record = host.control(&json!({"action":"save","type":"ssh","name":"Synthetic crash attachment",
+            "metadata":{},"note":"","secrets":{},"files":[{"field":"privateKey","name":"original.key",
+            "bytesBase64":base64::engine::general_purpose::STANDARD.encode(FILE_BYTES)}]}));
+        host.control(&verify(&record, "synthetic-export-session"));
+        let exported = host.control(
+            &json!({"action":"export_file","recordId":record["recordId"],
+            "expectedVersion":1,"sessionId":"synthetic-export-session","field":"privateKey"}),
+        );
+        let export_bytes = base64::engine::general_purpose::STANDARD
+            .decode(exported["bytesBase64"].as_str().unwrap())
+            .unwrap();
+        let export = root.join("human-export.key");
+        credential_ipc::create_private(&export)
+            .unwrap()
+            .write_all(&export_bytes)
+            .unwrap();
+        let neighbor = root.join("leases/unregistered.key");
+        credential_ipc::create_private(&neighbor)
+            .unwrap()
+            .write_all(b"unrelated")
+            .unwrap();
+        host.control(&json!({"action":"share","enabled":true}));
+        let call = json!({"auth":host.auth,"name":"srt_credentials_lease_file",
+            "arguments":{"vaultId":host.vault_id,"recordId":record["recordId"],"field":"privateKey"}});
+        let request_root = root.clone();
+        let request_id = host.vault_id.clone();
+        let request = thread::spawn(move || roundtrip(&request_root, &request_id, &call));
+        wait_for_barrier(&barrier, stage);
+        let ledger: Value =
+            serde_json::from_slice(&fs::read(root.join("leases/ledger.json")).unwrap()).unwrap();
+        assert_eq!(ledger.as_array().unwrap().len(), 1);
+        let lease_path = root
+            .join("leases")
+            .join(format!("{}.key", ledger[0]["id"].as_str().unwrap()));
+        let expected = if stage == "partial_write" {
+            &FILE_BYTES[..FILE_BYTES.len() / 2]
+        } else {
+            FILE_BYTES
+        };
+        assert_eq!(fs::read(&lease_path).unwrap(), expected);
+        assert_eq!(
+            fs::metadata(&lease_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(
+            !request.is_finished(),
+            "path must not be delivered at the barrier"
+        );
+        host.kill();
+        assert!(request.join().unwrap().is_err());
+        assert!(
+            lease_path.exists(),
+            "SIGKILL must leave actual production-written residue"
+        );
+        let mut restarted = RunningHost::spawn(test, &root, &barrier, "unarmed");
+        let status = restarted.control(&json!({"action":"status"}));
+        assert_eq!(status["locked"], true);
+        assert_eq!(status["cleanupFailed"], false);
+        assert_eq!(status["cleanupRemaining"], 0);
+        assert!(!lease_path.exists());
+        assert_eq!(fs::read(&export).unwrap(), FILE_BYTES);
+        assert_eq!(fs::read(&neighbor).unwrap(), b"unrelated");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&fs::read(root.join("leases/ledger.json")).unwrap())
+                .unwrap(),
+            json!([])
+        );
+        let read = json!({"auth":restarted.auth,"name":"srt_credentials_read_fields",
+            "arguments":{"vaultId":restarted.vault_id,"recordId":record["recordId"],"fields":["privateKey"]}});
+        assert_eq!(
+            roundtrip(&root, &restarted.vault_id, &read).unwrap()["error"],
+            "vault_locked"
+        );
+        restarted.control(&json!({"action":"unlock","password":PASSWORD}));
+        restarted.control(&verify(&record, "synthetic-recovered-session"));
+        let recovered = restarted.control(
+            &json!({"action":"export_file","recordId":record["recordId"],
+            "expectedVersion":1,"sessionId":"synthetic-recovered-session","field":"privateKey"}),
+        );
+        assert_eq!(recovered["bytesBase64"], exported["bytesBase64"]);
+        restarted.stop();
+    }
+
+    #[test]
+    fn sigkill_during_partial_lease_write_recovers_only_registered_file_and_starts_locked() {
+        crash_scenario("partial_write");
+    }
+
+    #[test]
+    fn sigkill_after_lease_sync_before_path_delivery_recovers_only_registered_file_and_starts_locked(
+    ) {
+        crash_scenario("before_delivery");
+    }
+
+    #[test]
+    fn mcp_delivery_holds_host_mutex_and_revocation_confirmation_precedes_later_denial() {
+        let current = thread::current();
+        let test = current.name().unwrap();
+        if std::env::var(CHILD_MODE).as_deref() == Ok(test) {
+            child_host();
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let parent = directory.path().canonicalize().unwrap();
+        let root = parent.join("vault");
+        let barrier = parent.join("barrier");
+        fs::create_dir(&barrier).unwrap();
+        let mut host = RunningHost::spawn(test, &root, &barrier, "ipc_delivery");
+        host.control(&json!({"action":"create","password":PASSWORD,"confirmPassword":PASSWORD}));
+        let record = host.control(&json!({"action":"save","type":"ssh","name":"Synthetic concurrent attachment",
+            "metadata":{},"note":"","secrets":{},"files":[{"field":"privateKey","name":"original.key",
+            "bytesBase64":base64::engine::general_purpose::STANDARD.encode(FILE_BYTES)}]}));
+        host.control(&json!({"action":"share","enabled":true}));
+        let call = json!({"auth":host.auth,"name":"srt_credentials_lease_file",
+            "arguments":{"vaultId":host.vault_id,"recordId":record["recordId"],"field":"privateKey"}});
+        let request_root = root.clone();
+        let request_id = host.vault_id.clone();
+        let first_call = call.clone();
+        let request = thread::spawn(move || roundtrip(&request_root, &request_id, &first_call));
+        // The production response is prepared. The test hook proves the actual
+        // HostMutex is still held immediately before production write_ipc.
+        wait_for_barrier(&barrier, "ipc_delivery");
+        let ledger: Value =
+            serde_json::from_slice(&fs::read(root.join("leases/ledger.json")).unwrap()).unwrap();
+        let lease_path = root
+            .join("leases")
+            .join(format!("{}.key", ledger[0]["id"].as_str().unwrap()));
+        assert_eq!(fs::read(&lease_path).unwrap(), FILE_BYTES);
+        assert!(!request.is_finished());
+        host.send(&json!({"action":"share","enabled":false}));
+        assert!(matches!(
+            host.output.recv_timeout(Duration::from_millis(100)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        fs::write(barrier.join("resume"), b"continue").unwrap();
+        let revoked = host.receive();
+        assert_eq!(revoked["ok"], true);
+        assert_eq!(revoked["result"]["sharing"], false);
+        assert_eq!(revoked["result"]["cleanupFailed"], false);
+        assert_eq!(revoked["result"]["cleanupRemaining"], 0);
+        let delivered = request.join().unwrap().unwrap();
+        assert_eq!(delivered["result"]["leaseId"], ledger[0]["id"]);
+        assert_eq!(delivered["result"]["path"], json!(lease_path));
+        assert!(!lease_path.exists());
+        assert_eq!(
+            roundtrip(&root, &host.vault_id, &call).unwrap()["error"],
+            "sharing_disabled"
+        );
+        // Receipt order at the client can differ from host write order. This
+        // test does not claim to recall bytes already buffered for that client.
+        host.stop();
+    }
+}
+
 fn setup() -> (tempfile::TempDir, ProductHost) {
     crate::credential_auth::memory_tests::install();
     let root = tempfile::tempdir().unwrap();

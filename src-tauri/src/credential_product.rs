@@ -724,6 +724,8 @@ pub(crate) fn run(root: &Path) -> Result<(), &'static str> {
                             Err(code) => json!({"error":code}),
                         };
                         let response = credential_ipc::bounded_response(response);
+                        #[cfg(test)]
+                        crate::credential_leases::tests::before_ipc_delivery(&server_host);
                         let _ = credential_ipc::write_ipc(&mut stream, &response);
                     }
                 }

@@ -236,7 +236,7 @@ describe("credential maintenance", () => {
       if (request.action === "status") return real.request(request).then((value) => ({ ...value, cleanupFailed }));
       return undefined;
     });
-    render(<CredentialSettings transport={transport} language="zh" demo onOpenVault={vi.fn()} />);
+    render(<CredentialSettings transport={transport} language="zh" demo onOpenVault={vi.fn()} copyText={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: "重试清理" }));
     await waitFor(() => expect(screen.queryByRole("button", { name: "重试清理" })).not.toBeInTheDocument());
     await expect(real.request({ action: "restore_pick" })).rejects.toEqual({ code: "demo_native_only" });

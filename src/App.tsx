@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import type {
+  ComponentProps,
   Dispatch,
   MouseEvent as ReactMouseEvent,
   ReactNode,
@@ -40,7 +41,6 @@ import { PromptsView } from "./PromptsView";
 import { AppSidebar, navItems } from "./AppSidebar";
 import { CredentialsView } from "./CredentialsView";
 import { CredentialSettings } from "./CredentialSettings";
-import type { CredentialTransport } from "./credentialTypes";
 import { RepositoryBackupModal, RepositorySelectionActions } from "./RepositoryBackupControls";
 import { isRepositoryBackupEligible, needsRepositoryBackup, repositoryBackupTargets } from "./repositoryBackup";
 import { RepositorySelectAll } from "./RepositorySelectAll";
@@ -139,8 +139,7 @@ type NewRepositoryDraft = {
 };
 
 type PreferencesProps = {
-  credentialTransport: CredentialTransport;
-  openCredentialVault: () => void;
+  vault: ComponentProps<typeof CredentialSettings>;
   language: Language;
   setLanguage: Dispatch<SetStateAction<Language>>;
   theme: Theme;
@@ -1868,8 +1867,8 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
   }, [appService]);
 
   const settingsProps: PreferencesProps = {
-    credentialTransport: appService.credentialTransport,
-    openCredentialVault: () => { void switchActiveTab("credentials"); },
+    vault: { transport: appService.credentialTransport, language, demo: !desktopRuntime,
+      onOpenVault: () => { void switchActiveTab("credentials"); }, copyText: copyPromptText },
     language,
     setLanguage,
     theme,
@@ -5321,8 +5320,7 @@ function PreferencesModal({ onClose, ...props }: PreferencesModalProps) {
 }
 
 function PreferencesPanel({
-  credentialTransport,
-  openCredentialVault,
+  vault,
   language,
   setLanguage,
   theme,
@@ -5373,7 +5371,7 @@ function PreferencesPanel({
   return (
     <div className={`settings-layout ${compact ? "compact-settings" : ""}`}>
       <div className="settings-main-column">
-        <CredentialSettings transport={credentialTransport} language={language} onOpenVault={openCredentialVault} demo={!desktopRuntime} />
+        <CredentialSettings transport={vault.transport} language={vault.language} onOpenVault={vault.onOpenVault} demo={vault.demo} copyText={vault.copyText} />
         <SettingsSection title={t("appearanceLanguage")}>
           <SettingRow label={t("theme")}>
             <div className="choice-row">

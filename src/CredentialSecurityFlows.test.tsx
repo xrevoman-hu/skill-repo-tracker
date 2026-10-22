@@ -217,7 +217,7 @@ describe("credential detail security boundaries", () => {
 describe("credential sharing settings", () => {
   it("does not enable operations after status loading fails", async () => {
     const { transport } = transportFor(() => Promise.reject({ code: "credential_host_unavailable" }));
-    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} />);
+    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} copyText={vi.fn()} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("credential service is unavailable");
     expect(screen.getByRole("button", { name: "Enable access" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Restore backup" })).toBeDisabled();
@@ -227,7 +227,7 @@ describe("credential sharing settings", () => {
     const user = userEvent.setup();
     const open = vi.fn();
     const { transport, calls } = transportFor((request) => request.action === "status" ? status({ exists: false, locked: true }) : undefined);
-    render(<CredentialSettings transport={transport} language="en" demo onOpenVault={open} />);
+    render(<CredentialSettings transport={transport} language="en" demo onOpenVault={open} copyText={vi.fn()} />);
     await screen.findByText("Not created");
     await user.click(screen.getByRole("button", { name: "Open vault" }));
     expect(open).toHaveBeenCalledOnce();
@@ -248,7 +248,7 @@ describe("credential sharing settings", () => {
       if (request.action === "share") return pending.promise;
       return undefined;
     });
-    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} />);
+    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} copyText={vi.fn()} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "Enable access" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Enable access" }));
     expect(screen.getByText(/existing and future credentials. Returned secrets/)).toBeInTheDocument();
@@ -274,7 +274,7 @@ describe("credential sharing settings", () => {
       if (request.action === "status") return current;
       return undefined;
     });
-    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} />);
+    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} copyText={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: "Disable access" }));
     expect(screen.getByText(/Already delivered content cannot be recalled/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Confirm" }));
@@ -291,7 +291,7 @@ describe("credential sharing settings", () => {
       if (request.action === "reset_access") { if (++attempts === 1) throw { code: "credential_authorization_cancelled" }; return status({ sharing: true, sharingRequested: true }); }
       return undefined;
     });
-    render(<CredentialSettings transport={transport} language="zh" demo={false} onOpenVault={vi.fn()} />);
+    render(<CredentialSettings transport={transport} language="zh" demo={false} onOpenVault={vi.fn()} copyText={vi.fn()} />);
     await waitFor(() => expect(screen.getByRole("button", { name: "重置访问码" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "重置访问码" }));
     await user.click(screen.getByRole("button", { name: "确认" }));
@@ -312,7 +312,7 @@ describe("credential sharing settings", () => {
       if (request.action === "lock") { current = { ...current, locked: true }; return current; }
       return undefined;
     });
-    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} />);
+    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} copyText={vi.fn()} />);
     await user.click(await screen.findByRole("button", { name: "Restore system authorization" }));
     await waitFor(() => expect(screen.queryByText("System authorization required")).not.toBeInTheDocument());
     await user.click(screen.getByRole("button", { name: "Lock now" }));
@@ -328,7 +328,7 @@ describe("credential sharing settings", () => {
       if (request.action === "retry_cleanup") throw { code: "cleanup_failed" };
       return undefined;
     });
-    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} />);
+    render(<CredentialSettings transport={transport} language="en" demo={false} onOpenVault={vi.fn()} copyText={vi.fn()} />);
     expect(await screen.findByText("Clipboard cleanup is incomplete. Please check it manually.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restore system authorization" })).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "Retry cleanup" }));
@@ -339,6 +339,59 @@ describe("credential sharing settings", () => {
 
 describe("selected Agent guide delivery", () => {
   const guide = (client: CredentialResults["agent_guide"]["client"], patch: Partial<CredentialResults["agent_guide"]> = {}): CredentialResults["agent_guide"] => ({ client, text: `Synthetic ${client} guide`, ready: true, reason: null, serverName: "synthetic-service", ...patch });
+
+  it("opens the selected client guide from settings and copies it without changing authorization", async () => {
+    const user = userEvent.setup();
+    const { transport, calls } = transportFor((request) => {
+      if (request.action === "status") return status({ sharing: true, sharingRequested: true });
+      if (request.action === "agent_guide") return guide(request.client);
+      return undefined;
+    });
+    const copy = vi.fn().mockResolvedValue(undefined);
+    const props = { transport, language: "en", demo: false, onOpenVault: vi.fn(), copyText: copy };
+    render(<CredentialSettings {...props} />);
+    await screen.findByText("Unlocked; reopening the app requires manual unlock");
+    expect(calls.filter((request) => request.action === "agent_guide")).toHaveLength(0);
+    await user.click(screen.getByRole("button", { name: "Agent connection guide" }));
+    const dialog = screen.getByRole("dialog", { name: "Agent connection guide" });
+    await within(dialog).findByText("Synthetic codex guide");
+    expect(within(dialog).getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Codex", "Claude Code", "WorkBuddy", "DeepSeek Harness", "通用 MCP / Generic MCP",
+    ]);
+    await user.selectOptions(within(dialog).getByLabelText("Agent"), "workbuddy");
+    await within(dialog).findByText("Synthetic workbuddy guide");
+    expect(within(dialog).queryByText("Synthetic codex guide")).not.toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Copy guide for Agent" }));
+    expect(copy).toHaveBeenCalledExactlyOnceWith("Synthetic workbuddy guide");
+    expect(calls.filter((request) => request.action === "agent_guide" && request.client === "workbuddy")).toHaveLength(2);
+    expect(calls.every((request) => request.action === "status" || request.action === "agent_guide")).toBe(true);
+    expect(props.onOpenVault).not.toHaveBeenCalled();
+    await user.click(within(dialog).getAllByRole("button", { name: "Close" })[0]);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Agent connection guide" }));
+    expect(await screen.findByText("Synthetic codex guide")).toBeInTheDocument();
+  });
+
+  it("keeps settings help available for a locked demo vault without offering a copyable configuration", async () => {
+    const user = userEvent.setup();
+    const { transport, calls } = transportFor((request) => {
+      if (request.action === "status") return status({ locked: true });
+      if (request.action === "agent_guide") return guide(request.client, { ready: false, reason: "vault_locked" });
+      return undefined;
+    });
+    const copy = vi.fn();
+    const props = { transport, language: "zh", demo: true, onOpenVault: vi.fn(), copyText: copy };
+    render(<CredentialSettings {...props} />);
+    await screen.findByText("已锁定，授权仍保留");
+    await user.click(screen.getByRole("button", { name: "Agent 接入说明" }));
+    await screen.findByText("Synthetic codex guide");
+    expect(screen.getByRole("button", { name: "复制说明给 Agent" })).toBeDisabled();
+    expect(copy).not.toHaveBeenCalled();
+    expect(calls.every((request) => request.action === "status" || request.action === "agent_guide")).toBe(true);
+    await user.click(screen.getAllByRole("button", { name: "关闭" })[0]);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.getByText("浏览器演示不会建立授权或访问钥匙串。")).toBeInTheDocument();
+  });
 
   it("removes the previous guide on selection and does not copy after the new client request fails", async () => {
     const user = userEvent.setup();
