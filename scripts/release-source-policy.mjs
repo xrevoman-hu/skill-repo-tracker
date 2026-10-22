@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { requireSuccessfulMainHead, mainBaselineEnvironment } from "./main-push-evidence.mjs";
 import { EXPECTED_GIT_URL } from "./main-push-github.mjs";
 
@@ -6,6 +8,7 @@ const PRODUCT_NAME = "Skill Repo Tracker";
 export { requireSuccessfulMainHead };
 
 export function assertLocalReleaseSource(version, run, root) {
+  validateReleaseNotes(readFileSync(join(root, "docs", "releases", `v${version}.md`), "utf8"));
   run("git", buildLocalMainFetchArguments());
   const head = run("git", ["rev-parse", "HEAD"], { capture: true }).trim();
   const remoteMain = run("git", ["rev-parse", "origin/main"], { capture: true }).trim();
@@ -58,6 +61,19 @@ function normalizeReleaseBody(value) {
   return typeof value === "string" ? value.replace(/\r\n?/g, "\n").trim() : "";
 }
 
+export function validateReleaseNotes(body) {
+  const normalized = normalizeReleaseBody(body);
+  for (const disclosure of [
+    "## 中文", "## English", "ad-hoc", "Developer ID", "notarized",
+    "首次启动", "Control-click", "Privacy & Security",
+  ]) {
+    if (!normalized.includes(disclosure)) {
+      throw new Error(`tracked release notes are missing required disclosure: ${disclosure}`);
+    }
+  }
+  return normalized;
+}
+
 export function validateFinalReleaseMetadata(release, version, expectedBody) {
   const expectedTag = `v${version}`;
   const expectedName = `${PRODUCT_NAME} ${expectedTag}`;
@@ -71,15 +87,7 @@ export function validateFinalReleaseMetadata(release, version, expectedBody) {
       `GitHub Release must be final with tag ${expectedTag} and title ${expectedName}`,
     );
   }
-  const normalizedExpected = normalizeReleaseBody(expectedBody);
-  for (const disclosure of [
-    "## 中文", "## English", "ad-hoc", "Developer ID", "notarized",
-    "首次启动", "Control-click", "Privacy & Security",
-  ]) {
-    if (!normalizedExpected.includes(disclosure)) {
-      throw new Error(`tracked release notes are missing required disclosure: ${disclosure}`);
-    }
-  }
+  const normalizedExpected = validateReleaseNotes(expectedBody);
   if (normalizeReleaseBody(release?.body) !== normalizedExpected) {
     throw new Error(`GitHub Release body must exactly match docs/releases/v${version}.md`);
   }

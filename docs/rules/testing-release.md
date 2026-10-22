@@ -120,7 +120,10 @@ npm run release:verify -- --lane adhoc --version X.Y.Z --phase local
 )
 ```
 
-本地 phase 先确认政策已完成阶段 B，并校验同一 SHA 最新 CI attempt 的四个 job 全部成功；
+本地 phase 在任何远端访问及构建之前，先用远端 metadata 校验共用的披露规则检查
+`docs/releases/vX.Y.Z.md`；缺失说明或必需披露即停止。日常 `npm run verify` 同时检查当前
+应用版本对应的说明，不改写已发布版本的历史说明。
+随后确认政策已完成阶段 B，并校验同一 SHA 最新 CI attempt 的四个 job 全部成功；
 随后从固定的官方 GitHub Git URL 以隔离、精确 refspec 获取最新 `origin/main`，确认 `HEAD` 与其完全一致且
 远端尚不存在本次版本 tag；在生成 manifest 前还要重新执行同一检查，防止验证期间远端
 状态漂移；同时重新核对最新 CI。remote phase 开始也复核阶段与同提交 CI。

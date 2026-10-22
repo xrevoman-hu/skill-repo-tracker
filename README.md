@@ -4,9 +4,9 @@
 
 本地管理 Skills、提示词和 GitHub 仓库。Local-first Skills, prompts, and GitHub repository management for macOS.
 
-**[v1.4.0 · 下载与发布状态 / Downloads and release status](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.0)** · [版本说明 / Release notes](docs/releases/v1.4.0.md) · [贡献指南 / Contributing](CONTRIBUTING.md)
+**[v1.4.1 · 下载与发布状态 / Downloads and release status](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.1)** · [版本说明 / Release notes](docs/releases/v1.4.1.md) · [贡献指南 / Contributing](CONTRIBUTING.md)
 
-`1.4.0` 新增本地凭据库；下载资产以对应 Release 页为准。Version `1.4.0` adds a local credential vault; download assets are listed on its Release page. [凭据库使用指南 / Credential vault guide](docs/credential-vault.md) · [候选验收与限制 / Candidate acceptance and limitations](docs/credential-vault.md#验收状态)
+`1.4.0` 新增本地凭据库，`1.4.1` 修复发布说明预检；下载资产以对应 Release 页为准。Version `1.4.0` adds a local credential vault; `1.4.1` fixes release-note preflight. Download assets are listed on its Release page. [凭据库使用指南 / Credential vault guide](docs/credential-vault.md) · [候选验收与限制 / Candidate acceptance and limitations](docs/credential-vault.md#验收状态)
 
 macOS 12+ · Apple Silicon（arm64）。安装包为 **ad-hoc 签名测试分发，不是 Developer ID 签名，未经过 Apple notarization**；首次打开方式见下文。The installer is ad-hoc signed, not Developer ID signed, and not Apple notarized; first-launch instructions are below.
 
@@ -50,7 +50,7 @@ Skill Repo Tracker 是一个 local-first macOS 桌面工具，用于追踪 GitHu
 
 Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再按你的选择发布到工具目录。主库默认在 `~/SkillRepoTracker/skills`，当前默认发布到 Claude Code 和 Codex。Gemini、OpenCode、OpenClaw、Hermes 可以手动勾选，但不会默认打开。
 
-应用版本：`v1.4.0`，适用于 Apple Silicon、macOS 12+。
+应用版本：`v1.4.1`，适用于 Apple Silicon、macOS 12+。
 
 ### v1.4.0：本地凭据库
 
@@ -59,7 +59,7 @@ Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再
 - 卡片“使用”复制记录定位信息；凭据页右上角和设置中的“Agent 接入说明”共用同一弹窗，只生成所选客户端的文档，不包含密码或访问码。开启共享后，同一电脑、同一系统用户的已配置 Agent 可读取现有和以后新增的全部凭据；返回的秘密可能进入 Agent 上下文与历史。
 - 设置提供共享开关、访问码重置、主密码修改及独立加密备份恢复。每次重新打开应用仍须手动解锁。SSH 文件按需以限时租约交给本机工具，显式导出的副本由用户保管。
 
-macOS `rc.4` 凭据 GUI 已完成本轮候选验收；Agent 的读取、文件消费和独立口令输入按实测候选分别记录，仍有部分能力与环境阻断。候选结果不替代正式包的构建、签名与远端下载复核。详见[验收状态](docs/credential-vault.md#验收状态)与[版本说明](docs/releases/v1.4.0.md)。
+macOS `rc.4` 凭据 GUI 已完成本轮候选验收；Agent 的读取、文件消费和独立口令输入按实测候选分别记录，仍有部分能力与环境阻断。候选结果不替代正式包的构建、签名与远端下载复核。详见[验收状态](docs/credential-vault.md#验收状态)与[版本说明](docs/releases/v1.4.1.md)。
 
 ### v1.3.0 更新
 
@@ -182,7 +182,7 @@ Cargo fmt、Clippy `-D warnings`、Rust tests 和 Git diff 检查。`CI / verify
 
 这种包可以挂载、复制到 `/Applications` 并本机验证，但不是 Apple notarized 公开安装包。首次打开时，macOS 可能提示无法验证开发者；测试用户需要右键打开，或在“系统设置 -> 隐私与安全性”里选择“仍要打开”。安装测试包时请注意：
 
-1. 从对应的 [GitHub Release](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.0) 获取 `Skill.Repo.Tracker_1.4.0_aarch64.dmg`。
+1. 从对应的 [GitHub Release](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.1) 获取 `Skill.Repo.Tracker_1.4.1_aarch64.dmg`。
 2. 双击打开 DMG，把 `Skill Repo Tracker.app` 拖入 `/Applications`。
 3. 首次启动如果提示“无法验证开发者”或类似安全提示，请在 Finder 里右键这个 App，选择“打开”，再在弹窗中确认“打开”。
 4. 如果右键打开仍被拦截，请进入“系统设置 -> 隐私与安全性”，在底部找到被拦截的 Skill Repo Tracker，点击“仍要打开”。
@@ -220,7 +220,7 @@ Skill Repo Tracker is a local-first macOS app for people who install, update, an
 
 Instead of treating Claude Code, Codex, Gemini, OpenCode, OpenClaw, or Hermes folders as the source of truth, the app keeps one independent Skill library at `~/SkillRepoTracker/skills`. Skills are installed there first, then copied to selected tool directories.
 
-Application version: `v1.4.0` for Apple Silicon, macOS 12+.
+Application version: `v1.4.1` for Apple Silicon, macOS 12+.
 
 ### v1.4.0: local credential vault
 
@@ -229,7 +229,7 @@ Application version: `v1.4.0` for Apple Silicon, macOS 12+.
 - Each card's Use button copies a record locator. The Agent guide produces only the selected client's instructions, without passwords or access codes. Sharing grants configured Agents on the same computer and OS user access to all existing and future records; returned secrets may enter Agent context and history.
 - Settings provide sharing, access-code reset, password change, encrypted backup and recovery. Reopening the app requires manual unlock. SSH files use expiring local leases; users manage explicitly exported copies.
 
-The macOS `rc.4` credential GUI has completed this candidate acceptance round. Agent reads, file consumption and independent passphrase input are recorded for the specific candidates and channels tested; partial results and environment blockers remain. Candidate results do not replace final-package build, signature and remote-download verification. See the [acceptance matrix](docs/credential-vault.md#验收状态) and [release notes](docs/releases/v1.4.0.md).
+The macOS `rc.4` credential GUI has completed this candidate acceptance round. Agent reads, file consumption and independent passphrase input are recorded for the specific candidates and channels tested; partial results and environment blockers remain. Candidate results do not replace final-package build, signature and remote-download verification. See the [acceptance matrix](docs/credential-vault.md#验收状态) and [release notes](docs/releases/v1.4.1.md).
 
 ### v1.3.0 Highlights
 
@@ -289,7 +289,7 @@ This is suitable for GitHub Release test assets that users manually allow throug
 
 Install notes for the downloaded DMG:
 
-1. Obtain `Skill.Repo.Tracker_1.4.0_aarch64.dmg` from the corresponding [GitHub Release](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.0).
+1. Obtain `Skill.Repo.Tracker_1.4.1_aarch64.dmg` from the corresponding [GitHub Release](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.1).
 2. Open the DMG and drag `Skill Repo Tracker.app` into `/Applications`.
 3. On first launch, macOS may block the app because it is ad-hoc signed. Control-click the app in Finder, choose Open, then confirm Open.
 4. If it is still blocked, open System Settings -> Privacy & Security and choose Open Anyway for Skill Repo Tracker.

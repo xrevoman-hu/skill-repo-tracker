@@ -3,10 +3,10 @@
 本清单是人工验收视图，不是第二套发布脚本。唯一可执行合同、local/remote phase 和 manifest
 交接命令只维护在 [testing-release Rule](rules/testing-release.md)；这里不得复制命令。
 
-本清单适用于 [v1.4.0](releases/v1.4.0.md)：应用版本 `1.4.0`，候选验收绑定 `v1.4.0-rc.4`。
-候选构建/tag 不代表正式发布；正式 `v1.4.0` 须在以下门禁通过后按既有合同生成。
-正式资产为 `Skill.Repo.Tracker_1.4.0_aarch64.dmg`，下载与发布状态以对应
-[Release 页面](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.0)为准。
+本清单适用于 [v1.4.1](releases/v1.4.1.md)：应用版本 `1.4.1`，凭据 GUI 候选验收仍绑定 `v1.4.0-rc.4`。
+本版修复发布预检与说明，产品功能未改变；既有候选验收不替代本版独立构建和发布验收。
+正式资产为 `Skill.Repo.Tracker_1.4.1_aarch64.dmg`，下载与发布状态以对应
+[Release 页面](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.1)为准。
 以下条目是验收要求，不代表已通过；每层结果以对应执行记录为准。
 
 ## 1. 授权与来源
@@ -19,6 +19,7 @@
 ## 2. 本地实物验收
 
 - 使用 Rule 中唯一接口，不拆分、不替换步骤。
+- 版本说明须先通过与远端相同的中英文分发披露检查，缺失时不得开始远端访问或构建。
 - 证明测试、coverage、MSRV、E2E、性能门以及版本/仓库/架构治理全部通过。
 - 完整签名 App 后重新封装并签名 DMG；旧 DMG 不得复用。
 - 证明只读挂载内 App 的签名、版本、arm64、bytes 与 SHA-256。

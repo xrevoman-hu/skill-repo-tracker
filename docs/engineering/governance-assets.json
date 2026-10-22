@@ -1740,6 +1740,7 @@
       "decisions": ["adr-0008-executable-governance"],
       "protectedPaths": [
         "scripts/release-verify.mjs",
+        "scripts/release-source-policy.mjs",
         ".github/workflows/release-gate.yml",
         "docs/rules/testing-release.md",
         "docs/macos-release-checklist.md"
@@ -1748,6 +1749,14 @@
         {
           "path": "scripts/__tests__/release-verify.test.mjs",
           "selector": "operator-carried manifest and remote digest form one artifact identity chain"
+        },
+        {
+          "path": "scripts/__tests__/release-verify.test.mjs",
+          "selector": "local release preflight rejects incomplete tracked notes before remote access or build"
+        },
+        {
+          "path": "scripts/__tests__/release-verify.test.mjs",
+          "selector": "current application version notes satisfy the publication disclosure contract"
         }
       ],
       "gates": ["verify", "release", "ci"],

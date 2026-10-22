@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { assertLocalReleaseSource, validateReleaseNotes } from "../release-source-policy.mjs";
 
 import {
   assertDmgSourceLayout,
@@ -528,6 +529,39 @@ test("local verification binds the build to fresh main before any artifact exist
       }),
     /remote tag v1\.2\.3 already exists/,
   );
+});
+
+test("local release preflight rejects incomplete tracked notes before remote access or build", () => {
+  withTemporaryDirectory((directory) => {
+    const notesDirectory = join(directory, "docs", "releases");
+    mkdirSync(notesDirectory, { recursive: true });
+    writeFileSync(join(notesDirectory, "v1.2.3.md"), [
+      "## 中文",
+      "ad-hoc 测试分发，不是 Developer ID 签名，也没有 Apple notarization。",
+      "首次启动请使用 Control-click 或 Privacy & Security。",
+      "## English",
+      "ad-hoc test distribution, not Developer ID signing or Apple notarization.",
+      "Control-click or use Privacy & Security for first launch.",
+    ].join("\n"));
+    const commands = [];
+    const run = (command, args) => {
+      commands.push([command, args]);
+      throw new Error("unexpected external command before release-note preflight");
+    };
+
+    assert.throws(
+      () => assertLocalReleaseSource("1.2.3", run, directory),
+      /tracked release notes are missing required disclosure: notarized/,
+    );
+    assert.deepEqual(commands, []);
+  });
+});
+
+test("current application version notes satisfy the publication disclosure contract", () => {
+  const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const body = readFileSync(join(root, "docs", "releases", `v${version}.md`), "utf8");
+  assert.doesNotThrow(() => validateReleaseNotes(body));
 });
 
 test("remote verification requires the exact final release title", () => {

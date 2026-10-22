@@ -1,6 +1,6 @@
 # 凭据库使用指南
 
-本文介绍 1.4.0 macOS 凭据库。已完成的本地候选验收及剩余限制见[验收状态](#验收状态)，
+本文介绍 1.4.1 macOS 凭据库（功能自 1.4.0 引入）。已完成的本地候选验收及剩余限制见[验收状态](#验收状态)，
 不代表所有 Agent 或 Windows 可用。正式下载仍以 [README](../README.md) 为准。
 
 ## 创建、保存和查看
@@ -115,7 +115,7 @@ macOS 凭据 GUI 的本轮候选验收与测试资源清理已完成。
   不提供同一账号下恶意程序的全面隔离。
 - 浏览器预览仅使用内存演示资料，不写正式加密库或系统钥匙串，也不实际复制秘密或导出文件；请勿输入真实凭据。
 
-The 1.4.0 vault is a macOS feature. A master password protects a separate encrypted
+The 1.4.1 vault, introduced in 1.4.0, is a macOS feature. A master password protects a separate encrypted
 database; a different app-managed Keychain code grants configured local Agents shared read access.
 Record types cover websites, SSH, database instances, individual database accounts, email,
 TLS certificates, API tokens and generic credentials.
