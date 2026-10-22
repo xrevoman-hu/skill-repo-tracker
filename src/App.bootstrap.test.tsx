@@ -99,6 +99,7 @@ describe("application bootstrap", () => {
     const service: AppService = {
       runtime: "tauri",
       promptTransport: new DemoAppService().promptTransport,
+      credentialTransport: new DemoAppService().credentialTransport,
       bootstrap: vi.fn().mockResolvedValue({
         workspace: initial,
         settings: null,
@@ -145,6 +146,7 @@ describe("application bootstrap", () => {
     const service: AppService = {
       runtime: "demo",
       promptTransport: new DemoAppService().promptTransport,
+      credentialTransport: new DemoAppService().credentialTransport,
       bootstrap: vi.fn().mockResolvedValue({
         workspace: { repositories: [], skills: [], plugins: [], tasks: [] },
         settings: null,

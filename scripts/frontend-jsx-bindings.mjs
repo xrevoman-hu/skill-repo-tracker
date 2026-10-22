@@ -7,6 +7,7 @@ const COMPONENT_PROPS = new Set(["Button", "Detail", "EmptyState", "Section", "T
 const LUCIDE_COMPONENTS = new Set([
   "BookOpenText", "ChevronLeft", "ChevronRight", "Copy", "Download", "GripVertical",
   "MoreHorizontal", "Pencil", "Pin", "Plus", "Search", "Tag", "Upload", "X",
+  "Eye", "EyeOff", "FileKey", "KeyRound", "LockKeyhole", "Settings2",
 ]);
 const PLUGIN_SOURCE_SHA256 = "126137182ee3216699526259fa508043d58fe2867a2af07eefe6b5bdceacbc07";
 

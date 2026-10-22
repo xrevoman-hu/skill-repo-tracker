@@ -997,6 +997,64 @@
           }
         ]
       }
+    },
+    {
+      "id": "adr-0012-credential-human-vault",
+      "kind": "decision",
+      "path": "docs/adr/0012-credential-human-vault.md",
+      "status": "active",
+      "checksum": "sha256:5e112488b5e318d4f89416e4634faa63d24d8c9cf35923b8c4d3b818ac27bf0f",
+      "principles": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ],
+      "reviewOnChange": [
+        "src/CredentialsView.tsx",
+        "src/CredentialDetail.tsx",
+        "src/CredentialEditor.tsx",
+        "src/CredentialSettings.tsx",
+        "src/credentialTypes.ts",
+        "src/credentialForm.ts",
+        "src/credentials.css",
+        "src/demoCredentialTransport.ts",
+        "src-tauri/src/credential_commands.rs",
+        "src-tauri/src/credential_product.rs",
+        "src-tauri/src/credential_records.rs",
+        "src-tauri/src/credential_clipboard.rs",
+        "src-tauri/src/credential_protocol.rs",
+        "src-tauri/src/credential_auth.rs",
+        "src-tauri/src/credential_mcp.rs",
+        "src-tauri/src/credential_ipc.rs",
+        "scripts/credential-product-policy.mjs",
+        "scripts/surface-budget-rust.mjs",
+        "scripts/surface-budget-keychain.mjs"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": [
+          "verify",
+          "ci"
+        ],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/credential-product-policy.test.mjs",
+            "selector": "credential GUI can spawn only the exact same-executable host pipe contract"
+          },
+          {
+            "path": "scripts/__tests__/credential-product-policy.test.mjs",
+            "selector": "product Keychain access preserves its namespace and explicit unlock gate"
+          },
+          {
+            "path": "scripts/__tests__/credential-product-policy.test.mjs",
+            "selector": "native secret clipboard APIs and its single worker remain in the dedicated adapter"
+          }
+        ]
+      }
     }
   ],
   "invariants": [

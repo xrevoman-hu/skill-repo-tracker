@@ -76,11 +76,25 @@ pub(crate) fn validate_call(name: &str, arguments: &Value) -> Result<(), &'stati
 }
 
 pub(crate) fn tool_result(result: Result<Value, &'static str>) -> Value {
+    let result = result.and_then(|value| {
+        // content.text and structuredContent contain the same result. Reject
+        // impossible envelopes before allocating their second full JSON string.
+        if crate::credential_protocol::fits_limit(&value, crate::credential_ipc::FRAME_LIMIT / 2) {
+            Ok(value)
+        } else {
+            Err("secret_text_response_too_large")
+        }
+    });
     match result {
         Ok(value) => json!({"content":[{"type":"text","text":value.to_string()}],
             "structuredContent":value,"isError":false}),
         Err(code) => {
-            json!({"content":[{"type":"text","text":format!("{code}: resolve in the local credential host; do not paste passwords or access codes into chat.")}],"isError":true})
+            let hint = if code == "secret_text_response_too_large" {
+                "use srt_credentials_lease_file to consume the original file."
+            } else {
+                "resolve in the local credential host; do not paste passwords or access codes into chat."
+            };
+            json!({"content":[{"type":"text","text":format!("{code}: {hint}")}],"isError":true})
         }
     }
 }
@@ -96,8 +110,12 @@ fn forward(
     // Peer identity is checked before retrieving or sending any access material.
     let mut stream = crate::credential_ipc::connect_host(root, vault_id)?;
     if access.is_none() {
-        *access =
-            Some(crate::credential_auth::load(vault_id)?.ok_or("agent_access_not_configured")?);
+        let material = if crate::credential_ipc::production_root(root, vault_id)? {
+            crate::credential_auth::production_load(vault_id)?
+        } else {
+            crate::credential_auth::load(vault_id)?
+        };
+        *access = Some(material.ok_or("agent_access_not_configured")?);
     }
     let code = access.as_ref().ok_or("agent_access_not_configured")?;
     crate::credential_ipc::write_ipc(
@@ -121,9 +139,13 @@ fn forward(
             "record_not_found" => "record_not_found",
             "field_not_found" => "field_not_found",
             "file_not_found" => "file_not_found",
+            "file_selection_required" => "file_selection_required",
+            "file_not_text" => "file_not_text",
+            "invalid_secret_field" => "invalid_secret_field",
             "lease_not_found" => "lease_not_found",
             "cleanup_failed" => "cleanup_failed",
             "stale_generation" => "stale_generation",
+            "secret_text_response_too_large" => "secret_text_response_too_large",
             _ => "credential_request_failed",
         });
     }
@@ -136,6 +158,7 @@ fn forward(
 pub(crate) struct Protocol {
     initialized: bool,
     ready: bool,
+    product: bool,
 }
 
 impl Protocol {
@@ -143,6 +166,7 @@ impl Protocol {
         Self {
             initialized: false,
             ready: false,
+            product: false,
         }
     }
 
@@ -191,9 +215,18 @@ impl Protocol {
                     .filter(|value| PROTOCOLS.contains(value))
                     .unwrap_or(PROTOCOLS[0]);
                 self.initialized = true;
+                let name = if self.product {
+                    "srt-credentials"
+                } else {
+                    "srt-credential-e0"
+                };
+                let instructions = if self.product {
+                    "Local credential vault. Search locators, disambiguate, then request only required fields. Values can enter this client context. Files require a lease and release. The desktop app must remain open and manually unlocked."
+                } else {
+                    "Local E0 fixture vault. Search locators, disambiguate, then request only required fields. Files require a lease and release. Host must remain manually unlocked."
+                };
                 json!({"protocolVersion":version,"capabilities":{"tools":{}},
-                    "serverInfo":{"name":"srt-credential-e0","version":"0.1.0"},
-                    "instructions":"Local E0 fixture vault. Search locators, disambiguate, then request only required fields. Files require a lease and release. Host must remain manually unlocked."})
+                    "serverInfo":{"name":name,"version":"0.1.0"},"instructions":instructions})
             }
             "ping" => json!({}),
             _ if !self.ready => return Some(failure(-32002, "Not initialized")),
@@ -210,13 +243,22 @@ impl Protocol {
             }
             _ => return Some(failure(-32601, "Method not found")),
         };
-        Some(json!({"jsonrpc":"2.0","id":id,"result":result}))
+        let response = json!({"jsonrpc":"2.0","id":id,"result":result});
+        Some(
+            if crate::credential_protocol::fits_limit(&response, crate::credential_ipc::FRAME_LIMIT)
+            {
+                response
+            } else {
+                json!({"jsonrpc":"2.0","id":response["id"],"result":tool_result(Err("secret_text_response_too_large"))})
+            },
+        )
     }
 }
 
 pub(crate) fn run(root: &Path, vault_id: &str) -> Result<(), &'static str> {
     crate::credential_ipc::verify_root(root, vault_id)?;
     let mut protocol = Protocol::new();
+    protocol.product = crate::credential_ipc::production_root(root, vault_id)?;
     let mut access = None;
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();

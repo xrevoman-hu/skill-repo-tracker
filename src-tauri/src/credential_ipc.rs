@@ -29,12 +29,32 @@ pub(crate) fn verify_root(root: &Path, vault_id: &str) -> Result<(), &'static st
         return Err("invalid_e0_root");
     }
     private_path(root, true)?;
-    let marker: Value = serde_json::from_slice(&read_private(&root.join("e0-vault.json"), 512)?)
-        .map_err(|_| "invalid_e0_root")?;
-    if marker != serde_json::json!({"schema":"srt-credential-e0-v1","vaultId":vault_id}) {
+    let product = production_root(root, vault_id)?;
+    let marker_path = root.join(if product {
+        "vault.json"
+    } else {
+        "e0-vault.json"
+    });
+    let marker: Value =
+        serde_json::from_slice(&read_private(&marker_path, 512)?).map_err(|_| "invalid_e0_root")?;
+    let schema = if product {
+        "srt-credential-v1"
+    } else {
+        "srt-credential-e0-v1"
+    };
+    if marker != serde_json::json!({"schema":schema,"vaultId":vault_id}) {
         return Err("invalid_e0_root");
     }
     Ok(())
+}
+
+pub(crate) fn production_root(root: &Path, _vault_id: &str) -> Result<bool, &'static str> {
+    let product = root.join("vault.json").exists();
+    let fixture = root.join("e0-vault.json").exists();
+    if product == fixture {
+        return Err("invalid_vault_root");
+    }
+    Ok(product)
 }
 
 fn endpoint_directory(root: &Path, vault_id: &str) -> PathBuf {
@@ -226,6 +246,14 @@ pub(crate) fn write_ipc(stream: &mut UnixStream, value: &Value) -> Result<(), &'
         offset += count;
     }
     Ok(())
+}
+
+pub(crate) fn bounded_response(value: Value) -> Value {
+    if crate::credential_protocol::fits_limit(&value, FRAME_LIMIT) {
+        value
+    } else {
+        serde_json::json!({"error":"secret_text_response_too_large"})
+    }
 }
 
 fn read_line_limit(reader: &mut impl BufRead, limit: usize) -> Result<Option<Value>, &'static str> {

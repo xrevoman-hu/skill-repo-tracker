@@ -16,6 +16,10 @@ Tauri command 是进程边界，Rust 服务负责 SQLite、Keychain、文件系�
 由唯一原生构建模块复用；原有普通库、GitHub token 与非敏感迁移包的内容边界保持。
 宿主与租约策略归 domain；Keychain、IPC、MCP 协议和独立库归 adapter，adapter 不反向依赖宿主。
 
+ADR 0012 将人工凭据存取接入 GUI：AppService 经受限 Tauri command 连接惰性启动的同程序
+宿主子进程；Keychain 的进程级交互策略不进入普通 GUI。正式空库、版本化记录与人工验证
+会话独立于 E0 fixture；原生秘密剪贴板用变更标识确认所有权。产品入口不得加载实验数据。
+
 ## 依赖方向
 
 ```text

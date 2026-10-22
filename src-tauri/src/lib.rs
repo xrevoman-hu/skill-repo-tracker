@@ -22,6 +22,10 @@ mod app_update;
 mod backup_fs;
 mod backup_paths;
 mod backups;
+mod credential_clipboard;
+mod credential_commands;
+#[doc(hidden)]
+pub mod credential_protocol;
 mod database;
 mod github_accounts;
 mod github_auth;
@@ -41,6 +45,7 @@ mod startup_guard_tests;
 mod temp_artifacts;
 
 use adapters::AppAdapters;
+use database::database_path_for_run;
 #[cfg(test)]
 use github_auth::GithubAuth;
 use github_auth::GithubAuthSource;
@@ -216,37 +221,7 @@ struct AppState {
     credential_lock: github_accounts::CredentialMutationLock,
     temp_registry: TempArtifactRegistry,
     prompt_search: prompt_search::PromptSearchCoordinator,
-}
-
-fn database_path_for_run(data_dir: &Path) -> Result<(PathBuf, bool), AppError> {
-    #[cfg(debug_assertions)]
-    if let Some(value) = std::env::var_os("SRT_DEBUG_DATABASE_PATH") {
-        let path = PathBuf::from(value);
-        let parent = path.parent().ok_or_else(|| {
-            AppError::new(
-                "debug_database_path_invalid",
-                "调试数据库必须位于系统临时目录中。",
-            )
-        })?;
-        fs::create_dir_all(parent)?;
-        let resolved_parent = parent.canonicalize()?;
-        let resolved_temp = std::env::temp_dir().canonicalize()?;
-        let file_name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or("");
-        if !resolved_parent.starts_with(&resolved_temp)
-            || !file_name.starts_with("skill-repo-tracker-prompt-debug-")
-            || !file_name.ends_with(".sqlite")
-        {
-            return Err(AppError::new(
-                "debug_database_path_invalid",
-                "调试数据库必须位于系统临时目录，且文件名使用 skill-repo-tracker-prompt-debug-*.sqlite。",
-            ));
-        }
-        return Ok((resolved_parent.join(file_name), true));
-    }
-    Ok((data_dir.join("skill-repo-tracker.sqlite"), false))
+    credentials: Arc<credential_commands::CredentialClient>,
 }
 
 #[cfg(debug_assertions)]
@@ -355,6 +330,7 @@ impl AppState {
             db: Mutex::new(conn),
             db_path,
             adapters,
+            credentials: Arc::new(credential_commands::CredentialClient::new(&data_dir)),
             data_dir,
             filesystem_lock,
             credential_lock,
@@ -10309,7 +10285,7 @@ fn open_url(request: OpenUrlRequest, _app: tauri::AppHandle) -> ApiResponse<Stri
 }
 
 pub fn run() {
-    tauri::Builder::default()
+    let application = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app
@@ -10318,6 +10294,7 @@ pub fn run() {
                 .map_err(|err| tauri::Error::Anyhow(anyhow::anyhow!(err)))?;
             let state = AppState::new(data_dir)
                 .map_err(|err| tauri::Error::Anyhow(anyhow::anyhow!(err.message)))?;
+            credential_commands::register_focus(app, &state.credentials);
             app.manage(state);
             #[cfg(debug_assertions)]
             if let (Some(width), Some(height)) = (
@@ -10338,6 +10315,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            credential_commands::credential_request,
             list_repositories,
             add_repository,
             check_repositories,
@@ -10409,8 +10387,9 @@ pub fn run() {
             export_migration_package,
             import_migration_package
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("error while running Skill Repo Tracker");
+    application.run(credential_commands::handle_exit);
 }
 
 #[cfg(test)]

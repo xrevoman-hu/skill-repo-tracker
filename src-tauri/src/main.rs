@@ -2,6 +2,9 @@ mod credential_auth;
 mod credential_ipc;
 mod credential_leases;
 mod credential_mcp;
+mod credential_product;
+use skill_repo_tracker_lib::credential_protocol;
+mod credential_records;
 mod credential_runtime;
 mod credential_store;
 

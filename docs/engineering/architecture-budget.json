@@ -5,8 +5,8 @@
   "hotSpots": {
     "src/App.tsx": {
       "status": "active",
-      "maxLines": 6337,
-      "maxBytes": 240775,
+      "maxLines": 6272,
+      "maxBytes": 239541,
       "targetLines": 700,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
@@ -33,8 +33,8 @@
     },
     "src-tauri/src/lib.rs": {
       "status": "active",
-      "maxLines": 10418,
-      "maxBytes": 353332,
+      "maxLines": 10397,
+      "maxBytes": 352532,
       "targetLines": 500,
       "adr": "docs/adr/0007-staged-modularization.md"
     },

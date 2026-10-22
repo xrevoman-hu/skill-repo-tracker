@@ -4,6 +4,7 @@ import path from "node:path";
 import { isRustProductionSourcePath } from "./source-classification.mjs";
 import { discoverDirBuilderPathSites } from "./surface-budget-rust-dir-builder.mjs";
 import { credentialLocalTransport } from "./credential-runtime-policy.mjs";
+import { credentialClipboardSurface, credentialFocusHook, credentialHostSpawn, credentialParentWatcher, credentialSpawnMask } from "./credential-product-policy.mjs";
 
 const TASK_APIS = new Set([
   "async_std::task::spawn",
@@ -194,7 +195,15 @@ function enclosingFunctions(masked) {
   const functions = [];
   for (const match of masked.matchAll(/\b(?:async\s+)?fn\s+([A-Za-z_][A-Za-z0-9_]*)\b/g)) {
     let opening = match.index + match[0].length;
-    while (opening < masked.length && masked[opening] !== "{" && masked[opening] !== ";") {
+    let rounds = 0;
+    let squares = 0;
+    while (opening < masked.length) {
+      const character = masked[opening];
+      if (rounds === 0 && squares === 0 && (character === "{" || character === ";")) break;
+      if (character === "(") rounds += 1;
+      else if (character === ")") rounds -= 1;
+      else if (character === "[") squares += 1;
+      else if (character === "]") squares -= 1;
       opening += 1;
     }
     if (masked[opening] !== "{") continue;
@@ -610,6 +619,14 @@ function rustPathSites(relative, source, masked) {
     throw new Error(`${relative} process Command must remain a canonical direct call`);
   }
   for (const call of commandCalls) {
+    const owner = functionAt(functions, call.index);
+    if (credentialHostSpawn(relative, source, call.index, owner)) {
+      const key = `Command::new(<credential-host>):${owner}`;
+      const ordinal = (counts.get(key) ?? 0) + 1;
+      counts.set(key, ordinal);
+      sites.push(`${relative}:${key}#${ordinal}`);
+      continue;
+    }
     const expected = 'Command::new("open").arg("-a").arg(&browser.app_name).arg(&url).status()';
     const expression = source
       .slice(call.index)
@@ -620,7 +637,6 @@ function rustPathSites(relative, source, masked) {
     if (expression !== expected) {
       throw new Error(`${relative} process Command is not the approved macOS open intent`);
     }
-    const owner = functionAt(functions, call.index);
     const key = `Command::new(\"open\"):${owner}`;
     const ordinal = (counts.get(key) ?? 0) + 1;
     counts.set(key, ordinal);
@@ -629,7 +645,7 @@ function rustPathSites(relative, source, masked) {
   return sites;
 }
 
-function tauriBuilderSites(relative, masked) {
+function tauriBuilderSites(relative, masked, source) {
   const sites = [];
   if (/\b(?:tauri|Builder)\s+as\s+[A-Za-z_]/.test(masked)) {
     throw new Error(`${relative} must not alias the Tauri Builder`);
@@ -669,12 +685,18 @@ function tauriBuilderSites(relative, masked) {
       methods.push(method[1]);
       cursor = closing + 1;
     }
-    if (methods.join(",") !== EXPECTED_BUILDER_CHAIN.join(",")) {
+    const credentialExitChain = ["plugin", "setup", "invoke_handler", "build", "expect"];
+    const explicitExit = relative === "src-tauri/src/lib.rs" &&
+      methods.join(",") === credentialExitChain.join(",") &&
+      /\blet\s+application\s*=\s*tauri\s*::\s*Builder\s*::\s*default/.test(masked) &&
+      /\bapplication\s*\.\s*run\s*\(\s*credential_commands\s*::\s*handle_exit\s*\)\s*;/.test(masked);
+    if (methods.join(",") !== EXPECTED_BUILDER_CHAIN.join(",") && !explicitExit) {
       throw new Error(
         `${relative} Tauri Builder chain must remain ${EXPECTED_BUILDER_CHAIN.join(" -> ")}`,
       );
     }
-    sites.push(`${relative}:builder=${EXPECTED_BUILDER_CHAIN.join(">")}`);
+    sites.push(`${relative}:builder=${methods.join(">")}`);
+    if (explicitExit) sites.push(`${relative}:run=credential_commands::handle_exit`);
   }
   const requiredChainMethods = new Map([
     ["plugin", builders.length],
@@ -685,6 +707,7 @@ function tauriBuilderSites(relative, masked) {
   for (const hook of TAURI_HOOKS) {
     if (!requiredChainMethods.has(hook)) requiredChainMethods.set(hook, 0);
   }
+  requiredChainMethods.set("on_window_event", credentialFocusHook(relative, source, masked));
   for (const [method, expectedCount] of requiredChainMethods) {
     const calls = [...masked.matchAll(new RegExp(`\\.\\s*${method}\\s*\\(`, "g"))];
     if (calls.length !== expectedCount) {
@@ -730,9 +753,14 @@ export function discoverRustExecutionSurface(root) {
     const relative = path.relative(root, absolute).split(path.sep).join("/");
     const source = readFileSync(absolute, "utf8");
     const masked = maskCfgTestItems(maskRustNonCode(source));
-    rustTaskSitesResult.push(...rustTaskSites(relative, masked));
+    const functions = enclosingFunctions(masked);
+    const ownerAt = (position) => functionAt(functions, position);
+    const spawnMask = credentialSpawnMask(relative, source, masked, ownerAt);
+    rustTaskSitesResult.push(...rustTaskSites(relative, spawnMask.masked), ...spawnMask.sites);
     rustPathSitesResult.push(...rustPathSites(relative, source, masked));
-    const builderSites = tauriBuilderSites(relative, masked);
+    rustPathSitesResult.push(...credentialClipboardSurface(relative, masked, ownerAt));
+    rustPathSitesResult.push(...credentialParentWatcher(relative, source, masked));
+    const builderSites = tauriBuilderSites(relative, masked, source);
     if (builderSites.some((site) => site.includes(":builder="))) builderCount += 1;
     tauriPlugins.push(...builderSites);
   }

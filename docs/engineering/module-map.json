@@ -116,6 +116,15 @@
       "forbiddenDependencies": []
     },
     {
+      "id": "frontend-contract",
+      "runtime": "frontend",
+      "forbiddenDependencies": [
+        "frontend-entry", "frontend-shell", "frontend-feature-view",
+        "frontend-app-service", "frontend-tauri-adapter", "frontend-controller",
+        "frontend-feature-adapter", "frontend-fixture", "frontend-shared"
+      ]
+    },
+    {
       "id": "rust-composition",
       "runtime": "rust",
       "forbiddenDependencies": ["rust-entry"]
@@ -149,7 +158,7 @@
         "docs/adr/0004-foreground-scheduling.md",
         "docs/adr/0007-staged-modularization.md"
       ],
-      "paths": ["src/App.tsx", "src/RepositorySelectAll.tsx", "src/styles.css"]
+      "paths": ["src/App.tsx", "src/AppSidebar.tsx", "src/RepositorySelectAll.tsx", "src/styles.css"]
     },
     {
       "id": "frontend-github-view",
@@ -429,6 +438,85 @@
         "src-tauri/src/credential_mcp.rs",
         "src-tauri/src/credential_store.rs"
       ]
+    },
+    {
+      "id": "frontend-credential-view",
+      "runtime": "frontend",
+      "layer": "frontend-feature-view",
+      "ownerRule": "docs/rules/data-security.md",
+      "decisions": [
+        "docs/adr/0012-credential-human-vault.md"
+      ],
+      "paths": [
+        "src/CredentialsView.tsx",
+        "src/CredentialEditor.tsx",
+        "src/CredentialDetail.tsx",
+        "src/CredentialSettings.tsx",
+        "src/credentials.css"
+      ]
+    },
+    {
+      "id": "frontend-credential-contracts",
+      "runtime": "frontend",
+      "layer": "frontend-contract",
+      "ownerRule": "docs/rules/data-security.md",
+      "decisions": [
+        "docs/adr/0012-credential-human-vault.md"
+      ],
+      "paths": [
+        "src/credentialTypes.ts",
+        "src/credentialForm.ts"
+      ]
+    },
+    {
+      "id": "frontend-credential-fixture",
+      "runtime": "frontend",
+      "layer": "frontend-fixture",
+      "ownerRule": "docs/rules/data-security.md",
+      "decisions": [
+        "docs/adr/0012-credential-human-vault.md"
+      ],
+      "paths": [
+        "src/demoCredentialTransport.ts"
+      ]
+    },
+    {
+      "id": "rust-credential-product",
+      "runtime": "rust",
+      "layer": "rust-domain",
+      "ownerRule": "docs/rules/data-security.md",
+      "decisions": [
+        "docs/adr/0012-credential-human-vault.md"
+      ],
+      "paths": [
+        "src-tauri/src/credential_product.rs"
+      ]
+    },
+    {
+      "id": "rust-credential-records",
+      "runtime": "rust",
+      "layer": "rust-adapter",
+      "ownerRule": "docs/rules/data-security.md",
+      "decisions": [
+        "docs/adr/0012-credential-human-vault.md"
+      ],
+      "paths": [
+        "src-tauri/src/credential_records.rs",
+        "src-tauri/src/credential_clipboard.rs",
+        "src-tauri/src/credential_protocol.rs"
+      ]
+    },
+    {
+      "id": "rust-credential-commands",
+      "runtime": "rust",
+      "layer": "rust-composition",
+      "ownerRule": "docs/rules/permissions.md",
+      "decisions": [
+        "docs/adr/0012-credential-human-vault.md"
+      ],
+      "paths": [
+        "src-tauri/src/credential_commands.rs"
+      ]
     }
   ],
   "dependencyExceptions": [
@@ -441,5 +529,12 @@
     }
   ],
   "moves": [],
-  "policyChanges": []
+  "policyChanges": [
+    {
+      "kind": "add-layer",
+      "layer": "frontend-contract",
+      "adr": "docs/adr/0012-credential-human-vault.md",
+      "reason": "View-independent credential DTOs and pure field policy shared by the AppService, native adapter and deterministic demo; cannot import UI or runtime adapters."
+    }
+  ]
 }

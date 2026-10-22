@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { isRustProductionSourcePath } from "./source-classification.mjs";
+import { assertProductExplicitAuthorization } from "./credential-product-policy.mjs";
 import { assertCredentialExplicitAuthorization } from "./credential-runtime-policy.mjs";
 
 const KEYCHAIN_SURFACE = [
@@ -310,8 +311,14 @@ function assertCredentialAccessStore(structural, literal) {
     'keyring::Entry::new(SERVICE,&format!("vault:{vault_id}"))' +
     '.map_err(|_|"credential_store_unavailable")';
   if (singleFunctionBody(structural, literal, "entry") !== expectedEntry ||
-      [...structural.matchAll(/\bkeyring\s*::\s*Entry\s*::\s*new\s*\(/g)].length !== 1) {
+      [...structural.matchAll(/\bkeyring\s*::\s*Entry\s*::\s*new\s*\(/g)].length !== 2) {
     throw new Error("credential Keychain must use one validated account entry seam");
+  }
+  const productEntry = 'if!valid_id(vault_id){returnErr("invalid_vault_id");}' +
+    'keyring::Entry::new("Skill Repo Tracker Credential Access",&format!("vault:{vault_id}"),)' +
+    '.map_err(|_|"credential_store_unavailable")';
+  if (singleFunctionBody(structural, literal, "production_entry") !== productEntry.replace(/\s+/g, "")) {
+    throw new Error("credential Keychain product namespace must remain exact and bounded");
   }
   for (const [, type, member] of structural.matchAll(/\bkeyring\s*::\s*(\w+)(?:\s*::\s*(\w+))?/g)) {
     if (!(type === "Entry" && (!member || member === "new")) &&
@@ -331,6 +338,24 @@ function assertCredentialInteractionPolicy(structural, literal) {
     load: "noninteractive(||load_existing(vault_id))",
     establish: "noninteractive(||establish_without_ui(vault_id,reset))",
     remove: "noninteractive(||remove_without_ui(vault_id))",
+    production_load: "noninteractive(||production_existing(vault_id))",
+    production_existing: `match production_entry(vault_id)?.get_password() {
+      Ok(value) if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) => { Ok(Some(value)) }
+      Ok(_) => Err("invalid_access_material"),
+      Err(keyring::Error::NoEntry) => Ok(None), Err(error) => Err(storage_error(error)),
+    }`,
+    production_establish: `noninteractive(|| {
+      let previous = production_existing(vault_id)?;
+      if !reset { if let Some(value) = previous { return Ok(value); } }
+      let value = random_id()?;
+      production_entry(vault_id)?.set_password(&value).map_err(storage_error)?;
+      if production_existing(vault_id)?.as_deref() != Some(value.as_str()) {
+        return Err("credential_store_write_not_verified");
+      } Ok(value)
+    })`,
+    production_authorize: `${serial}letprevious=production_existing(vault_id)?.ok_or("agent_access_missing")?;` +
+      `${noUi}letcurrent=production_existing(vault_id)?.ok_or("agent_access_missing")?;` +
+      'if!equal_material(&previous,&current){returnErr("credential_store_changed");}Ok(current)',
     authorize_existing: `${serial}letprevious=load_existing(vault_id)?.ok_or("agent_access_missing")?;` +
       `${noUi}letcurrent=load_existing(vault_id)?.ok_or("agent_access_missing")?;` +
       'if!equal_material(&previous,&current){returnErr("credential_store_changed");}Ok(current)',
@@ -375,15 +400,16 @@ function assertCredentialInteractionPolicy(structural, literal) {
   }
   // Counts reject extra helper calls outside the reviewed bodies, including indirect aliases.
   for (const [name, count] of Object.entries({
-    INTERACTION: 3, noninteractive: 4, load_existing: 7,
+    INTERACTION: 4, noninteractive: 6, load_existing: 7,
     establish_without_ui: 2, remove_without_ui: 2, entry: 4,
-    get_password: 1, set_password: 1, delete_credential: 1,
+    production_entry: 3, production_existing: 6,
+    get_password: 2, set_password: 2, delete_credential: 1,
   })) {
     if ([...structural.matchAll(new RegExp(`\\b${name}\\b`, "g"))].length !== count) {
       throw new Error(`credential Keychain interaction helper has an unreviewed reference: ${name}`);
     }
   }
-  for (const name of ["noninteractive", "load_existing", "establish_without_ui", "remove_without_ui", "entry"]) {
+  for (const name of ["noninteractive", "load_existing", "establish_without_ui", "remove_without_ui", "entry", "production_entry", "production_existing"]) {
     if (new RegExp(`\\bpub(?:\\s*\\([^)]*\\))?\\s+fn\\s+${name}\\b`).test(structural)) {
       throw new Error("credential Keychain interaction helpers must remain private");
     }
@@ -392,7 +418,7 @@ function assertCredentialInteractionPolicy(structural, literal) {
     .replace(/\bsecurity_framework\s*::\s*os\s*::\s*macos\s*::\s*keychain\s*::\s*SecKeychain\s*::\s*disable_user_interaction\s*\(\s*\)/g, "")
     .replace(/\.\s*downcast_ref\s*::\s*<\s*security_framework\s*::\s*base\s*::\s*Error\s*>\s*\(\s*\)/g, "");
   if (/\b(?:security_framework|SecKeychain)\b/.test(withoutReviewedApi) ||
-      [...structural.matchAll(/\bsecurity_framework\b/g)].length !== 3) {
+      [...structural.matchAll(/\bsecurity_framework\b/g)].length !== 4) {
     throw new Error("credential Keychain security-framework API, alias or reference is not reviewed");
   }
 }
@@ -412,6 +438,8 @@ export function discoverKeychainSurface(root) {
     }
     assertCredentialExplicitAuthorization(relative, views.structural,
       (name) => singleFunctionBody(views.structural, views.literal, name));
+    assertProductExplicitAuthorization(relative, views.structural,
+      (name) => singleFunctionBody(views.structural, views.literal, name));
     if (/\bkeyring\s*::/.test(views.structural) && !["src-tauri/src/adapters.rs", "src-tauri/src/credential_auth.rs"].includes(relative)) {
       throw new Error(
         `${relative} keyring references are restricted to src-tauri/src/adapters.rs`,
@@ -423,6 +451,7 @@ export function discoverKeychainSurface(root) {
   if (credentialViews && /\b(?:keyring|security_framework)\s*::/.test(credentialViews.structural)) {
     assertCredentialAccessStore(credentialViews.structural, credentialViews.literal);
     credentialSurface.push("service=Skill Repo Tracker E0 Credential Access;account=vault:<id>");
+    credentialSurface.push("service=Skill Repo Tracker Credential Access;account=vault:<id>");
   }
   if (!/\bkeyring\s*::/.test(adapterViews.structural)) return credentialSurface;
   assertCanonicalLib(libViews.structural, libViews.literal);

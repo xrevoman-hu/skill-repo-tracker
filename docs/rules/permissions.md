@@ -5,6 +5,10 @@ ADR 0010 仅增加凭据 E0 的精确本机例外：`credential_ipc.rs` 中受�
 自有隔离库/lease 目录。固定 SQLCipher 原生源准备属于构建工具，不是应用网络权限；
 应用仍不得通过 TCP、任意进程或任意文件路径绕过下面的既有边界。原 GitHub adapter 不变。
 
+ADR 0012 追加正式凭据 GUI 的精确同程序子进程入口及 macOS 原生剪贴板 adapter：固定宿主
+模式、应用自有目录、私有管道，不能传任意命令或秘密 argv；原生剪贴板只能在受审查的
+凭据模块使用。此例外不放开通用 Shell、全局 Keychain、远程服务或后台 daemon。
+
 | 类型 | 当前允许范围 | 变更要求 |
 |---|---|---|
 | Tauri commands | `src-tauri/src/lib.rs` 注册清单 | 输入校验、负向测试、PR 声明 |

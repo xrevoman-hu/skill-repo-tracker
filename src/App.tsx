@@ -6,7 +6,6 @@ import type {
   SetStateAction,
 } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { BookOpenText } from "lucide-react";
 import { api, isDesktopRuntime, localizedApiErrorMessage } from "./api";
 import type {
   AppSettings,
@@ -38,6 +37,10 @@ import { GitHubWorkbench } from "./GitHubWorkbench";
 import { shouldIgnoreInspectorDismiss } from "./inspectorDismiss";
 import { PluginInspector, PluginsView } from "./PluginsView";
 import { PromptsView } from "./PromptsView";
+import { AppSidebar, navItems } from "./AppSidebar";
+import { CredentialsView } from "./CredentialsView";
+import { CredentialSettings } from "./CredentialSettings";
+import type { CredentialTransport } from "./credentialTypes";
 import { RepositoryBackupModal, RepositorySelectionActions } from "./RepositoryBackupControls";
 import { isRepositoryBackupEligible, needsRepositoryBackup, repositoryBackupTargets } from "./repositoryBackup";
 import { RepositorySelectAll } from "./RepositorySelectAll";
@@ -136,6 +139,8 @@ type NewRepositoryDraft = {
 };
 
 type PreferencesProps = {
+  credentialTransport: CredentialTransport;
+  openCredentialVault: () => void;
   language: Language;
   setLanguage: Dispatch<SetStateAction<Language>>;
   theme: Theme;
@@ -265,16 +270,6 @@ type OptimisticTaskInput = Pick<UiTask, "kind" | "target"> &
 type DemoTaskInput = Omit<UiTask, "id">;
 
 
-const navItems = [
-  { id: "github", labelKey: "nav.github" },
-  { id: "repositories", labelKey: "nav.repositories" },
-  { id: "skills", labelKey: "nav.skills" },
-  { id: "prompts", labelKey: "nav.prompts" },
-  { id: "plugins", labelKey: "nav.plugins" },
-  { id: "tasks", labelKey: "nav.tasks" },
-  { id: "settings", labelKey: "nav.settings" },
-];
-
 const APP_METADATA = {
   name: "Skill Repo Tracker",
   version: "dev",
@@ -298,6 +293,7 @@ const COPY = {
     promptExportPlaintextConfirmSingle: "提示词正文将逐字、明文导出为 MD；正文中由你粘贴的密码或凭证也会随之导出。请先确认这篇提示词不含不应分享的秘密。继续吗？",
     promptExportPlaintextConfirmBatch: "所选提示词正文将逐字、明文导出到 ZIP；正文中由你粘贴的密码或凭证也会随之导出。请先确认这些提示词不含不应分享的秘密。继续吗？",
     "nav.settings": "设置",
+    "nav.credentials": "凭据",
     localCare: "本地仓库管理",
     summary: "概览",
     totalRepositories: "仓库总数",
@@ -748,6 +744,7 @@ const COPY = {
     promptExportPlaintextConfirmSingle: "The prompt body will be exported to MD verbatim and in plaintext, including any passwords or credentials you pasted into it. Confirm it contains no secrets that should not be shared. Continue?",
     promptExportPlaintextConfirmBatch: "The selected prompt bodies will be exported to ZIP verbatim and in plaintext, including any passwords or credentials you pasted into them. Confirm they contain no secrets that should not be shared. Continue?",
     "nav.settings": "Settings",
+    "nav.credentials": "Credentials",
     localCare: "Local repository care",
     summary: "Summary",
     totalRepositories: "Total repositories",
@@ -1567,6 +1564,8 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
   const desktopRuntime = appService.runtime === "tauri";
   const [activeTab, setActiveTab] = useState(initialTab);
   const [promptDirty, setPromptDirty] = useState(false);
+  const [credentialDirty, setCredentialDirty] = useState(false);
+  const credentialLeaveGuard = useRef<(() => Promise<boolean>) | null>(null);
   const [promptCounts, setPromptCounts] = useState({ prompts: 0, tags: 0, filtered: 0 });
   const promptLeaveGuard = useRef<((context?: PromptLeaveContext) => Promise<boolean>) | null>(null);
   const [language, setLanguage] = useState<Language>(() => initialParam("lang", "zh", ["zh", "en"] as const));
@@ -1685,12 +1684,22 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
 
   async function switchActiveTab(nextTab: string) {
     if (nextTab === activeTab) return;
+    if (activeTab === "credentials" && credentialLeaveGuard.current && !await credentialLeaveGuard.current()) return;
+    if (activeTab === "credentials") setCredentialDirty(false);
     if (activeTab === "prompts" && promptLeaveGuard.current) {
       const canLeave = await promptLeaveGuard.current("switch");
       if (!canLeave) return;
     }
     if (activeTab === "prompts") setPromptDirty(false);
     setActiveTab(nextTab);
+  }
+
+  function registerCredentialLeaveGuard(guard: () => Promise<boolean>) {
+    credentialLeaveGuard.current = guard;
+    return () => { if (credentialLeaveGuard.current === guard) credentialLeaveGuard.current = null; };
+  }
+  function confirmCredentialDiscard() {
+    return window.confirm(language === "zh" ? "放弃未保存的凭据修改？" : "Discard unsaved credential changes?");
   }
 
   async function copyPromptText(content: string) {
@@ -1726,7 +1735,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
 
   useEffect(() => {
     const handleBeforeUnload = (event: BeforeUnloadEvent) => {
-      if (!promptDirty) return;
+      if (!promptDirty && !credentialDirty) return;
       event.preventDefault();
       event.returnValue = "";
     };
@@ -1736,6 +1745,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     let unlisten: (() => void) | undefined;
     if (desktopRuntime) {
       void getCurrentWindow().onCloseRequested(async (event) => {
+        if (credentialDirty && credentialLeaveGuard.current && !await credentialLeaveGuard.current()) { event.preventDefault(); return; }
         if (!promptDirty) return;
         const canClose = promptLeaveGuard.current
           ? await promptLeaveGuard.current("close")
@@ -1752,7 +1762,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       window.removeEventListener("beforeunload", handleBeforeUnload);
       unlisten?.();
     };
-  }, [desktopRuntime, promptDirty, language]);
+  }, [desktopRuntime, promptDirty, credentialDirty, language]);
 
   function isPending(key: string) {
     return Boolean(pendingActions[key]);
@@ -1858,6 +1868,8 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
   }, [appService]);
 
   const settingsProps: PreferencesProps = {
+    credentialTransport: appService.credentialTransport,
+    openCredentialVault: () => { void switchActiveTab("credentials"); },
     language,
     setLanguage,
     theme,
@@ -3408,82 +3420,21 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
 
   return (
     <main className="app-shell" data-theme={theme} data-density={density}>
-      <aside className="sidebar">
-        <div className="brand">
-          <strong>Skill Repo Tracker</strong>
-          <span>{t("localCare")}</span>
-        </div>
-        <nav className="nav-list" aria-label="Primary">
-          {navItems.map((item) => (
-            <button
-              className={`nav-item ${activeTab === item.id ? "active" : ""}`}
-              key={item.id}
-              onClick={() => void switchActiveTab(item.id)}
-              type="button"
-            >
-              {item.id === "prompts" ? (
-                <BookOpenText aria-hidden="true" className="nav-lucide" size={15} strokeWidth={1.8} />
-              ) : (
-                <span className={`nav-mark nav-mark-${item.id}`} />
-              )}
-              {t(item.labelKey)}
-            </button>
-          ))}
-        </nav>
-
-        {activeTab === "prompts" ? (
-          <>
-            <section className="sidebar-section prompt-sidebar-overview">
-              <h3>{t("promptOverview")}</h3>
-              <Metric label={t("totalPrompts")} value={promptCounts.prompts} />
-              <Metric label={t("promptTags")} value={promptCounts.tags} />
-              <Metric label={t("filteredPrompts")} value={promptCounts.filtered} />
-            </section>
-            <section className="sidebar-note prompt-sidebar-note">
-              <h3>{language === "zh" ? "本地存储" : "Local storage"}</h3>
-              <p>
-                {language === "zh"
-                  ? "正文保存在本机 SQLite；每篇最多 5 MiB。"
-                  : "Bodies stay in local SQLite, up to 5 MiB each."}
-              </p>
-            </section>
-          </>
-        ) : (
-          <>
-            <section className="sidebar-section">
-              <h3>{t("summary")}</h3>
-              <Metric label={t("totalRepositories")} value={counts.total} />
-              <Metric label={t("skillRepositories")} value={counts.skill} />
-              <Metric label={t("genericRepositories")} value={counts.generic} />
-              <Metric label={t("unknownType")} value={counts.unknown} />
-            </section>
-
-            <section className="sidebar-section">
-              <h3>{t("backupStatus")}</h3>
-              <Legend tone="green" label={t("backedLatest")} value={counts.backed} />
-              <Legend tone="orange" label={t("updatedNotBacked")} value={counts.updated} />
-              <Legend tone="gray" label={t("backupExcluded")} value={counts.excluded} />
-              <Legend tone="red" label={t("checkFailed")} value={counts.failed} />
-              <Legend tone="gray" label={t("unknown")} value={counts.unknown} />
-            </section>
-          </>
-        )}
-
-      </aside>
+      <AppSidebar activeTab={activeTab} language={language} onNavigate={switchActiveTab} t={t} promptCounts={promptCounts} counts={counts} />
 
       <section
         className={`workspace ${
-          activeTab === "settings" || activeTab === "github" || activeTab === "prompts"
+          activeTab === "settings" || activeTab === "github" || activeTab === "prompts" || activeTab === "credentials"
             ? "settings-workspace"
             : ""
-        } ${activeTab === "prompts" ? "prompts-workspace" : ""}`}
+        } ${activeTab === "prompts" || activeTab === "credentials" ? "prompts-workspace" : ""}`}
         onMouseDown={
           activeTab === "repositories" || activeTab === "skills" || activeTab === "plugins"
             ? handleWorkspaceMouseDown
             : undefined
         }
       >
-        {activeTab !== "settings" && activeTab !== "github" && activeTab !== "prompts" && (
+        {activeTab !== "settings" && activeTab !== "github" && activeTab !== "prompts" && activeTab !== "credentials" && (
           <Toolbar
             activeTab={activeTab}
             search={search}
@@ -3518,7 +3469,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         )}
 
         <div
-          className={`content-grid ${activeTab === "prompts" ? "prompt-content-grid" : ""} ${
+          className={`content-grid ${activeTab === "prompts" || activeTab === "credentials" ? "prompt-content-grid" : ""} ${
             (activeTab === "repositories" && inspectorRepo) ||
             (activeTab === "skills" && selectedSkill) ||
             (activeTab === "plugins" && selectedPlugin)
@@ -3647,6 +3598,10 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
             />
           )}
 
+          {activeTab === "credentials" && <CredentialsView transport={appService.credentialTransport} language={language} theme={theme}
+            compact={density === "compact"} demo={!desktopRuntime} copyText={copyPromptText} confirmDiscard={confirmCredentialDiscard}
+            onOpenSettings={() => { void switchActiveTab("settings"); }} onDirtyChange={setCredentialDirty} registerLeaveGuard={registerCredentialLeaveGuard} />}
+
           {activeTab === "tasks" && (
             <TasksView
               tasks={filteredTasks}
@@ -3742,7 +3697,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
           )}
         </div>
 
-        {activeTab !== "settings" && activeTab !== "github" && activeTab !== "prompts" && (
+        {activeTab !== "settings" && activeTab !== "github" && activeTab !== "prompts" && activeTab !== "credentials" && (
           <RunningTask tasks={tasks} setActiveTab={switchActiveTab} language={language} t={t} />
         )}
       </section>
@@ -3867,29 +3822,6 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         {toast && <div className="toast" role="status">{toast}</div>}
       </div>
     </main>
-  );
-}
-
-function Metric({ label, value }: { label: ReactNode; value: ReactNode }) {
-  return (
-    <div className="metric-row">
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
-  );
-}
-
-function Legend({ tone, label, value }: {
-  tone: string;
-  label: ReactNode;
-  value: ReactNode;
-}) {
-  return (
-    <div className="legend-row">
-      <span className={`legend-dot ${tone}`} />
-      <span>{label}</span>
-      <strong>{value}</strong>
-    </div>
   );
 }
 
@@ -5389,6 +5321,8 @@ function PreferencesModal({ onClose, ...props }: PreferencesModalProps) {
 }
 
 function PreferencesPanel({
+  credentialTransport,
+  openCredentialVault,
   language,
   setLanguage,
   theme,
@@ -5439,6 +5373,7 @@ function PreferencesPanel({
   return (
     <div className={`settings-layout ${compact ? "compact-settings" : ""}`}>
       <div className="settings-main-column">
+        <CredentialSettings transport={credentialTransport} language={language} onOpenVault={openCredentialVault} demo={!desktopRuntime} />
         <SettingsSection title={t("appearanceLanguage")}>
           <SettingRow label={t("theme")}>
             <div className="choice-row">

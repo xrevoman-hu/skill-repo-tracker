@@ -29,6 +29,7 @@ export function credentialLocalTransport(relative, masked, ownerAt) {
 
 export function credentialRuntimeInputAllowed(relative, functionName, name) {
   return (relative === "src-tauri/src/credential_runtime.rs" && functionName === "dispatch_from_env" && name === "args_os")
+    || (relative === "src-tauri/src/credential_commands.rs" && functionName === "start_host" && name === "current_exe")
     || (relative === "src-tauri/src/credential_ipc.rs" && functionName === "verify_peer" && name === "current_exe");
 }
 

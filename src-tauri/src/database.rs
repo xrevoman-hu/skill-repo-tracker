@@ -1,4 +1,8 @@
 use rusqlite::{params, Connection};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use crate::{utc_now, AppError};
 
@@ -11,6 +15,37 @@ const CORE_SCHEMA_BASELINE_NAME: &str = "legacy-v1.2.2-baseline";
 const BACKUP_PREFERENCE_VERSION: i64 = 2;
 const BACKUP_PREFERENCE_NAME: &str = "repository-backup-preference";
 const MIGRATION_SAVEPOINT: &str = "skill_repo_tracker_core_migration";
+
+pub(super) fn database_path_for_run(data_dir: &Path) -> Result<(PathBuf, bool), AppError> {
+    #[cfg(debug_assertions)]
+    if let Some(value) = std::env::var_os("SRT_DEBUG_DATABASE_PATH") {
+        let path = PathBuf::from(value);
+        let parent = path.parent().ok_or_else(|| {
+            AppError::new(
+                "debug_database_path_invalid",
+                "调试数据库必须位于系统临时目录中。",
+            )
+        })?;
+        fs::create_dir_all(parent)?;
+        let resolved_parent = parent.canonicalize()?;
+        let resolved_temp = std::env::temp_dir().canonicalize()?;
+        let file_name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("");
+        if !resolved_parent.starts_with(&resolved_temp)
+            || !file_name.starts_with("skill-repo-tracker-prompt-debug-")
+            || !file_name.ends_with(".sqlite")
+        {
+            return Err(AppError::new(
+                "debug_database_path_invalid",
+                "调试数据库必须位于系统临时目录，且文件名使用 skill-repo-tracker-prompt-debug-*.sqlite。",
+            ));
+        }
+        return Ok((resolved_parent.join(file_name), true));
+    }
+    Ok((data_dir.join("skill-repo-tracker.sqlite"), false))
+}
 
 /// Reject unknown or rewritten history before startup mutates the database.
 pub(super) fn preflight_core_schema(conn: &Connection) -> Result<(), AppError> {

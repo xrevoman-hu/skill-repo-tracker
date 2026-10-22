@@ -53,6 +53,7 @@ export function discoverDirBuilderPathSites(relative, masked, ownerAt) {
   ];
   const privateOwners = {
     "src-tauri/src/credential_runtime.rs": "prepare_root",
+    "src-tauri/src/credential_product.rs": "prepare_root",
     "src-tauri/src/credential_ipc.rs": "bind_listener",
     "src-tauri/src/credential_leases.rs": "open",
   };

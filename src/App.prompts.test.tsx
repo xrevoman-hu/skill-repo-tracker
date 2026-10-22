@@ -18,7 +18,7 @@ describe("App prompt library integration", () => {
       item.textContent?.trim(),
     );
 
-    expect(labels).toEqual(["GitHub", "仓库", "技能", "提示词库", "插件", "任务", "设置"]);
+    expect(labels).toEqual(["GitHub", "仓库", "技能", "提示词库", "插件", "凭据", "任务", "设置"]);
   });
 
   it("opens a prompt-specific workspace without reusing another tab inspector", async () => {

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { CredentialRequest, CredentialResults } from "./credentialTypes";
 
 type ApiError = {
   code: string;
@@ -651,6 +652,8 @@ async function command<T>(name: string, args: Record<string, unknown> = {}): Pro
 export const isDesktopRuntime = runningInTauri;
 
 export const api = {
+  credentialRequest: <R extends CredentialRequest>(request: R) =>
+    command<CredentialResults[R["action"]]>("credential_request", { request }),
   listRepositories: () => command<UiRepository[]>("list_repositories"),
   listSkills: () => command<UiSkill[]>("list_skills"),
   listPlugins: () => command<UiPlugin[]>("list_plugins"),

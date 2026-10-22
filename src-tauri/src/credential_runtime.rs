@@ -24,7 +24,17 @@ use std::{
 mod tests;
 
 pub(crate) fn dispatch_from_env() -> Option<Result<(), &'static str>> {
-    let args = std::env::args_os().skip(1).collect();
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    if args
+        .first()
+        .is_some_and(|value| value == "--credential-host")
+    {
+        return Some(if args.len() == 3 && args[1] == "--root" {
+            crate::credential_product::run(&PathBuf::from(&args[2]))
+        } else {
+            Err("invalid_credential_arguments")
+        });
+    }
     let (host, root, vault_id) = match credential_arguments(args)? {
         Ok(parsed) => parsed,
         Err(error) => return Some(Err(error)),
@@ -448,6 +458,7 @@ fn run_host(root: &Path, vault_id: &str) -> Result<(), &'static str> {
                         };
                         // Holding this lock through delivery makes control acknowledgments
                         // linearizable: after lock/revoke returns, no old request can send.
+                        let response = credential_ipc::bounded_response(response);
                         let _ = credential_ipc::write_ipc(&mut stream, &response);
                     }
                 }

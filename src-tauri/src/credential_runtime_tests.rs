@@ -647,3 +647,52 @@ fn stdio_line_framing_does_not_drop_read_ahead_and_rejects_oversize() {
         "frame_limit_exceeded"
     );
 }
+
+#[test]
+fn mcp_oversize_final_envelopes_return_recoverable_errors_and_keep_protocol_ready() {
+    let mut protocol = credential_mcp::Protocol::new();
+    protocol.handle(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"fixture","version":"1"}}}),|_,_|unreachable!());
+    protocol.handle(
+        json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+        |_, _| unreachable!(),
+    );
+    // ASCII exceeds the duplicated envelope; backslashes fit the initial JSON
+    // but exceed it after content.text is itself escaped inside the final RPC.
+    for text in ["x".repeat(13 * 1024 * 1024), "\\".repeat(5 * 1024 * 1024)] {
+        let response=protocol.handle(json!({"jsonrpc":"2.0","id":"large-read","method":"tools/call",
+            "params":{"name":"srt_credentials_read_fields","arguments":{"vaultId":"fixture","recordId":"record","fields":["value"]}}}),
+            |_,_|Ok(json!({"fields":{"value":text}}))).unwrap();
+        assert_eq!(response["id"], "large-read");
+        assert_eq!(response["result"]["isError"], true);
+        assert!(response["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("secret_text_response_too_large"));
+        let mut output = Vec::new();
+        credential_ipc::write_line(&mut output, &response).unwrap();
+        assert!(output.len() < 1024);
+        assert_eq!(
+            protocol
+                .handle(
+                    json!({"jsonrpc":"2.0","id":"after","method":"ping"}),
+                    |_, _| unreachable!()
+                )
+                .unwrap()["result"],
+            json!({})
+        );
+    }
+}
+
+#[test]
+fn oversized_host_ipc_result_is_a_small_fixed_error_before_any_bytes_are_written() {
+    let response = credential_ipc::bounded_response(
+        json!({"result":{"fields":{"value":"\0".repeat(5*1024*1024)}}}),
+    );
+    assert_eq!(response, json!({"error":"secret_text_response_too_large"}));
+    let mut output = Vec::new();
+    credential_ipc::write_line(&mut output, &response).unwrap();
+    assert!(output.len() < 100);
+    let valid = json!({"result":{"fields":{"value":" complete\n "}}});
+    assert_eq!(credential_ipc::bounded_response(valid.clone()), valid);
+}

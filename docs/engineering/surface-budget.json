@@ -464,6 +464,11 @@
         "id": "verify_skill_update_conflict",
         "status": "active",
         "purpose": "Shipped Tauri command boundary."
+      },
+      {
+        "id": "credential_commands::credential_request",
+        "status": "active",
+        "purpose": "Closed human credential actions through the GUI-owned host with native password and session checks (ADR 0012)."
       }
     ],
     "capabilityPermissions": [
@@ -927,6 +932,21 @@
         "id": "build:sha2={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"sha2\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
         "status": "active",
         "purpose": "ADR 0010: verify native artifact hashes against the fixed build receipt; build-time only."
+      },
+      {
+        "id": "normal:objc2-app-kit={\"defaultFeatures\":false,\"features\":[\"NSPasteboard\",\"std\"],\"optional\":false,\"package\":\"objc2-app-kit\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":\"'cfg(target_os = \\\"macos\\\")'\"}",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "normal:objc2-foundation={\"defaultFeatures\":false,\"features\":[\"NSString\",\"std\"],\"optional\":false,\"package\":\"objc2-foundation\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":\"'cfg(target_os = \\\"macos\\\")'\"}",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "normal:objc2={\"defaultFeatures\":false,\"features\":[\"std\"],\"optional\":false,\"package\":\"objc2\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":\"'cfg(target_os = \\\"macos\\\")'\"}",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
       }
     ],
     "rustTaskSites": [
@@ -984,6 +1004,26 @@
         "id": "src-tauri/src/credential_runtime.rs:std::thread::spawn:run_host#1",
         "status": "active",
         "purpose": "ADR 0010: one explicitly started E0 listener thread, joined on host exit; bounded local requests and lease cleanup share the host state mutex."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:std::thread::Builder::spawn:start_worker#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_commands.rs:tauri::async_runtime::spawn_blocking:credential_request#1",
+        "status": "active",
+        "purpose": "Run credential requests off the GUI thread or serve authenticated local IPC during the formal host lifetime (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:std::thread::spawn:run#1",
+        "status": "active",
+        "purpose": "Run credential requests off the GUI thread or serve authenticated local IPC during the formal host lifetime (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:std::thread::spawn:watch_parent#1",
+        "status": "active",
+        "purpose": "Observe the GUI parent every 250 ms for this host lifetime; exit only the orphaned host independently of pending authorization (ADR 0012)."
       }
     ],
     "rustPathSites": [
@@ -1144,8 +1184,9 @@
       },
       {
         "id": "src-tauri/src/lib.rs:fs::create_dir_all:database_path_for_run#1",
-        "status": "active",
-        "purpose": "Existing fs::create_dir_all filesystem operation in database_path_for_run; additions require path-intent and rollback review."
+        "status": "retiring",
+        "purpose": "Existing fs::create_dir_all filesystem operation in database_path_for_run; additions require path-intent and rollback review.",
+        "retirementReason": "ADR 0012: move unchanged database-path policy out of lib.rs and give the application an explicit exit cleanup hook; no new data path."
       },
       {
         "id": "src-tauri/src/lib.rs:fs::create_dir_all:extract_skill_to_registered_temp#1",
@@ -1599,13 +1640,15 @@
       },
       {
         "id": "src-tauri/src/lib.rs:Path::canonicalize:database_path_for_run#1",
-        "status": "active",
-        "purpose": "Existing path metadata query in database_path_for_run; additions require path-intent and trust-boundary review."
+        "status": "retiring",
+        "purpose": "Existing path metadata query in database_path_for_run; additions require path-intent and trust-boundary review.",
+        "retirementReason": "ADR 0012: move unchanged database-path policy out of lib.rs and give the application an explicit exit cleanup hook; no new data path."
       },
       {
         "id": "src-tauri/src/lib.rs:Path::canonicalize:database_path_for_run#2",
-        "status": "active",
-        "purpose": "Existing path metadata query in database_path_for_run; additions require path-intent and trust-boundary review."
+        "status": "retiring",
+        "purpose": "Existing path metadata query in database_path_for_run; additions require path-intent and trust-boundary review.",
+        "retirementReason": "ADR 0012: move unchanged database-path policy out of lib.rs and give the application an explicit exit cleanup hook; no new data path."
       },
       {
         "id": "src-tauri/src/lib.rs:Path::canonicalize:resolve_skill_folder_path#1",
@@ -2392,6 +2435,191 @@
         "id": "src-tauri/src/credential_leases.rs:Path::is_file:remove_pending#1",
         "status": "active",
         "purpose": "ADR 0010: inspect and remove only the fixed interrupted ledger.new in the private owned lease directory; reject non-regular, symlink, foreign-owner or non-0600 entries and retain them on failure."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2_app_kit::NSPasteboard::generalPasteboard:change_count#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2_app_kit::NSPasteboard::generalPasteboard:clear#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2_app_kit::NSPasteboard::generalPasteboard:set_text#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2_app_kit::NSPasteboard::generalPasteboard:text_digest#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2_app_kit::NSPasteboardTypeString:set_text#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2_app_kit::NSPasteboardTypeString:text_digest#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2_foundation::NSString::from_str:set_text#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2::rc::autoreleasepool:change_count#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2::rc::autoreleasepool:clear#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2::rc::autoreleasepool:set_text#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_clipboard.rs:objc2::rc::autoreleasepool:text_digest#1",
+        "status": "active",
+        "purpose": "macOS native secret clipboard ownership and bounded 30-second conditional cleanup through the dedicated adapter (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_commands.rs:Command::new(<credential-host>):start_host#1",
+        "status": "active",
+        "purpose": "Start the same canonical executable with fixed credential-host/root arguments and private pipes; no secret argv or shell (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_commands.rs:Path::canonicalize:start_host#1",
+        "status": "active",
+        "purpose": "Start the same canonical executable with fixed credential-host/root arguments and private pipes; no secret argv or shell (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:Path::exists:production_root#1",
+        "status": "active",
+        "purpose": "Distinguish formal vault marker from isolated E0 without migrating or mixing records (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_ipc.rs:Path::exists:production_root#2",
+        "status": "active",
+        "purpose": "Distinguish formal vault marker from isolated E0 without migrating or mixing records (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:fs::canonicalize:prepare_root#1",
+        "status": "active",
+        "purpose": "Create and validate only the private formal credential root with owner-only permissions (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:fs::read_dir:prepare_root#1",
+        "status": "active",
+        "purpose": "Create and validate only the private formal credential root with owner-only permissions (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:fs::remove_file:persist_sharing#1",
+        "status": "active",
+        "purpose": "Atomically persist nonsecret sharing intent inside the private vault; never write the access code (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:fs::rename:persist_sharing#1",
+        "status": "active",
+        "purpose": "Atomically persist nonsecret sharing intent inside the private vault; never write the access code (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:libc::getppid:watch_parent#1",
+        "status": "active",
+        "purpose": "Observe the GUI parent every 250 ms for this host lifetime; exit only the orphaned host independently of pending authorization (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:libc::getppid:watch_parent#2",
+        "status": "active",
+        "purpose": "Observe the GUI parent every 250 ms for this host lifetime; exit only the orphaned host independently of pending authorization (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:Path::exists:open#1",
+        "status": "active",
+        "purpose": "Inspect formal vault file existence for creation and locked status without plaintext database access (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:Path::exists:persist_sharing#1",
+        "status": "active",
+        "purpose": "Atomically persist nonsecret sharing intent inside the private vault; never write the access code (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:Path::exists:prepare_root#1",
+        "status": "active",
+        "purpose": "Create and validate only the private formal credential root with owner-only permissions (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:Path::exists:prepare_root#2",
+        "status": "active",
+        "purpose": "Create and validate only the private formal credential root with owner-only permissions (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:Path::exists:status#1",
+        "status": "active",
+        "purpose": "Inspect formal vault file existence for creation and locked status without plaintext database access (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:std::fs::DirBuilder::create:prepare_root#1",
+        "status": "active",
+        "purpose": "Create and validate only the private formal credential root with owner-only permissions (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_product.rs:std::process::exit:watch_parent#1",
+        "status": "active",
+        "purpose": "Observe the GUI parent every 250 ms for this host lifetime; exit only the orphaned host independently of pending authorization (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_records.rs:fs::remove_file:create#1",
+        "status": "active",
+        "purpose": "Create a blank encrypted vault with private staging and atomic rename; remove only own failed creation files (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_records.rs:fs::remove_file:create#2",
+        "status": "active",
+        "purpose": "Create a blank encrypted vault with private staging and atomic rename; remove only own failed creation files (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_records.rs:fs::rename:create#1",
+        "status": "active",
+        "purpose": "Create a blank encrypted vault with private staging and atomic rename; remove only own failed creation files (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_records.rs:Path::exists:create#1",
+        "status": "active",
+        "purpose": "Create a blank encrypted vault with private staging and atomic rename; remove only own failed creation files (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_records.rs:Path::exists:create#2",
+        "status": "active",
+        "purpose": "Create a blank encrypted vault with private staging and atomic rename; remove only own failed creation files (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/credential_records.rs:Path::exists:create#3",
+        "status": "active",
+        "purpose": "Create a blank encrypted vault with private staging and atomic rename; remove only own failed creation files (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/database.rs:fs::create_dir_all:database_path_for_run#1",
+        "status": "active",
+        "purpose": "Existing isolated debug database path moved verbatim from lib.rs; no new input or data location."
+      },
+      {
+        "id": "src-tauri/src/database.rs:Path::canonicalize:database_path_for_run#1",
+        "status": "active",
+        "purpose": "Existing isolated debug database path moved verbatim from lib.rs; no new input or data location."
+      },
+      {
+        "id": "src-tauri/src/database.rs:Path::canonicalize:database_path_for_run#2",
+        "status": "active",
+        "purpose": "Existing isolated debug database path moved verbatim from lib.rs; no new input or data location."
       }
     ],
     "keychainEntries": [
@@ -2409,6 +2637,11 @@
         "id": "service=Skill Repo Tracker E0 Credential Access;account=vault:<id>",
         "status": "active",
         "purpose": "ADR 0010: one shared Agent access code in an isolated service with bounded ASCII vault ID; separate from master password and legacy GitHub token accounts."
+      },
+      {
+        "id": "service=Skill Repo Tracker Credential Access;account=vault:<id>",
+        "status": "active",
+        "purpose": "Production shared Agent code isolated from E0 and GitHub; never stores the master password (ADR 0012)."
       }
     ],
     "runtimeInputs": [
@@ -2474,13 +2707,15 @@
       },
       {
         "id": "rust:src-tauri/src/lib.rs:std::env::temp_dir:<platform-temp>#1",
-        "status": "active",
-        "purpose": "Resolve the platform temporary root only while validating a debug database override."
+        "status": "retiring",
+        "purpose": "Resolve the platform temporary root only while validating a debug database override.",
+        "retirementReason": "ADR 0012: move unchanged database-path policy out of lib.rs and give the application an explicit exit cleanup hook; no new data path."
       },
       {
         "id": "rust:src-tauri/src/lib.rs:std::env::var_os:SRT_DEBUG_DATABASE_PATH#1",
-        "status": "active",
-        "purpose": "Debug-build-only database fixture path override."
+        "status": "retiring",
+        "purpose": "Debug-build-only database fixture path override.",
+        "retirementReason": "ADR 0012: move unchanged database-path policy out of lib.rs and give the application an explicit exit cleanup hook; no new data path."
       },
       {
         "id": "rust:src-tauri/src/lib.rs:std::env::var:SRT_DEBUG_PROMPT_BYTES#1",
@@ -2521,13 +2756,29 @@
         "id": "rust:src-tauri/src/credential_runtime.rs:std::env::args_os:<credential-cli>#1",
         "status": "active",
         "purpose": "ADR 0010: parse only the two explicit E0 modes with mandatory isolated root and vault ID before ordinary GUI startup."
+      },
+      {
+        "id": "rust:src-tauri/src/credential_commands.rs:std::env::current_exe:<current-executable>#1",
+        "status": "active",
+        "purpose": "Start the same canonical executable with fixed credential-host/root arguments and private pipes; no secret argv or shell (ADR 0012)."
+      },
+      {
+        "id": "rust:src-tauri/src/database.rs:std::env::temp_dir:<platform-temp>#1",
+        "status": "active",
+        "purpose": "Existing isolated debug database path moved verbatim from lib.rs; no new input or data location."
+      },
+      {
+        "id": "rust:src-tauri/src/database.rs:std::env::var_os:SRT_DEBUG_DATABASE_PATH#1",
+        "status": "active",
+        "purpose": "Existing isolated debug database path moved verbatim from lib.rs; no new input or data location."
       }
     ],
     "tauriPlugins": [
       {
         "id": "src-tauri/src/lib.rs:builder=plugin>setup>invoke_handler>run>expect",
-        "status": "active",
-        "purpose": "The only Tauri Builder pipeline; URI schemes, initialization scripts, dynamic handlers, boxed plugins, navigation hooks, and extra managed state require an explicit budget change."
+        "status": "retiring",
+        "purpose": "The only Tauri Builder pipeline; URI schemes, initialization scripts, dynamic handlers, boxed plugins, navigation hooks, and extra managed state require an explicit budget change.",
+        "retirementReason": "ADR 0012: move unchanged database-path policy out of lib.rs and give the application an explicit exit cleanup hook; no new data path."
       },
       {
         "id": "src-tauri/src/lib.rs:hook=setup#1",
@@ -2538,6 +2789,21 @@
         "id": "src-tauri/src/lib.rs:plugin=tauri_plugin_dialog::init()",
         "status": "active",
         "purpose": "Provide user-mediated native file and directory selection dialogs."
+      },
+      {
+        "id": "src-tauri/src/credential_commands.rs:hook=on_window_event#1",
+        "status": "active",
+        "purpose": "Main-window focus invalidates human delivery; explicit application exit clears owned clipboard without waiting for host requests (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:builder=plugin>setup>invoke_handler>build>expect",
+        "status": "active",
+        "purpose": "Main-window focus invalidates human delivery; explicit application exit clears owned clipboard without waiting for host requests (ADR 0012)."
+      },
+      {
+        "id": "src-tauri/src/lib.rs:run=credential_commands::handle_exit",
+        "status": "active",
+        "purpose": "Main-window focus invalidates human delivery; explicit application exit clears owned clipboard without waiting for host requests (ADR 0012)."
       }
     ],
     "recurringTimers": [
@@ -2622,6 +2888,11 @@
         "id": "src/taskCoordinator.ts:setTimeout#1",
         "status": "active",
         "purpose": "Foreground schedule rearm primitive; recurring work must remain coordinator-owned."
+      },
+      {
+        "id": "src/CredentialsView.tsx:setTimeout#1",
+        "status": "active",
+        "purpose": "One replaceable 31-second status check after secret copy; native cleanup is independent of UI lifetime (ADR 0012)."
       }
     ]
   }

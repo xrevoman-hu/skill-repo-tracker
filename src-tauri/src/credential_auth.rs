@@ -143,6 +143,66 @@ pub(crate) fn equal_material(left: &str, right: &str) -> bool {
         == 0
 }
 
+// The product uses an independent namespace; E0 access items remain fixtures.
+fn production_entry(vault_id: &str) -> Result<keyring::Entry, &'static str> {
+    if !valid_id(vault_id) {
+        return Err("invalid_vault_id");
+    }
+    keyring::Entry::new(
+        "Skill Repo Tracker Credential Access",
+        &format!("vault:{vault_id}"),
+    )
+    .map_err(|_| "credential_store_unavailable")
+}
+
+fn production_existing(vault_id: &str) -> Result<Option<String>, &'static str> {
+    match production_entry(vault_id)?.get_password() {
+        Ok(value) if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+            Ok(Some(value))
+        }
+        Ok(_) => Err("invalid_access_material"),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(error) => Err(storage_error(error)),
+    }
+}
+
+pub(crate) fn production_load(vault_id: &str) -> Result<Option<String>, &'static str> {
+    noninteractive(|| production_existing(vault_id))
+}
+
+pub(crate) fn production_establish(vault_id: &str, reset: bool) -> Result<String, &'static str> {
+    noninteractive(|| {
+        let previous = production_existing(vault_id)?;
+        if !reset {
+            if let Some(value) = previous {
+                return Ok(value);
+            }
+        }
+        let value = random_id()?;
+        production_entry(vault_id)?
+            .set_password(&value)
+            .map_err(storage_error)?;
+        if production_existing(vault_id)?.as_deref() != Some(value.as_str()) {
+            return Err("credential_store_write_not_verified");
+        }
+        Ok(value)
+    })
+}
+
+pub(crate) fn production_authorize(vault_id: &str) -> Result<String, &'static str> {
+    let _serial = INTERACTION
+        .lock()
+        .map_err(|_| "credential_store_unavailable")?;
+    let previous = production_existing(vault_id)?.ok_or("agent_access_missing")?;
+    let _no_ui = security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
+        .map_err(|_| "credential_store_unavailable")?;
+    let current = production_existing(vault_id)?.ok_or("agent_access_missing")?;
+    if !equal_material(&previous, &current) {
+        return Err("credential_store_changed");
+    }
+    Ok(current)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

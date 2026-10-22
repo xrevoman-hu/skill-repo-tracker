@@ -17,7 +17,7 @@ fn password_valid(password: &str) -> bool {
     password.len() <= MAX_PASSWORD && password.chars().count() >= 12
 }
 
-fn keyed(path: &Path, password: &str) -> Result<Connection, &'static str> {
+pub(crate) fn keyed(path: &Path, password: &str) -> Result<Connection, &'static str> {
     if !password_valid(password) {
         return Err("password_length_invalid");
     }

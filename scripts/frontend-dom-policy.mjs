@@ -5,11 +5,11 @@ import { createHash } from "node:crypto";
 // requires renewed review: these implementations destructure props and never spread
 // them onto intrinsic elements. Names alone, including shadow bindings, confer no trust.
 const REVIEWED_PREFERENCES_DECLARATIONS = new Map([
-  ["PreferencesProps", "65194f1e9ee4c651ff16306de3d18db3e035dc08fa07127ce357583560716eaa"],
+  ["PreferencesProps", "904fa472cf67cccb1dc7e1ae213bbb95fbe7d877b2fee7c40655fd69231b3b12"],
   ["PreferencesModalProps", "073057164927ffe77088511b66e4aa6767cf16021a780876ec915d43a5b3240f"],
   ["SettingsView", "97b67a2a2c5b2d704a753eef2267c963148cd3c6c39f2c5428688f355169901a"],
   ["PreferencesModal", "a09d28c5b833c146ab03d308d87f7be692ceb4ee379ac262e2879322b3829487"],
-  ["PreferencesPanel", "0803971b14348e6f108fd23af3885e175b02451f304d506750f83c0578612fa2"],
+  ["PreferencesPanel", "f4ba31f7eb6af161d6e3fe7c69b5de8df6e8ab438e0317eb756d5aa89624b3d5"],
 ]);
 
 export function reviewedPreferencesSpreadChecker(path, sourceFile, resolveDeclaration) {

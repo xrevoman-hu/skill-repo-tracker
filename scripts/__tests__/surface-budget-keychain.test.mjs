@@ -134,6 +134,7 @@ test("only the canonical adapters.rs Entry constructor seam may touch keyring", 
 
 test("the checked-in Keychain adapter matches the exact namespace contract", () => {
   assert.deepEqual(discoverKeychainSurface(repositoryRoot), [
+    "service=Skill Repo Tracker Credential Access;account=vault:<id>",
     "service=Skill Repo Tracker E0 Credential Access;account=vault:<id>",
     ...expected,
   ]);
@@ -146,7 +147,7 @@ test("credential Keychain background access cannot enable UI or bypass the seria
     const target = path.join(root, "src-tauri/src/credential_auth.rs");
     const baseline = readFileSync(path.join(repositoryRoot, "src-tauri/src/credential_auth.rs"), "utf8");
     writeFileSync(target, baseline);
-    assert.equal(discoverKeychainSurface(root).length, 3);
+    assert.equal(discoverKeychainSurface(root).length, 4);
     for (const mutation of [
       baseline.replace("noninteractive(|| load_existing(vault_id))", "load_existing(vault_id)"),
       baseline.replace("noninteractive(|| establish_without_ui(vault_id, reset))", "establish_without_ui(vault_id, reset)"),

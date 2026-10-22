@@ -13,6 +13,8 @@ import type {
 } from "./api";
 import { isRepositoryBackupEligible, repositoryBackupTargets } from "./repositoryBackup";
 import { DemoPromptTransport } from "./demoPromptTransport";
+import { DemoCredentialTransport } from "./demoCredentialTransport";
+import type { CredentialTransport } from "./credentialTypes";
 import {
   initialGithubAccounts,
   initialGithubRepositories,
@@ -84,6 +86,7 @@ export type PromptTransport = Pick<
 export interface AppService {
   readonly runtime: "tauri" | "demo";
   readonly promptTransport: PromptTransport;
+  readonly credentialTransport: CredentialTransport;
   bootstrap(): Promise<AppBootstrapSnapshot>;
   refreshWorkspace(current: WorkspaceSnapshot): Promise<WorkspaceSnapshot>;
   checkRepositories(current: WorkspaceSnapshot): Promise<WorkspaceSnapshot>;
@@ -129,6 +132,7 @@ type TauriTransport = Pick<
 export class TauriAppService implements AppService {
   readonly runtime = "tauri" as const;
   readonly promptTransport: PromptTransport = api;
+  readonly credentialTransport: CredentialTransport = { request: api.credentialRequest };
 
   constructor(private readonly transport: TauriTransport = api) {}
 
@@ -283,6 +287,7 @@ type DemoAppServiceOptions = {
 export class DemoAppService implements AppService {
   readonly runtime = "demo" as const;
   readonly promptTransport: PromptTransport;
+  readonly credentialTransport: CredentialTransport = new DemoCredentialTransport();
   private readonly mode: DemoMode;
   private readonly now: () => Date;
   private settings: AppSettings = demoSettings();
