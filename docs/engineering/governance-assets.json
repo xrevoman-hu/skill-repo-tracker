@@ -999,6 +999,36 @@
       }
     },
     {
+      "id": "adr-0013-credential-files-recovery-and-guides",
+      "kind": "decision",
+      "path": "docs/adr/0013-credential-files-recovery-and-guides.md",
+      "status": "active",
+      "checksum": "sha256:8983e00c19280af731ddd09af4d39b3a4c118a910b4d14513d90efc451370ccc",
+      "principles": [1, 2, 3, 4, 5, 7],
+      "reviewOnChange": [
+        "src/CredentialMaintenance.tsx", "src/CredentialRecovery.tsx", "src/CredentialAgentGuide.tsx",
+        "src/CredentialDetail.tsx", "src/credentialTypes.ts",
+        "src-tauri/src/credential_backup.rs", "src-tauri/src/credential_file_io.rs",
+        "src-tauri/src/credential_file_inspect.rs", "src-tauri/src/credential_guides.rs",
+        "src-tauri/src/credential_command_errors.rs", "src-tauri/src/credential_command_model.rs",
+        "src-tauri/src/credential_export_journal.rs", "src-tauri/src/credential_host_connection.rs",
+        "src-tauri/src/credential_leases.rs",
+        "src-tauri/src/credential_commands.rs", "src-tauri/src/credential_product.rs",
+        "src-tauri/src/credential_records.rs", "src-tauri/src/credential_mcp.rs",
+        "scripts/credential-file-inspect-policy.mjs", "scripts/surface-budget-rust.mjs"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          { "path": "src-tauri/src/credential_backup_tests.rs", "selector": "standalone_backup_roundtrip_restores_original_bytes_and_identity_without_device_state" },
+          { "path": "src-tauri/src/credential_backup_tests.rs", "selector": "startup_recovers_interrupted_switch_including_metadata_and_sharing" },
+          { "path": "src-tauri/src/credential_file_io_tests.rs", "selector": "changed_target_or_symlink_is_never_overwritten" },
+          { "path": "src-tauri/src/credential_guides_tests.rs", "selector": "generates_only_selected_schema_and_roundtrips_paths_without_secret_access" }
+        ]
+      }
+    },
+    {
       "id": "adr-0012-credential-human-vault",
       "kind": "decision",
       "path": "docs/adr/0012-credential-human-vault.md",

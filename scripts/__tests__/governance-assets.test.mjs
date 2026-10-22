@@ -272,7 +272,7 @@ test("tracked evidence outside a governed test runner cannot satisfy an invarian
   );
 });
 
-test("Rust evidence must be reachable from the Cargo lib test root, not an orphan chain or cycle", () => {
+test("Rust evidence must be reachable from a fixed Cargo test root, not an orphan chain or cycle", () => {
   const catalog = validCatalog();
   catalog.assets[3].enforcement.evidence = [{
     path: "src-tauri/src/proof_tests.rs",
@@ -314,6 +314,57 @@ test("Rust evidence must be reachable from the Cargo lib test root, not an orpha
     trackedFiles: [...trackedFiles, "src-tauri/src/carrier.rs", "src-tauri/src/proof_tests.rs"],
     readFile: (path) => reachableFiles[path] ?? fileContents[path],
   }), []);
+});
+
+test("the fixed Cargo main test root collects its reachable external tests", () => {
+  const catalog = validCatalog();
+  catalog.assets[3].enforcement.evidence = [{
+    path: "src-tauri/src/binary_proof_tests.rs",
+    selector: "binary_proof",
+  }];
+  const binaryFiles = {
+    "src-tauri/src/main.rs": "mod binary_domain;\nfn main() {}\n",
+    "src-tauri/src/binary_domain.rs": [
+      "#[cfg(test)]",
+      '#[path = "binary_proof_tests.rs"]',
+      "mod tests;",
+    ].join("\n"),
+    "src-tauri/src/binary_proof_tests.rs": "#[test]\nfn binary_proof() { assert!(true); }\n",
+  };
+  assert.deepEqual(validate(catalog, {
+    trackedFiles: [
+      ...trackedFiles.filter((path) => path !== "src-tauri/src/lib.rs"),
+      ...Object.keys(binaryFiles),
+    ],
+    readFile: (path) => binaryFiles[path] ?? fileContents[path],
+  }), []);
+});
+
+test("main support does not promote an orphan file or an untracked entry to a test root", () => {
+  const catalog = validCatalog();
+  catalog.assets[3].enforcement.evidence = [{
+    path: "src-tauri/src/binary_proof_tests.rs",
+    selector: "binary_proof",
+  }];
+  const proof = "#[test]\nfn binary_proof() { assert!(true); }\n";
+  const carrier = '#[cfg(test)]\n#[path = "binary_proof_tests.rs"]\nmod tests;\n';
+  for (const entry of ["src-tauri/src/unrelated.rs", "src-tauri/src/main.rs"]) {
+    const files = {
+      [entry]: carrier,
+      "src-tauri/src/binary_proof_tests.rs": proof,
+    };
+    const errors = validate(catalog, {
+      trackedFiles: [
+        ...trackedFiles,
+        "src-tauri/src/binary_proof_tests.rs",
+        ...(entry.endsWith("/main.rs") ? [] : [entry]),
+      ],
+      readFile: (path) => files[path] ?? fileContents[path],
+    });
+    assert.ok(errors.includes(
+      "governance asset core-schema-v1 evidence is not collected by a governed test runner: src-tauri/src/binary_proof_tests.rs",
+    ));
+  }
 });
 
 test("Rust evidence under a conditional cfg or cfg_attr ancestor is not executable", () => {

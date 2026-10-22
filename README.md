@@ -6,6 +6,8 @@
 
 **[下载 v1.3.0 · Apple Silicon DMG](https://github.com/xrevoman-hu/skill-repo-tracker/releases/download/v1.3.0/Skill.Repo.Tracker_1.3.0_aarch64.dmg)** · [版本说明 / Release notes](docs/releases/v1.3.0.md) · [贡献指南 / Contributing](CONTRIBUTING.md)
 
+`1.4.0` 凭据库版本准备中，候选标识为 `v1.4.0-rc.1`；尚未替代上方正式下载。Credential vault version `1.4.0` is in preparation, with candidate identifier `v1.4.0-rc.1`; the release download above remains unchanged. [准备中的版本说明 / Planned release notes](docs/releases/v1.4.0.md) · [凭据库使用指南 / Credential vault guide](docs/credential-vault.md)
+
 macOS 12+ · Apple Silicon（arm64）。安装包为 **ad-hoc 签名测试分发，不是 Developer ID 签名，未经过 Apple notarization**；首次打开方式见下文。The installer is ad-hoc signed, not Developer ID signed, and not Apple notarized; first-launch instructions are below.
 
 ![license](https://img.shields.io/badge/license-MIT-green)
@@ -49,6 +51,15 @@ Skill Repo Tracker 是一个 local-first macOS 桌面工具，用于追踪 GitHu
 Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再按你的选择发布到工具目录。主库默认在 `~/SkillRepoTracker/skills`，当前默认发布到 Claude Code 和 Codex。Gemini、OpenCode、OpenClaw、Hermes 可以手动勾选，但不会默认打开。
 
 当前版本：`v1.3.0`，适用于 Apple Silicon、macOS 12+。
+
+### v1.4.0 准备中：本地凭据库
+
+- “插件”下方新增“凭据”，沿用提示词库的卡片、搜索、类型筛选和详情抽屉。可管理网站、SSH、数据库实例、单库账号、邮箱、TLS 证书、API Token 和通用凭据。
+- 主密码用于手动解锁和人工查看、复制、导出；凭据与文件原字节保存在独立 SQLCipher 加密库中。Agent 共用访问码由应用保存在 macOS Keychain，与主密码分开。
+- 卡片“使用”复制记录定位信息；右上角“Agent 接入说明”只生成所选客户端的文档，不包含密码或访问码。开启共享后，同一电脑、同一系统用户的已配置 Agent 可读取现有和以后新增的全部凭据；返回的秘密可能进入 Agent 上下文与历史。
+- 设置提供共享开关、访问码重置、主密码修改及独立加密备份恢复。每次重新打开应用仍须手动解锁。SSH 文件按需以限时租约交给本机工具，显式导出的副本由用户保管。
+
+本版本仍在准备和验收中。Windows 为 **BLOCKED**；Codex、Claude Code、WorkBuddy、DeepSeek Harness 的说明已按已核对结构实现，当前候选的实际连接、读取和文件消费仍须逐项验收。通用 MCP 选项仅提供 STDIO 启动信息，不代表任意客户端已经适配。详见[使用指南](docs/credential-vault.md)与[准备中的版本说明](docs/releases/v1.4.0.md)。
 
 ### v1.3.0 更新
 
@@ -118,6 +129,7 @@ Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再
 - SQLite 数据库：macOS 应用数据目录下的 `skill-repo-tracker.sqlite`
 - 提示词正文：保存在同一 SQLite 中，每篇最多 5 MiB（`5,242,880` UTF-8 bytes）
 - GitHub token：macOS Keychain
+- v1.4.0 凭据库：应用数据目录内独立的 SQLCipher 库；凭据备份使用专用加密格式，不进入普通迁移包。主密码不持久保存，Agent 访问码保存在 macOS Keychain。
 
 ### 本地运行
 
@@ -210,6 +222,15 @@ Instead of treating Claude Code, Codex, Gemini, OpenCode, OpenClaw, or Hermes fo
 
 Current version: `v1.3.0` for Apple Silicon, macOS 12+.
 
+### v1.4.0 in preparation: local credential vault
+
+- A Credentials page below Plugins reuses the prompt library's cards, search, type filter and detail drawer. Record types cover websites, SSH, database instances, individual database accounts, email, TLS certificates, API tokens and generic credentials.
+- A master password unlocks the vault and verifies human viewing, copying and exporting. Records and original file bytes are stored in a separate SQLCipher database. The app manages a separate shared Agent access code in macOS Keychain.
+- Each card's Use button copies a record locator. The Agent guide produces only the selected client's instructions, without passwords or access codes. Sharing grants configured Agents on the same computer and OS user access to all existing and future records; returned secrets may enter Agent context and history.
+- Settings provide sharing, access-code reset, password change, encrypted backup and recovery. Reopening the app requires manual unlock. SSH files use expiring local leases; users manage explicitly exported copies.
+
+This version is still in preparation and acceptance testing. Windows remains **BLOCKED**. Client guides implement previously checked configuration structures for Codex, Claude Code, WorkBuddy and DeepSeek Harness; connection, reading and file consumption must still be accepted for the current candidate. The generic option supplies STDIO launch information, not universal client compatibility. See the [vault guide](docs/credential-vault.md) and [planned release notes](docs/releases/v1.4.0.md).
+
 ### v1.3.0 Highlights
 
 Repository details now include an enabled-by-default Allow backup checkbox. Disabling it keeps tracking and update detection active while every repository ZIP backup entry point skips the repository; protective backups for Skill operations retain their existing behavior. Selection is independent of backup permission; counts and confirmation lists include only eligible repositories. Existing repositories default to enabled after migration, and existing snapshots are retained. See the [release notes](docs/releases/v1.3.0.md).
@@ -224,7 +245,7 @@ The repository header checkbox now selects all pages of the current search and f
 
 Local-first data can still be sensitive. Screenshots may disclose account associations, private-repository counts, notes, task history, and local paths. Use fictional demo data and inspect tables, status bars, dialogs, logs, and image metadata before sharing. Masking only an avatar or account button is insufficient.
 
-App-managed tokens stay in Keychain, but secrets pasted into prompts or notes remain user content and may be exported in plaintext. Do not post real databases, private exports, credentials, or personal paths in public issues. Use [SECURITY.md](SECURITY.md) for private vulnerability reporting.
+GitHub tokens stay in Keychain. In v1.4.0, vault records and attachments use a separate encrypted database; only the shared Agent access code uses Keychain. Secrets pasted into prompts or notes remain user content and may be exported in plaintext. Do not post real databases, private exports, credentials, or personal paths in public issues. Use [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ### What It Helps With
 

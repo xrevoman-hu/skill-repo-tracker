@@ -326,8 +326,8 @@ function rustModuleTargets(parentPath, contents, tracked) {
 }
 
 function reachableRustEvidencePaths(tracked, readFile) {
-  const root = "src-tauri/src/lib.rs";
-  const reachable = new Set(tracked.has(root) ? [root] : []);
+  const roots = ["src-tauri/src/lib.rs", "src-tauri/src/main.rs"];
+  const reachable = new Set(roots.filter((root) => tracked.has(root)));
   const queue = [...reachable];
   for (let index = 0; index < queue.length; index += 1) {
     const parent = queue[index];

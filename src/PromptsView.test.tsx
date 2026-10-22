@@ -2070,6 +2070,43 @@ describe("PromptsView", () => {
     expect(await screen.findByText("No prompts yet")).toBeInTheDocument();
   });
 
+  it("renders GFM previews while copying their unchanged Markdown source", async () => {
+    const content = [
+      "| Task | Status |",
+      "| --- | --- |",
+      "| Review | Ready |",
+      "",
+      "- [x] Complete",
+      "- [ ] Pending",
+      "",
+      "~~Obsolete~~",
+      "",
+      "https://example.com/guide",
+      "",
+      "A note[^1].",
+      "",
+      "[^1]: Existing footnote content.",
+    ].join("\n");
+    const client = api({ getPrompt: vi.fn().mockResolvedValue({ ...details["prompt-one"], content }) });
+    const copyText = vi.fn().mockResolvedValue(undefined);
+    const openExternal = vi.fn();
+    render(<PromptsView api={client} copyText={copyText} language="en" openExternal={openExternal} />);
+
+    fireEvent.click(await screen.findByRole("article", { name: "深度研究问题拆解" }));
+    const drawer = within(await screen.findByRole("dialog"));
+    expect(within(drawer.getByRole("table")).getByRole("cell", { name: "Ready" })).toBeInTheDocument();
+    expect(drawer.getAllByRole("checkbox")).toHaveLength(2);
+    expect(drawer.getAllByRole("checkbox")[0]).toBeChecked();
+    expect(drawer.getAllByRole("checkbox")[1]).not.toBeChecked();
+    for (const checkbox of drawer.getAllByRole("checkbox")) expect(checkbox).toBeDisabled();
+    expect(drawer.getByText("Obsolete").tagName).toBe("DEL");
+    expect(drawer.getByText(/Existing footnote content/)).toBeInTheDocument();
+    fireEvent.click(drawer.getByRole("link", { name: "https://example.com/guide" }));
+    expect(openExternal).toHaveBeenCalledWith("https://example.com/guide");
+    fireEvent.click(drawer.getByRole("button", { name: "Copy" }));
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith(content));
+  });
+
   it("never turns raw HTML, dangerous links, or remote images into active content", async () => {
     const unsafe = {
       ...details["prompt-one"],

@@ -204,6 +204,10 @@ pub(crate) fn production_authorize(vault_id: &str) -> Result<String, &'static st
 }
 
 #[cfg(test)]
+#[path = "credential_auth_tests.rs"]
+pub(crate) mod memory_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -8,6 +8,10 @@ use std::{
 
 use reqwest::header::HeaderMap;
 
+pub(super) fn api_err<T: serde::Serialize>(error: crate::AppError) -> crate::ApiResponse<T> {
+    crate::ApiResponse::err(error.code, error.message, error.details)
+}
+
 pub(super) trait CredentialStore: Send + Sync {
     fn get(&self, service: &str, key: &str) -> Result<Option<String>, String>;
     fn set(&self, service: &str, key: &str, secret: &str) -> Result<(), String>;

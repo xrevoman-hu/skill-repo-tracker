@@ -1,7 +1,7 @@
 use crate::{
-    adapters::CredentialStore, cleanup_legacy_github_account_metadata, github_account_by_id,
-    load_ui_github_accounts, set_setting, upsert_github_account, utc_now, AppError,
-    GithubAccountRecord, UiGithubAccount,
+    adapters::CredentialStore, github_account_by_id, load_ui_github_accounts, set_setting,
+    upsert_github_account, utc_now, AppError, GithubAccountRecord, UiGithubAccount,
+    LEGACY_GITHUB_ACCOUNT_ID, TOKEN_USER,
 };
 use rusqlite::{params, Connection};
 #[cfg(unix)]
@@ -263,7 +263,40 @@ pub(super) fn delete_legacy_account(
     service: &str,
     token_key: &str,
 ) -> Result<(), AppError> {
-    let _guard = acquire_mutation_guard(mutation_lock)?;
+    let guard = acquire_mutation_guard(mutation_lock)?;
+    delete_legacy_account_locked(conn, &guard, credentials, service, token_key)
+}
+
+/// Startup may migrate only legacy credentials registered by this database.
+/// A fresh database is not evidence of ownership of a system-wide Keychain item.
+pub(super) fn migrate_legacy_account_if_registered(
+    conn: &Connection,
+    mutation_lock: &CredentialMutationLock,
+    credentials: &dyn CredentialStore,
+    service: &str,
+    token_key: &str,
+) -> Result<(), AppError> {
+    let guard = acquire_mutation_guard(mutation_lock)?;
+    let registered: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM github_accounts WHERE id = ?1 OR token_key = ?2)
+            OR EXISTS(SELECT 1 FROM repositories WHERE github_account_id = ?1)
+            OR EXISTS(SELECT 1 FROM github_repo_catalog WHERE account_id = ?1)",
+        params![crate::LEGACY_GITHUB_ACCOUNT_ID, token_key],
+        |row| row.get(0),
+    )?;
+    if !registered {
+        return Ok(());
+    }
+    delete_legacy_account_locked(conn, &guard, credentials, service, token_key)
+}
+
+fn delete_legacy_account_locked(
+    conn: &Connection,
+    _guard: &CredentialMutationGuard,
+    credentials: &dyn CredentialStore,
+    service: &str,
+    token_key: &str,
+) -> Result<(), AppError> {
     let previous_secret = credentials.get(service, token_key).map_err(|_| {
         AppError::with_details(
             "token_delete_failed",
@@ -310,6 +343,34 @@ pub(super) fn delete_legacy_account(
     }
 }
 
+pub(super) fn cleanup_legacy_github_account_metadata(conn: &Connection) -> Result<(), AppError> {
+    conn.execute(
+        "UPDATE repositories
+         SET github_account_id = NULL
+         WHERE github_account_id = ?1
+            OR github_account_id IN (SELECT id FROM github_accounts WHERE token_key = ?2)",
+        params![LEGACY_GITHUB_ACCOUNT_ID, TOKEN_USER],
+    )?;
+    conn.execute(
+        "DELETE FROM github_repo_catalog
+         WHERE account_id = ?1
+            OR account_id IN (SELECT id FROM github_accounts WHERE token_key = ?2)",
+        params![LEGACY_GITHUB_ACCOUNT_ID, TOKEN_USER],
+    )?;
+    conn.execute(
+        "DELETE FROM github_accounts WHERE id = ?1 OR token_key = ?2",
+        params![LEGACY_GITHUB_ACCOUNT_ID, TOKEN_USER],
+    )?;
+    set_setting(conn, "github_token_configured", "false")?;
+    set_setting(conn, "github_token_status", "not_configured")?;
+    set_setting(conn, "github_token_last_verified", "")?;
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "github_accounts_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "github_accounts_migration_tests.rs"]
+mod migration_tests;

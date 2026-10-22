@@ -54,8 +54,9 @@ export function discoverDirBuilderPathSites(relative, masked, ownerAt) {
   const privateOwners = {
     "src-tauri/src/credential_runtime.rs": "prepare_root",
     "src-tauri/src/credential_product.rs": "prepare_root",
+    "src-tauri/src/credential_backup.rs": "lock_root",
     "src-tauri/src/credential_ipc.rs": "bind_listener",
-    "src-tauri/src/credential_leases.rs": "open",
+    "src-tauri/src/credential_leases.rs": "load",
   };
   if (Object.hasOwn(privateOwners, relative) && creates.length !== 0) {
     throw new Error(`${relative} credential DirBuilder must create a single private directory`);

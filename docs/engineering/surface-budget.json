@@ -2342,13 +2342,15 @@
       },
       {
         "id": "src-tauri/src/credential_leases.rs:Path::exists:open#1",
-        "status": "active",
-        "purpose": "ADR 0010: Recover only registered owned lease records and a validated interrupted ledger; create the private lease directory if absent."
+        "status": "retiring",
+        "purpose": "ADR 0010: Recover only registered owned lease records and a validated interrupted ledger; create the private lease directory if absent.",
+        "retirementReason": "ADR 0013 separates bounded journal loading from startup cleanup so a valid cleanup failure remains retryable; exact replacement sites are registered."
       },
       {
         "id": "src-tauri/src/credential_leases.rs:Path::exists:open#2",
-        "status": "active",
-        "purpose": "ADR 0010: Recover only registered owned lease records and a validated interrupted ledger; create the private lease directory if absent."
+        "status": "retiring",
+        "purpose": "ADR 0010: Recover only registered owned lease records and a validated interrupted ledger; create the private lease directory if absent.",
+        "retirementReason": "ADR 0013 separates bounded journal loading from startup cleanup so a valid cleanup failure remains retryable; exact replacement sites are registered."
       },
       {
         "id": "src-tauri/src/credential_leases.rs:Path::is_file:release#1",
@@ -2357,8 +2359,9 @@
       },
       {
         "id": "src-tauri/src/credential_leases.rs:std::fs::DirBuilder::create:open#1",
-        "status": "active",
-        "purpose": "ADR 0010: Recover only registered owned lease records and a validated interrupted ledger; create the private lease directory if absent."
+        "status": "retiring",
+        "purpose": "ADR 0010: Recover only registered owned lease records and a validated interrupted ledger; create the private lease directory if absent.",
+        "retirementReason": "ADR 0013 separates bounded journal loading from startup cleanup so a valid cleanup failure remains retryable; exact replacement sites are registered."
       },
       {
         "id": "src-tauri/src/credential_runtime.rs:File::open:persist_sharing#1",
@@ -2428,13 +2431,15 @@
       },
       {
         "id": "src-tauri/src/credential_leases.rs:fs::symlink_metadata:remove_pending#1",
-        "status": "active",
-        "purpose": "ADR 0010: inspect and remove only the fixed interrupted ledger.new in the private owned lease directory; reject non-regular, symlink, foreign-owner or non-0600 entries and retain them on failure."
+        "status": "retiring",
+        "purpose": "ADR 0010: inspect and remove only the fixed interrupted ledger.new in the private owned lease directory; reject non-regular, symlink, foreign-owner or non-0600 entries and retain them on failure.",
+        "retirementReason": "ADR 0013 separates bounded journal loading from startup cleanup so a valid cleanup failure remains retryable; exact replacement sites are registered."
       },
       {
         "id": "src-tauri/src/credential_leases.rs:Path::is_file:remove_pending#1",
-        "status": "active",
-        "purpose": "ADR 0010: inspect and remove only the fixed interrupted ledger.new in the private owned lease directory; reject non-regular, symlink, foreign-owner or non-0600 entries and retain them on failure."
+        "status": "retiring",
+        "purpose": "ADR 0010: inspect and remove only the fixed interrupted ledger.new in the private owned lease directory; reject non-regular, symlink, foreign-owner or non-0600 entries and retain them on failure.",
+        "retirementReason": "ADR 0013 separates bounded journal loading from startup cleanup so a valid cleanup failure remains retryable; exact replacement sites are registered."
       },
       {
         "id": "src-tauri/src/credential_clipboard.rs:objc2_app_kit::NSPasteboard::generalPasteboard:change_count#1",
@@ -2620,6 +2625,461 @@
         "id": "src-tauri/src/database.rs:Path::canonicalize:database_path_for_run#2",
         "status": "active",
         "purpose": "Existing isolated debug database path moved verbatim from lib.rs; no new input or data location."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:File::open:commit_password#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:File::open:sync_directory#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:fs::remove_file:remove_private#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:fs::rename:commit_password#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:fs::rename:commit#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:fs::rename:recover#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:fs::rename:write_private#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:fs::symlink_metadata:remove_private#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:libc::flock:lock_root#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:OpenOptions::new:copy_file#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:OpenOptions::new:digest#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:OpenOptions::new:lock_root#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:OpenOptions::open:copy_file#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:OpenOptions::open:digest#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:OpenOptions::open:lock_root#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::canonicalize:lock_root#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::exists:bool_setting#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::exists:commit#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::exists:lock_root#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::exists:preview#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::exists:recover#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::exists:recover#2",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::exists:write_private#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::is_file:copy_file#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::is_file:lock_root#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::metadata:copy_file#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::metadata:digest#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::metadata:lock_root#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:std::fs::DirBuilder::create:lock_root#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_inspect.rs:Command::new(\"/usr/bin/openssl\"):run#1",
+        "status": "active",
+        "purpose": "Inspect registered private input files with fixed offline OpenSSL arguments, bounded public output and child cleanup (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_inspect.rs:File::open:inspect_path#1",
+        "status": "active",
+        "purpose": "Inspect registered private input files with fixed offline OpenSSL arguments, bounded public output and child cleanup (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_inspect.rs:fs::symlink_metadata:inspect_path#1",
+        "status": "active",
+        "purpose": "Inspect registered private input files with fixed offline OpenSSL arguments, bounded public output and child cleanup (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_inspect.rs:libc::geteuid:inspect_path#1",
+        "status": "active",
+        "purpose": "Inspect registered private input files with fixed offline OpenSSL arguments, bounded public output and child cleanup (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_inspect.rs:Path::is_file:inspect_path#1",
+        "status": "active",
+        "purpose": "Inspect registered private input files with fixed offline OpenSSL arguments, bounded public output and child cleanup (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_inspect.rs:Path::metadata:run#1",
+        "status": "active",
+        "purpose": "Inspect registered private input files with fixed offline OpenSSL arguments, bounded public output and child cleanup (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_inspect.rs:tempfile::tempdir:inspect#1",
+        "status": "active",
+        "purpose": "Inspect registered private input files with fixed offline OpenSSL arguments, bounded public output and child cleanup (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_inspect.rs:tempfile::tempfile:run#1",
+        "status": "active",
+        "purpose": "Inspect registered private input files with fixed offline OpenSSL arguments, bounded public output and child cleanup (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_io.rs:fs::canonicalize:capture#1",
+        "status": "active",
+        "purpose": "Bind a native picker destination to one verified original-file export without exposing filesystem paths to the WebView (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_io.rs:fs::canonicalize:validate#1",
+        "status": "active",
+        "purpose": "Bind a native picker destination to one verified original-file export without exposing filesystem paths to the WebView (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_io.rs:fs::symlink_metadata:capture#1",
+        "status": "active",
+        "purpose": "Bind a native picker destination to one verified original-file export without exposing filesystem paths to the WebView (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_io.rs:fs::symlink_metadata:target_identity#1",
+        "status": "active",
+        "purpose": "Bind a native picker destination to one verified original-file export without exposing filesystem paths to the WebView (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_io.rs:fs::symlink_metadata:validate#1",
+        "status": "active",
+        "purpose": "Bind a native picker destination to one verified original-file export without exposing filesystem paths to the WebView (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_io.rs:libc::getentropy:capture#1",
+        "status": "active",
+        "purpose": "Bind a native picker destination to one verified original-file export without exposing filesystem paths to the WebView (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_io.rs:Path::is_dir:capture#1",
+        "status": "active",
+        "purpose": "Bind a native picker destination to one verified original-file export without exposing filesystem paths to the WebView (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_io.rs:Path::is_dir:validate#1",
+        "status": "active",
+        "purpose": "Bind a native picker destination to one verified original-file export without exposing filesystem paths to the WebView (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_file_io.rs:Path::is_file:target_identity#1",
+        "status": "active",
+        "purpose": "Bind a native picker destination to one verified original-file export without exposing filesystem paths to the WebView (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_guides.rs:fs::metadata:usable_paths#1",
+        "status": "active",
+        "purpose": "Verify actual executable and vault paths before generating the selected local MCP guide (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_guides.rs:Path::canonicalize:usable_paths#1",
+        "status": "active",
+        "purpose": "Verify actual executable and vault paths before generating the selected local MCP guide (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_guides.rs:Path::canonicalize:usable_paths#2",
+        "status": "active",
+        "purpose": "Verify actual executable and vault paths before generating the selected local MCP guide (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_guides.rs:Path::is_dir:usable_paths#1",
+        "status": "active",
+        "purpose": "Verify actual executable and vault paths before generating the selected local MCP guide (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_guides.rs:Path::is_file:usable_paths#1",
+        "status": "active",
+        "purpose": "Verify actual executable and vault paths before generating the selected local MCP guide (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:fs::hard_link:create_with_completion#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::canonicalize:create_with_completion#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::exists:create_with_completion#1",
+        "status": "active",
+        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:File::open:sync_directory#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::hard_link:publish#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::remove_file:clear#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::remove_file:publish#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::remove_file:remove_staging#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::rename:publish#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::symlink_metadata:check_parent#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::symlink_metadata:check_root#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::symlink_metadata:create#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::symlink_metadata:publish#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::symlink_metadata:remove_staging#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:fs::symlink_metadata:write#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:libc::getentropy:create#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:libc::geteuid:owner#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:OpenOptions::new:create#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:OpenOptions::new:read#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:OpenOptions::open:create#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:OpenOptions::open:read#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::canonicalize:check_parent#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::canonicalize:check_root#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::canonicalize:create#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::is_dir:check_parent#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::is_dir:check_root#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::is_dir:create#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::is_file:publish#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::is_file:read#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::is_file:remove_staging#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::is_file:write#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::metadata:create#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:Path::metadata:read#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_export_journal.rs:tempfile::Builder::new:register#1",
+        "status": "active",
+        "purpose": "Register a private export staging file before writing secrets; match exact parent and file identities for publication, crash cleanup and retry (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_commands.rs:Path::try_exists:start_existing#1",
+        "status": "active",
+        "purpose": "ADR 0013 starts only an existing formal vault locked for startup cleanup; no empty vault initialization."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:fs::symlink_metadata:load#1",
+        "status": "active",
+        "purpose": "ADR 0013 rejects malformed or symlink lease ledgers before loading; absence alone is an empty ledger."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:fs::symlink_metadata:pending_path#1",
+        "status": "active",
+        "purpose": "Check the private pending journal file before bounded cleanup."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:Path::exists:load#1",
+        "status": "active",
+        "purpose": "Create only the managed private leases directory when absent."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:Path::is_file:pending_path#1",
+        "status": "active",
+        "purpose": "Require a regular private pending journal before removal."
+      },
+      {
+        "id": "src-tauri/src/credential_leases.rs:std::fs::DirBuilder::create:load#1",
+        "status": "active",
+        "purpose": "Create only the fixed managed leases directory with mode 0700."
       }
     ],
     "keychainEntries": [
@@ -2771,6 +3231,16 @@
         "id": "rust:src-tauri/src/database.rs:std::env::var_os:SRT_DEBUG_DATABASE_PATH#1",
         "status": "active",
         "purpose": "Existing isolated debug database path moved verbatim from lib.rs; no new input or data location."
+      },
+      {
+        "id": "rust:src-tauri/src/credential_mcp.rs:env!:CARGO_PKG_VERSION#1",
+        "status": "active",
+        "purpose": "Read the fixed formal STDIO entry arguments and compiled package version (ADR 0013)."
+      },
+      {
+        "id": "rust:src-tauri/src/credential_mcp.rs:std::env::args_os:<credential-cli>#1",
+        "status": "active",
+        "purpose": "Read the fixed formal STDIO entry arguments and compiled package version (ADR 0013)."
       }
     ],
     "tauriPlugins": [

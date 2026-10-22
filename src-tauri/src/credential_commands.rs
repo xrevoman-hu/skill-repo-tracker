@@ -1,106 +1,29 @@
-//! GUI adapter for a lazy, same-executable child. No Keychain API runs in this process.
+//! GUI adapter for a locked, same-executable child. No Keychain API runs in this process.
 
-use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use base64::Engine;
+use serde_json::{json, Value};
 use std::{
     io::BufReader,
     path::PathBuf,
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{Command, Stdio},
     sync::{Arc, Mutex},
-    time::Duration,
 };
 use tauri::{Manager, State, WebviewWindow};
+use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     api_err,
     credential_clipboard::{ClipboardStatus, CredentialClipboard},
+    credential_command_errors::message,
+    credential_command_model::{Action, CredentialRequest},
+    credential_host_connection::HostConnection,
     ApiResponse, AppError, AppState, CommandResult,
 };
-
-#[derive(Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Action {
-    Status,
-    Create,
-    Unlock,
-    Lock,
-    List,
-    Detail,
-    Save,
-    Delete,
-    Verify,
-    ReadFields,
-    CopySecret,
-    InvalidateSession,
-    Share,
-    ResetAccess,
-    AuthorizeAccess,
-    RetryCleanup,
-}
-
-#[derive(Clone, Deserialize, Serialize)]
-pub(crate) struct CredentialRequest {
-    action: Action,
-    #[serde(flatten)]
-    arguments: Map<String, Value>,
-}
-
-struct Connection {
-    child: Child,
-    input: Option<ChildStdin>,
-    output: BufReader<ChildStdout>,
-    executable: PathBuf,
-    vault_id: String,
-}
-
-fn read_response(reader: &mut BufReader<ChildStdout>) -> Result<Value, &'static str> {
-    crate::credential_protocol::read_line(reader)?.ok_or("credential_host_unavailable")
-}
-
-impl Connection {
-    fn exchange(&mut self, request: &Value) -> Result<Value, &'static str> {
-        if !crate::credential_protocol::fits_frame(request) {
-            return Err("credential_request_too_large");
-        }
-        let input = self.input.as_mut().ok_or("credential_host_unavailable")?;
-        crate::credential_protocol::write_line(input, request)?;
-        let response = read_response(&mut self.output)?;
-        if response.get("ok") == Some(&Value::Bool(true)) {
-            response
-                .get("result")
-                .cloned()
-                .ok_or("credential_host_protocol_invalid")
-        } else {
-            // The subprocess returns only reviewed fixed codes. Never expose its raw output.
-            Err(error_code(
-                response
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("credential_host_unavailable"),
-            ))
-        }
-    }
-}
-
-impl Drop for Connection {
-    fn drop(&mut self) {
-        // Closing the sole control pipe makes the host lock and clean its own leases.
-        self.input.take();
-        for _ in 0..25 {
-            if self.child.try_wait().ok().flatten().is_some() {
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        // A stuck OS authorization prompt must not leave an orphan credential host.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
 
 #[derive(Default)]
 struct Delivery {
     generation: u64,
+    cancellation: u64,
     session: Option<String>,
 }
 
@@ -122,24 +45,85 @@ impl ClipboardPort for CredentialClipboard {
     }
 }
 
+trait NativeWindow {
+    fn focused(&self) -> Result<bool, &'static str>;
+    fn save_file(&self, name: &str, backup: bool) -> Result<Option<PathBuf>, &'static str>;
+    fn open_backup(&self) -> Result<Option<PathBuf>, &'static str>;
+}
+
+impl NativeWindow for WebviewWindow {
+    fn focused(&self) -> Result<bool, &'static str> {
+        Ok(self.label() == "main" && self.is_focused().map_err(|_| "window_focus_unavailable")?)
+    }
+
+    fn save_file(&self, name: &str, backup: bool) -> Result<Option<PathBuf>, &'static str> {
+        let mut picker = self.app_handle().dialog().file().set_file_name(name);
+        if backup {
+            picker = picker.add_filter("Encrypted credential vault", &["srtvault"]);
+        }
+        picker
+            .blocking_save_file()
+            .map(|path| path.into_path().map_err(|_| "selected_file_invalid"))
+            .transpose()
+    }
+
+    fn open_backup(&self) -> Result<Option<PathBuf>, &'static str> {
+        self.app_handle()
+            .dialog()
+            .file()
+            .add_filter("Encrypted credential vault", &["srtvault"])
+            .blocking_pick_file()
+            .map(|path| path.into_path().map_err(|_| "selected_file_invalid"))
+            .transpose()
+    }
+}
+
 pub(crate) struct CredentialClient {
     root: PathBuf,
-    connection: Mutex<Option<Connection>>,
+    connection: Mutex<Option<HostConnection>>,
     delivery: Mutex<Delivery>,
     clipboard: Box<dyn ClipboardPort>,
+    selections: Mutex<crate::credential_file_io::Selections>,
 }
 
 impl CredentialClient {
     pub(crate) fn new(data_dir: &std::path::Path) -> Self {
-        Self {
+        let client = Self {
             root: data_dir.join("credentials"),
             connection: Mutex::new(None),
             delivery: Mutex::new(Delivery::default()),
             clipboard: Box::new(CredentialClipboard::new()),
-        }
+            selections: Mutex::new(crate::credential_file_io::Selections::default()),
+        };
+        // A failed cleanup remains in its durable journal. The ordinary status
+        // and retry paths expose it; startup never unlocks or requests OS UI.
+        let _ = client.start_existing(Self::start_host);
+        client
     }
 
-    fn start_host(&self) -> Result<Connection, &'static str> {
+    fn start_existing(
+        &self,
+        start: impl FnOnce(&Self) -> Result<HostConnection, &'static str>,
+    ) -> Result<(), &'static str> {
+        if !self
+            .root
+            .join("vault.json")
+            .try_exists()
+            .map_err(|_| "credential_host_unavailable")?
+        {
+            return Ok(());
+        }
+        let mut slot = self
+            .connection
+            .lock()
+            .map_err(|_| "credential_host_unavailable")?;
+        *slot = Some(start(self)?);
+        // The ready response guarantees a locked host owns the root lock before
+        // GUI-owned export staging is recovered. Unknown roots stay unmodified.
+        crate::credential_export_journal::cleanup(&self.root)
+    }
+
+    fn start_host(&self) -> Result<HostConnection, &'static str> {
         let executable = std::env::current_exe().map_err(|_| "credential_host_unavailable")?;
         let executable = executable
             .canonicalize()
@@ -159,25 +143,14 @@ impl CredentialClient {
             let _ = child.wait();
             return Err("credential_host_unavailable");
         };
-        let mut connection = Connection {
+        let mut connection = HostConnection {
             child,
             input,
             output: BufReader::new(output),
             executable,
             vault_id: String::new(),
         };
-        let ready = read_response(&mut connection.output)?;
-        let vault_id = ready
-            .get("vaultId")
-            .and_then(Value::as_str)
-            .ok_or("credential_host_protocol_invalid")?;
-        if ready.get("event").and_then(Value::as_str) != Some("ready")
-            || vault_id.len() != 64
-            || !vault_id.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
-            return Err("credential_host_protocol_invalid");
-        }
-        connection.vault_id = vault_id.to_owned();
+        connection.accept_ready()?;
         Ok(connection)
     }
 
@@ -196,7 +169,7 @@ impl CredentialClient {
         }
     }
 
-    fn invalidate_for(&self, action: Action) -> Result<u64, &'static str> {
+    fn invalidate_for(&self, action: Action) -> Result<(u64, u64), &'static str> {
         let mut delivery = self
             .delivery
             .lock()
@@ -209,34 +182,149 @@ impl CredentialClient {
                 | Action::Delete
                 | Action::ResetAccess
                 | Action::Share
+                | Action::RestorePick
+                | Action::RestorePreview
+                | Action::RestoreCommit
+                | Action::RestoreCancel
+                | Action::ChangePassword
         ) {
             delivery.generation = delivery
                 .generation
                 .checked_add(1)
                 .ok_or("generation_exhausted")?;
             delivery.session = None;
+            // WebView blur also sends invalidate_session. It must revoke
+            // secret delivery without cancelling the native picker itself.
+            if action != Action::InvalidateSession {
+                delivery.cancellation = delivery
+                    .cancellation
+                    .checked_add(1)
+                    .ok_or("generation_exhausted")?;
+            }
+            if matches!(
+                action,
+                Action::Lock
+                    | Action::RestorePick
+                    | Action::RestorePreview
+                    | Action::RestoreCommit
+                    | Action::ChangePassword
+                    | Action::Save
+                    | Action::Delete
+            ) {
+                self.selections
+                    .lock()
+                    .map_err(|_| "credential_host_unavailable")?
+                    .export = None;
+            }
             // Closing a drawer or switching apps must preserve the value long
             // enough to paste. Only lock/expiry/exit clear an owned copy.
-            if action == Action::Lock {
+            if matches!(
+                action,
+                Action::Lock
+                    | Action::RestorePick
+                    | Action::RestorePreview
+                    | Action::RestoreCommit
+                    | Action::ChangePassword
+            ) {
                 let _ = self.clipboard.clear_owned();
             }
         }
-        Ok(delivery.generation)
+        Ok((delivery.generation, delivery.cancellation))
     }
 
     fn perform(
         &self,
         request: CredentialRequest,
-        window: &WebviewWindow,
-        generation: u64,
+        window: &dyn NativeWindow,
+        stamp: (u64, u64),
+        mut start: impl FnMut(&Self) -> Result<HostConnection, &'static str>,
     ) -> Result<Value, &'static str> {
+        let mut slot = self
+            .connection
+            .lock()
+            .map_err(|_| "credential_host_unavailable")?;
+        let export = request.action == Action::ExportFile;
+        let result = self.perform_inner(request, window, stamp, &mut slot, &mut start);
+        // All staged values have dropped, but no other GUI operation can unlock
+        // or export until the same connection guard finishes cleanup and locking.
+        if export {
+            self.finish_export(result, &mut slot)
+        } else {
+            result
+        }
+    }
+
+    fn lock_after_cleanup_failure(
+        &self,
+        slot: &mut Option<HostConnection>,
+    ) -> Result<Value, &'static str> {
+        self.invalidate_focus();
+        let _ = self.clipboard.clear_owned();
+        let response = slot
+            .as_mut()
+            .ok_or("credential_host_unavailable")
+            .and_then(|connection| {
+                connection.exchange(&json!({"action":"lock"})).or_else(|_| {
+                    // A valid lease-cleanup failure still locks the host. Confirm
+                    // that state before preserving its retryable cleanup report.
+                    connection.exchange(&json!({"action":"status"}))
+                })
+            });
+        match response {
+            Ok(status) if status.get("locked") == Some(&Value::Bool(true)) => Ok(status),
+            _ => {
+                // Closing the control pipe stops the host if locking cannot be confirmed.
+                *slot = None;
+                Err("export_cleanup_failed")
+            }
+        }
+    }
+
+    fn finish_export(
+        &self,
+        result: Result<Value, &'static str>,
+        slot: &mut Option<HostConnection>,
+    ) -> Result<Value, &'static str> {
+        let cleanup_failed =
+            slot.is_some() && crate::credential_export_journal::cleanup(&self.root).is_err();
+        if cleanup_failed
+            || matches!(
+                result,
+                Err("export_cleanup_failed" | "file_export_cleanup_failed")
+            )
+        {
+            let published = matches!(&result, Ok(value) if value.get("exported") == Some(&Value::Bool(true)))
+                || matches!(result, Err("file_export_cleanup_failed"));
+            let _ = self.lock_after_cleanup_failure(slot);
+            return Err(if published {
+                "file_export_cleanup_failed"
+            } else {
+                "export_cleanup_failed"
+            });
+        }
+        result
+    }
+
+    fn perform_inner(
+        &self,
+        request: CredentialRequest,
+        window: &dyn NativeWindow,
+        stamp: (u64, u64),
+        slot: &mut Option<HostConnection>,
+        start: &mut dyn FnMut(&Self) -> Result<HostConnection, &'static str>,
+    ) -> Result<Value, &'static str> {
+        let (mut generation, cancellation) = stamp;
         let action = request.action;
         let session = request
             .arguments
             .get("sessionId")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        if matches!(action, Action::ReadFields | Action::CopySecret) {
+        request.validate_gui()?;
+        if matches!(
+            action,
+            Action::ReadFields | Action::CopySecret | Action::ExportFile | Action::InspectFiles
+        ) {
             let delivery = self
                 .delivery
                 .lock()
@@ -246,28 +334,69 @@ impl CredentialClient {
                 return Err("human_verification_required");
             }
         }
-        let mut serialized = serde_json::to_value(&request).map_err(|_| "invalid_arguments")?;
-        if action == Action::CopySecret {
-            let field = request
-                .arguments
-                .get("field")
-                .and_then(Value::as_str)
-                .ok_or("invalid_secret_field")?;
-            serialized["action"] = json!("read_fields");
-            serialized["fields"] = json!([field]);
-            serialized
-                .as_object_mut()
-                .ok_or("invalid_arguments")?
-                .remove("field");
-        }
-        let mut slot = self
-            .connection
+        let mut serialized = request.control_request()?;
+        if self
+            .delivery
             .lock()
-            .map_err(|_| "credential_host_unavailable")?;
+            .map_err(|_| "credential_host_unavailable")?
+            .cancellation
+            != cancellation
+        {
+            return Err("stale_generation");
+        }
         if slot.is_none() {
-            *slot = Some(self.start_host()?);
+            *slot = Some(start(self)?);
+        }
+        if crate::credential_export_journal::cleanup(&self.root).is_err() {
+            let mut status = self.lock_after_cleanup_failure(slot)?;
+            if matches!(action, Action::Status | Action::Lock | Action::RetryCleanup) {
+                status["cleanupFailed"] = json!(true);
+                status["cleanupRemaining"] =
+                    json!(status["cleanupRemaining"].as_u64().unwrap_or(0) + 1);
+                return Ok(status);
+            }
+            return Err("export_cleanup_failed");
         }
         let connection = slot.as_mut().ok_or("credential_host_unavailable")?;
+        let native_outcome = self.native_intent(&request, &mut serialized, connection, window);
+        if matches!(
+            native_outcome,
+            Err("credential_host_unavailable" | "credential_host_protocol_invalid")
+        ) {
+            *slot = None;
+            self.invalidate_focus();
+            return Err("credential_host_unavailable");
+        }
+        if let Some(result) = native_outcome? {
+            let delivery = self
+                .delivery
+                .lock()
+                .map_err(|_| "credential_host_unavailable")?;
+            if delivery.cancellation != cancellation {
+                let mut selections = self
+                    .selections
+                    .lock()
+                    .map_err(|_| "credential_host_unavailable")?;
+                selections.export = None;
+                selections.restore = None;
+                return Err("stale_generation");
+            }
+            return Ok(result);
+        }
+        {
+            let delivery = self
+                .delivery
+                .lock()
+                .map_err(|_| "credential_host_unavailable")?;
+            if delivery.cancellation != cancellation {
+                return Err("stale_generation");
+            }
+            // A native save panel blurs the window. Ciphertext backup needs no
+            // human record session; explicit lock/cancel still cancels above.
+            if action == Action::BackupCreate {
+                generation = delivery.generation;
+            }
+        }
         let outcome = connection.exchange(&serialized);
         if matches!(
             outcome,
@@ -278,17 +407,59 @@ impl CredentialClient {
             return Err("credential_host_unavailable");
         }
         let mut result = outcome?;
+        if action == Action::RestoreCommit
+            && result.get("restartRequired") == Some(&Value::Bool(true))
+        {
+            *slot = None;
+            // The disk switch has committed. A restart failure must not claim
+            // that restoration failed or that the original vault is unchanged.
+            match start(self).and_then(|mut next| {
+                let status = next.exchange(&json!({"action":"status"}))?;
+                Ok((next, status))
+            }) {
+                Ok((next, status)) => {
+                    *slot = Some(next);
+                    result = status;
+                }
+                Err(_) => {
+                    result["sharing"] = json!(false);
+                    return Ok(result);
+                }
+            }
+        }
         let connection = slot.as_mut().ok_or("credential_host_unavailable")?;
+        let staged = if action == Action::ExportFile {
+            let id = request
+                .arguments
+                .get("selectionId")
+                .and_then(Value::as_str)
+                .ok_or("file_selection_required")?;
+            let mut selections = self
+                .selections
+                .lock()
+                .map_err(|_| "credential_host_unavailable")?;
+            let selected = selections.export.take().ok_or("file_selection_required")?;
+            if selected.id != id || selected.binding != request.export_binding()? {
+                return Err("file_selection_required");
+            }
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(result["bytesBase64"].as_str().ok_or("file_export_failed")?)
+                .map_err(|_| "file_export_failed")?;
+            Some(selected.stage(&bytes, &self.root)?)
+        } else {
+            None
+        };
         // is_focused may synchronously dispatch to the main thread. Call it
         // before taking delivery: the main-thread focus callback takes that lock.
         let focus = if matches!(
             action,
-            Action::Verify | Action::ReadFields | Action::CopySecret
+            Action::Verify
+                | Action::ReadFields
+                | Action::CopySecret
+                | Action::ExportFile
+                | Action::InspectFiles
         ) {
-            window.label() == "main"
-                && window
-                    .is_focused()
-                    .map_err(|_| "window_focus_unavailable")?
+            window.focused()?
         } else {
             true
         };
@@ -303,12 +474,16 @@ impl CredentialClient {
             let _ = connection.exchange(&json!({"action":"lock"}));
             return Err("stale_generation");
         }
-        if stale && !matches!(action, Action::Lock | Action::InvalidateSession) {
+        if stale && !action.completed_mutation() {
             return Err("stale_generation");
         }
         if matches!(
             action,
-            Action::Verify | Action::ReadFields | Action::CopySecret
+            Action::Verify
+                | Action::ReadFields
+                | Action::CopySecret
+                | Action::ExportFile
+                | Action::InspectFiles
         ) && !focus
         {
             delivery.generation = delivery.generation.saturating_add(1);
@@ -317,6 +492,10 @@ impl CredentialClient {
         }
         if action == Action::Verify {
             delivery.session = session;
+        }
+        if let Some(staged) = staged {
+            staged.commit()?;
+            return Ok(json!({"exported":true}));
         }
         if action == Action::CopySecret {
             let field = request
@@ -341,10 +520,13 @@ impl CredentialClient {
                 | Action::ResetAccess
                 | Action::AuthorizeAccess
                 | Action::RetryCleanup
+                | Action::RestoreCommit
+                | Action::RestoreCancel
+                | Action::ChangePassword
         ) {
             result["bridgeCommand"] = json!(connection.executable);
             result["bridgeArgs"] = json!([
-                "--credential-bridge",
+                "--credential-mcp",
                 "--root",
                 self.root.to_string_lossy(),
                 "--vault-id",
@@ -354,6 +536,117 @@ impl CredentialClient {
                 .map_err(|_| "clipboard_unavailable")?;
         }
         Ok(result)
+    }
+
+    fn native_intent(
+        &self,
+        request: &CredentialRequest,
+        serialized: &mut Value,
+        connection: &mut HostConnection,
+        window: &dyn NativeWindow,
+    ) -> Result<Option<Value>, &'static str> {
+        use crate::credential_file_io::Selection;
+        match request.action {
+            Action::AgentGuide => {
+                let client = request
+                    .arguments
+                    .get("client")
+                    .and_then(Value::as_str)
+                    .ok_or("agent_client_unsupported")?;
+                let status = connection.exchange(&json!({"action":"status"}))?;
+                return crate::credential_guides::generate(
+                    client,
+                    &connection.executable,
+                    &self.root,
+                    &status,
+                )
+                .map(Some);
+            }
+            Action::PrepareExport => {
+                let binding = request.export_binding()?;
+                let detail = connection.exchange(
+                    &json!({"action":"detail","recordId":request.arguments["recordId"]}),
+                )?;
+                if detail["version"] != request.arguments["expectedVersion"] {
+                    return Err("record_version_conflict");
+                }
+                let field = request
+                    .arguments
+                    .get("field")
+                    .and_then(Value::as_str)
+                    .ok_or("field_not_found")?;
+                let name = detail["files"]
+                    .as_array()
+                    .and_then(|files| files.iter().find(|file| file["field"] == field))
+                    .and_then(|file| file["name"].as_str())
+                    .ok_or("field_not_found")?;
+                let selected = window.save_file(name, false)?;
+                let mut selections = self
+                    .selections
+                    .lock()
+                    .map_err(|_| "credential_host_unavailable")?;
+                selections.export = None;
+                let Some(path) = selected else {
+                    return Ok(Some(json!({"selectionId":null})));
+                };
+                let selected = Selection::capture(path, binding, &self.root, false)?;
+                let result = json!({"selectionId":selected.id,"name":selected.name()});
+                selections.export = Some(selected);
+                return Ok(Some(result));
+            }
+            Action::RestorePick => {
+                connection.exchange(&json!({"action":"lock"}))?;
+                connection.exchange(&json!({"action":"restore_cancel"}))?;
+                let selected = window.open_backup()?;
+                let mut selections = self
+                    .selections
+                    .lock()
+                    .map_err(|_| "credential_host_unavailable")?;
+                selections.restore = None;
+                let Some(path) = selected else {
+                    return Ok(Some(json!({"selectionId":null})));
+                };
+                let selected = Selection::capture(path, "restore".into(), &self.root, true)?;
+                let result = json!({"selectionId":selected.id,"name":selected.name()});
+                selections.restore = Some(selected);
+                return Ok(Some(result));
+            }
+            Action::RestorePreview => {
+                let id = request
+                    .arguments
+                    .get("selectionId")
+                    .and_then(Value::as_str)
+                    .ok_or("file_selection_required")?;
+                let selections = self
+                    .selections
+                    .lock()
+                    .map_err(|_| "credential_host_unavailable")?;
+                let selected = selections
+                    .restore
+                    .as_ref()
+                    .filter(|selected| selected.id == id)
+                    .ok_or("file_selection_required")?;
+                selected.validate()?;
+                serialized["path"] = json!(selected.path);
+            }
+            Action::RestoreCancel => {
+                self.selections
+                    .lock()
+                    .map_err(|_| "credential_host_unavailable")?
+                    .restore = None;
+            }
+            Action::BackupCreate => {
+                let selected = window.save_file("credentials.srtvault", true)?;
+                let Some(path) = selected else {
+                    return Ok(Some(json!({"created":false,"cancelled":true})));
+                };
+                let selected = Selection::capture(path, "backup".into(), &self.root, false)?;
+                selected.validate()?;
+                serialized["path"] = json!(selected.path);
+            }
+            _ => {}
+        }
+        Ok(None)
     }
 }
 
@@ -393,9 +686,10 @@ pub(crate) async fn credential_request(
         Ok(value) => value,
         Err(code) => return Ok(api_err(AppError::new(code, message(code)))),
     };
-    let response =
-        tauri::async_runtime::spawn_blocking(move || client.perform(request, &window, generation))
-            .await;
+    let response = tauri::async_runtime::spawn_blocking(move || {
+        client.perform(request, &window, generation, CredentialClient::start_host)
+    })
+    .await;
     Ok(match response {
         Ok(Ok(value)) => ApiResponse::ok(value),
         Ok(Err(code)) => api_err(AppError::new(code, message(code))),
@@ -406,108 +700,14 @@ pub(crate) async fn credential_request(
     })
 }
 
-fn message(code: &str) -> &'static str {
-    match code {
-        "password_or_vault_invalid" => "主密码不正确，或凭据库无法验证。",
-        "password_confirmation_mismatch" => "两次输入的主密码不一致。",
-        "password_length_invalid" => "主密码至少12个字符，且不能超过1024字节。",
-        "password_retry_later" => "验证失败次数过多，请稍后重试。",
-        "vault_locked" => "凭据库已锁定，请先解锁。",
-        "record_not_found" => "记录不存在或已被删除。",
-        "record_version_conflict" => "记录已更新，请重新加载后编辑。",
-        "human_verification_required" | "human_session_invalid" | "stale_generation" => {
-            "当前验证已失效，请重新验证。"
-        }
-        "record_required_fields_missing" => "请填写当前类型的必填定位字段。",
-        "record_required_secret_missing" => "当前类型的必填秘密不能为空。",
-        "ssh_private_key_file_required" => "SSH凭据需要导入私钥文件。",
-        "record_port_invalid" => "端口必须是1至65535的整数。",
-        "record_url_invalid" => "请输入不含账号密码的HTTP或HTTPS网址。",
-        "record_host_invalid" => "主机只能填写主机名或IP，不能包含连接串。",
-        "secret_limit_exceeded" => "秘密文本不能超过1MiB。",
-        "file_limit_exceeded" => "单次保存的附件原字节总量不能超过16MiB。",
-        "file_not_text" => "此文件不是UTF-8文本，请使用原文件导出。",
-        "secret_text_response_too_large" => "此文件作为文本显示时超过传输上限，请使用原文件导出。",
-        "credential_authorization_required" | "credential_authorization_denied" => {
-            "需要恢复系统钥匙串授权，请在设置中明确授权。"
-        }
-        "credential_authorization_cancelled" => "系统钥匙串授权已取消。",
-        "clipboard_changed" => "剪贴板已变化，未清除其他复制内容。",
-        _ => "凭据操作未完成，请检查输入后重试；已保存的数据不会被错误内容覆盖。",
-    }
-}
-
-fn error_code(code: &str) -> &'static str {
-    const CODES: &[&str] = &[
-        "vault_already_exists",
-        "vault_already_unlocked",
-        "vault_locked",
-        "vault_storage_failed",
-        "vault_data_invalid",
-        "password_or_vault_invalid",
-        "password_confirmation_mismatch",
-        "password_length_invalid",
-        "password_required",
-        "password_retry_later",
-        "record_not_found",
-        "record_version_conflict",
-        "record_version_exhausted",
-        "record_fields_invalid",
-        "record_name_or_type_invalid",
-        "record_type_immutable",
-        "record_note_too_large",
-        "record_required_fields_missing",
-        "record_required_secret_missing",
-        "record_port_invalid",
-        "record_url_invalid",
-        "record_host_invalid",
-        "record_files_invalid",
-        "ssh_private_key_file_required",
-        "invalid_record_id",
-        "invalid_secret_field",
-        "field_not_found",
-        "fields_required",
-        "invalid_field_count",
-        "secret_limit_exceeded",
-        "file_limit_exceeded",
-        "file_not_text",
-        "secret_text_response_too_large",
-        "human_verification_required",
-        "human_session_invalid",
-        "human_session_limit",
-        "session_id_required",
-        "stale_generation",
-        "vault_record_limit",
-        "invalid_search_bounds",
-        "cleanup_failed",
-        "sharing_state_write_failed",
-        "sharing_state_invalid",
-        "credential_authorization_required",
-        "credential_authorization_denied",
-        "credential_authorization_cancelled",
-        "credential_store_unavailable",
-        "credential_store_changed",
-        "credential_store_write_not_verified",
-        "agent_access_missing",
-        "invalid_access_material",
-        "vault_identity_or_format_mismatch",
-        "vault_unavailable",
-        "vault_key_failed",
-        "encryption_engine_unavailable",
-        "generation_exhausted",
-        "unsafe_path_permissions",
-        "path_unavailable",
-        "private_file_create_failed",
-        "lease_cleanup_failed",
-        "lease_journal_failed",
-    ];
-    CODES
-        .iter()
-        .copied()
-        .find(|known| *known == code)
-        .unwrap_or("credential_host_unavailable")
-}
-
 #[cfg(test)]
 #[path = "credential_commands_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "credential_command_flow_tests.rs"]
+mod flow_tests;
+
+#[cfg(test)]
+#[path = "credential_command_file_tests.rs"]
+mod file_tests;

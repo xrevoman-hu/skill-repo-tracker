@@ -23,7 +23,13 @@ mod backup_fs;
 mod backup_paths;
 mod backups;
 mod credential_clipboard;
+mod credential_command_errors;
+mod credential_command_model;
 mod credential_commands;
+mod credential_export_journal;
+mod credential_file_io;
+mod credential_guides;
+mod credential_host_connection;
 #[doc(hidden)]
 pub mod credential_protocol;
 mod database;
@@ -44,8 +50,10 @@ mod skill_hash;
 mod startup_guard_tests;
 mod temp_artifacts;
 
-use adapters::AppAdapters;
+use adapters::{api_err, AppAdapters};
 use database::database_path_for_run;
+#[cfg(test)]
+use github_accounts::cleanup_legacy_github_account_metadata;
 #[cfg(test)]
 use github_auth::GithubAuth;
 use github_auth::GithubAuthSource;
@@ -208,10 +216,6 @@ impl From<prompt_migration::PromptMigrationError> for AppError {
     }
 }
 
-fn api_err<T: Serialize>(error: AppError) -> ApiResponse<T> {
-    ApiResponse::err(error.code, error.message, error.details)
-}
-
 struct AppState {
     db: Mutex<Connection>,
     db_path: PathBuf,
@@ -278,7 +282,7 @@ impl AppState {
         let had_library_setting = previous_library_root.is_some();
 
         seed_settings(&conn, &home, &default_backup_root, &default_library_root)?;
-        github_accounts::delete_legacy_account(
+        github_accounts::migrate_legacy_account_if_registered(
             &conn,
             &credential_lock,
             adapters.credentials.as_ref(),
@@ -1835,30 +1839,6 @@ fn load_ui_github_accounts(conn: &Connection) -> Result<Vec<UiGithubAccount>, Ap
         accounts.push(ui_github_account(row?));
     }
     Ok(accounts)
-}
-
-fn cleanup_legacy_github_account_metadata(conn: &Connection) -> Result<(), AppError> {
-    conn.execute(
-        "UPDATE repositories
-         SET github_account_id = NULL
-         WHERE github_account_id = ?1
-            OR github_account_id IN (SELECT id FROM github_accounts WHERE token_key = ?2)",
-        params![LEGACY_GITHUB_ACCOUNT_ID, TOKEN_USER],
-    )?;
-    conn.execute(
-        "DELETE FROM github_repo_catalog
-         WHERE account_id = ?1
-            OR account_id IN (SELECT id FROM github_accounts WHERE token_key = ?2)",
-        params![LEGACY_GITHUB_ACCOUNT_ID, TOKEN_USER],
-    )?;
-    conn.execute(
-        "DELETE FROM github_accounts WHERE id = ?1 OR token_key = ?2",
-        params![LEGACY_GITHUB_ACCOUNT_ID, TOKEN_USER],
-    )?;
-    set_setting(conn, "github_token_configured", "false")?;
-    set_setting(conn, "github_token_status", "not_configured")?;
-    set_setting(conn, "github_token_last_verified", "")?;
-    Ok(())
 }
 
 fn upsert_github_account(conn: &Connection, account: &GithubAccountRecord) -> Result<(), AppError> {
@@ -3514,7 +3494,7 @@ fn scan_skills_from_zip(bytes: &[u8], repo_name: &str) -> Result<Vec<SkillScan>,
         if !file.is_file() {
             continue;
         }
-        let raw_name = file.name().to_string();
+        let raw_name = file.name()?.into_owned();
         if !raw_name.ends_with("SKILL.md") {
             continue;
         }
@@ -3677,7 +3657,10 @@ fn readme_search_from_zip(bytes: &[u8]) -> String {
         if !file.is_file() {
             continue;
         }
-        let relative = strip_zip_root(file.name());
+        let Ok(name) = file.name() else {
+            continue;
+        };
+        let relative = strip_zip_root(&name);
         let file_name = relative.rsplit('/').next().unwrap_or(relative.as_str());
         if !matches!(
             file_name.to_ascii_lowercase().as_str(),
@@ -4311,11 +4294,12 @@ fn extract_skill_to_registered_temp(
     let mut extracted_files = 0_usize;
     for index in 0..archive.len() {
         let mut file = archive.by_index(index)?;
+        let raw_name = file.name()?.into_owned();
         let enclosed = file.enclosed_name().ok_or_else(|| {
             AppError::with_details(
                 "zip_path_unsafe",
                 "Skill ZIP 包含越界路径，已停止安装。",
-                file.name(),
+                &raw_name,
             )
         })?;
         let mut components = enclosed.components();
@@ -4323,7 +4307,7 @@ fn extract_skill_to_registered_temp(
             return Err(AppError::with_details(
                 "zip_path_unsafe",
                 "Skill ZIP 顶层路径无效，已停止安装。",
-                file.name(),
+                &raw_name,
             ));
         };
         let archive_relative = components.as_path();

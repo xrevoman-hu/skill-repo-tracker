@@ -23,6 +23,67 @@ function view(transport: CredentialTransport, copyText = vi.fn().mockResolvedVal
 }
 
 describe("credential user flows", () => {
+  it.each([
+    ["file_export_cleanup_failed", "原文件已导出，但暂存清理未完成"],
+    ["export_cleanup_failed", "导出暂存清理未完成"],
+  ])("preserves the %s outcome after hiding the detail and refreshing the locked vault", async (code, notice) => {
+    const user = userEvent.setup();
+    const { transport: real } = await fixture();
+    await real.request({ action: "save", type: "generic", name: "Synthetic file", metadata: {}, note: "", secrets: {}, files: [{ field: "attachment", name: "sample.bin", bytesBase64: "/wAB" }] });
+    let exportFailed = false;
+    const transport: CredentialTransport = {
+      request: async <R extends CredentialRequest>(request: R): Promise<CredentialResults[R["action"]]> => {
+        if (request.action === "prepare_export") return { selectionId: "owned-ticket" } as CredentialResults[R["action"]];
+        if (request.action === "export_file") {
+          await real.request({ action: "lock" });
+          exportFailed = true;
+          throw { code };
+        }
+        if (request.action === "status" && exportFailed && code === "file_export_cleanup_failed") throw { code: "credential_host_unavailable" };
+        return real.request(request);
+      },
+    };
+    render(view(transport));
+    await user.click(await screen.findByRole("button", { name: "Synthetic file" }));
+    await user.click(screen.getByRole("button", { name: "导出原文件 sample.bin" }));
+    await user.type(screen.getByLabelText("主密码", { exact: true }), master);
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "凭据库已锁定" });
+    if (code === "file_export_cleanup_failed") expect(await screen.findByRole("alert")).toHaveTextContent("凭据服务不可用");
+    expect(screen.queryByRole("dialog", { name: "凭据详情" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Synthetic file")).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(notice);
+    expect(screen.getByRole("status")).toHaveTextContent("请在设置中重试清理");
+    expect(screen.getByRole("status")).not.toHaveTextContent("凭据服务已断开");
+  });
+
+  it("keeps the page locked when an export picker returns after locking the vault", async () => {
+    const user = userEvent.setup();
+    const { transport: real } = await fixture();
+    await real.request({ action: "save", type: "generic", name: "Synthetic file", metadata: {}, note: "", secrets: {}, files: [{ field: "attachment", name: "sample.bin", bytesBase64: "/wAB" }] });
+    let finish: (value: CredentialResults["prepare_export"]) => void = () => undefined;
+    const picker = new Promise<CredentialResults["prepare_export"]>((resolve) => { finish = resolve; });
+    const calls: CredentialRequest[] = [];
+    const transport: CredentialTransport = {
+      request: async <R extends CredentialRequest>(request: R): Promise<CredentialResults[R["action"]]> => {
+        calls.push(request);
+        if (request.action === "prepare_export") return await picker as CredentialResults[R["action"]];
+        return real.request(request);
+      },
+    };
+    render(view(transport));
+    await user.click(await screen.findByRole("button", { name: "Synthetic file" }));
+    await user.click(await screen.findByRole("button", { name: "导出原文件 sample.bin" }));
+    fireEvent.blur(window);
+    await user.click(screen.getByRole("button", { name: /^锁定$/ }));
+    await screen.findByRole("heading", { name: "凭据库已锁定" });
+    await act(async () => finish({ selectionId: "late-after-lock", name: "sample.bin" }));
+    expect(screen.getByRole("heading", { name: "凭据库已锁定" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "凭据详情" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "验证主密码" })).not.toBeInTheDocument();
+    expect(calls.some((request) => request.action === "verify" || request.action === "export_file")).toBe(false);
+  });
+
   it("requires fresh verification after StrictMode remounts the detail effects", async () => {
     const user = userEvent.setup();
     const { transport, record } = await fixture();
@@ -118,7 +179,7 @@ describe("credential user flows", () => {
     expect(screen.queryByText("Sample website")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Agent 接入说明" }));
     expect(screen.getByRole("button", { name: "复制说明给 Agent" })).toBeDisabled();
-    expect(screen.getByText(/不能复制可执行配置/)).toBeInTheDocument();
+    expect(await screen.findByText(/不能复制可执行配置/)).toBeInTheDocument();
   });
 
   it("hides previously displayed values when the credential host disconnects", async () => {

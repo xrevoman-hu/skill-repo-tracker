@@ -12,6 +12,7 @@ use adapters::{
 #[derive(Default)]
 struct MemoryCredentials {
     values: Mutex<HashMap<String, String>>,
+    reads: Mutex<Vec<String>>,
     deleted: Mutex<Vec<String>>,
     failed_reads: Mutex<HashSet<String>>,
     failed_deletes: Mutex<HashSet<String>>,
@@ -36,6 +37,7 @@ impl MemoryCredentials {
 
 impl CredentialStore for MemoryCredentials {
     fn get(&self, _service: &str, key: &str) -> Result<Option<String>, String> {
+        self.reads.lock().unwrap().push(key.to_string());
         if self.failed_reads.lock().unwrap().contains(key) {
             return Err("fictional keychain failure containing fixture-token".into());
         }
@@ -123,7 +125,7 @@ fn seed_legacy_github_metadata(conn: &Connection) {
 fn successful_startup_uses_injected_credentials_and_initializes_all_resources() {
     let data_dir = tempfile::tempdir().unwrap();
     let credentials = Arc::new(MemoryCredentials::default());
-    credentials.insert(TOKEN_USER, "legacy-token-must-be-removed");
+    credentials.insert(TOKEN_USER, "unregistered-legacy-token-must-remain");
     credentials.insert("fixture-account-token", "  fixture-token  ");
     credentials.insert("blank-token", "   ");
     let github = Arc::new(ScriptedGithub::new([]));
@@ -147,9 +149,18 @@ fn successful_startup_uses_injected_credentials_and_initializes_all_resources() 
             .unwrap(),
         "wal"
     );
+    // An empty database has no ownership reference authorizing legacy cleanup.
+    // Observe the fake directly so these assertions cannot themselves read Keychain.
+    assert!(credentials.reads.lock().unwrap().is_empty());
+    assert!(credentials.deleted.lock().unwrap().is_empty());
     assert_eq!(
-        credentials.deleted.lock().unwrap().as_slice(),
-        &[TOKEN_USER.to_string()]
+        credentials
+            .values
+            .lock()
+            .unwrap()
+            .get(TOKEN_USER)
+            .map(String::as_str),
+        Some("unregistered-legacy-token-must-remain")
     );
     assert_eq!(
         state
@@ -160,6 +171,10 @@ fn successful_startup_uses_injected_credentials_and_initializes_all_resources() 
     );
     assert_eq!(state.token_for_key("blank-token").unwrap(), None);
     assert_eq!(state.token_for_key("missing-token").unwrap(), None);
+    assert_eq!(
+        credentials.reads.lock().unwrap().as_slice(),
+        ["fixture-account-token", "blank-token", "missing-token"]
+    );
 }
 
 #[test]

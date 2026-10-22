@@ -1,8 +1,10 @@
 //! Product credential host. It runs only as a GUI-owned child, never in AppState.
 
 use crate::{
-    credential_auth, credential_ipc, credential_leases::Leases, credential_records::VaultStore,
+    credential_auth, credential_backup, credential_ipc, credential_leases::Leases,
+    credential_records::VaultStore,
 };
+use base64::Engine;
 use serde_json::{json, Value};
 use std::{
     collections::HashSet,
@@ -17,7 +19,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub(crate) fn prepare_root(root: &Path) -> Result<String, &'static str> {
+fn prepare_root(root: &Path, locked: bool) -> Result<String, &'static str> {
     if !root.is_absolute() {
         return Err("invalid_vault_root");
     }
@@ -31,12 +33,12 @@ pub(crate) fn prepare_root(root: &Path) -> Result<String, &'static str> {
         return Err("invalid_vault_root");
     }
     credential_ipc::private_path(root, true)?;
+    credential_backup::recover(root)?;
     let marker = root.join("vault.json");
     if !marker.exists() {
         if fs::read_dir(root)
             .map_err(|_| "vault_root_unavailable")?
-            .next()
-            .is_some()
+            .any(|entry| !entry.is_ok_and(|entry| locked && entry.file_name() == ".host.lock"))
         {
             return Err("vault_root_not_empty");
         }
@@ -83,19 +85,22 @@ pub(crate) struct ProductHost {
     invalidated: HashSet<String>,
     password_failures: u32,
     retry_after: Option<Instant>,
+    restore: Option<credential_backup::PreparedRestore>,
+    access_reset: bool,
 }
 
 impl ProductHost {
     fn open(root: &Path, vault_id: &str) -> Result<Self, &'static str> {
-        let leases = Leases::open(root)?;
+        let (leases, cleanup_failed) = Leases::open_for_product(root)?;
         let sharing_file = root.join("sharing.json");
+        let access_reset = credential_backup::bool_setting(root, "access-reset.json")?;
         let sharing = if sharing_file.exists() {
             serde_json::from_slice::<bool>(&credential_ipc::read_private(&sharing_file, 8)?)
                 .map_err(|_| "sharing_state_invalid")?
         } else {
             false
         };
-        let (code, authorization_error) = if sharing {
+        let (code, authorization_error) = if sharing && !access_reset {
             match credential_auth::production_load(vault_id) {
                 Ok(Some(code)) => (Some(code), None),
                 Ok(None) => (None, Some("agent_access_missing")),
@@ -113,11 +118,13 @@ impl ProductHost {
             authorization_error,
             generation: 1,
             leases,
-            cleanup_failed: false,
+            cleanup_failed,
             human: None,
             invalidated: HashSet::new(),
             password_failures: 0,
             retry_after: None,
+            restore: None,
+            access_reset,
         })
     }
 
@@ -126,8 +133,11 @@ impl ProductHost {
             "vaultId":self.vault_id,"sharing":self.sharing && self.code.is_some(),
             "sharingRequested":self.sharing,"authorizationError":self.authorization_error,
             "cleanupFailed":self.cleanup_failed,"generation":self.generation,
+            "cleanupRemaining":self.leases.pending_count(),
+            "lastBackupAt":credential_backup::last_backup(&self.root),
             "limits":{"passwordMinChars":12,"passwordMaxBytes":1024,"secretMaxBytes":1048576,
-                "fileMaxBytes":16777216,"fileTotalMaxBytes":16777216,"maxRecords":1000}})
+                "fileMaxBytes":16777216,"fileTotalMaxBytes":16777216,"maxRecords":1000,
+                "backupMaxBytes":credential_backup::MAX_BACKUP}})
     }
 
     fn invalidate(&mut self, lock: bool) -> Result<(), &'static str> {
@@ -175,6 +185,10 @@ impl ProductHost {
         } else {
             VaultStore::unlock(&self.root.join("vault.db"), password, &self.vault_id)
         };
+        self.password_result(result)
+    }
+
+    fn password_result<T>(&mut self, result: Result<T, &'static str>) -> Result<T, &'static str> {
         match result {
             Ok(store) => {
                 self.password_failures = 0;
@@ -222,6 +236,89 @@ impl ProductHost {
         Ok(())
     }
 
+    fn inspect_files(&mut self, request: &Value) -> Result<Value, &'static str> {
+        self.require_human(request)?;
+        let record_id = crate::credential_store::record_id(request)?;
+        let detail = self.store()?.detail(record_id)?;
+        if !["ssh", "tls"].contains(&detail["type"].as_str().unwrap_or("")) {
+            return Err("file_inspection_unsupported");
+        }
+        let fields = detail["secretFields"]
+            .as_array()
+            .ok_or("vault_data_invalid")?;
+        let passphrase = if fields.iter().any(|field| field == "passphrase") {
+            Some(
+                self.store()?
+                    .read_fields(&json!({"recordId":record_id,"fields":["passphrase"]}))?["fields"]
+                    ["passphrase"]
+                    .as_str()
+                    .ok_or("vault_data_invalid")?
+                    .to_owned(),
+            )
+        } else {
+            None
+        };
+        let mut deliveries = Vec::new();
+        let outcome = (|| {
+            for field in ["privateKey", "certificate", "chain"] {
+                if !fields.iter().any(|present| present == field) {
+                    continue;
+                }
+                let version = self.store()?.version(record_id)?;
+                let bytes = match self.store()?.asset_named(record_id, Some(field)) {
+                    Ok((_, _, _, bytes)) => bytes,
+                    Err("file_not_found") => self
+                        .store()?
+                        .read_fields(&json!({"recordId":record_id,"fields":[field]}))?["fields"]
+                        [field]
+                        .as_str()
+                        .ok_or("vault_data_invalid")?
+                        .as_bytes()
+                        .to_vec(),
+                    Err(error) => return Err(error),
+                };
+                let lease = match self.leases.deliver(record_id, version, &bytes) {
+                    Ok(lease) => lease,
+                    Err(error) => {
+                        self.cleanup_failed = Leases::cleanup_required(error);
+                        return Err(error);
+                    }
+                };
+                deliveries.push((
+                    field,
+                    lease["leaseId"]
+                        .as_str()
+                        .ok_or("vault_data_invalid")?
+                        .to_owned(),
+                    PathBuf::from(lease["path"].as_str().ok_or("vault_data_invalid")?),
+                ));
+            }
+            let selected = |field| {
+                deliveries
+                    .iter()
+                    .find(|(name, _, _)| *name == field)
+                    .map(|(_, _, path)| path.as_path())
+            };
+            crate::credential_file_inspect::inspect(
+                selected("privateKey"),
+                selected("certificate"),
+                selected("chain"),
+                passphrase.as_deref(),
+            )
+        })();
+        let mut cleanup_error = None;
+        for (_, id, _) in deliveries {
+            if let Err(error) = self.leases.release(&id) {
+                cleanup_error = Some(error);
+            }
+        }
+        if let Some(error) = cleanup_error {
+            self.cleanup_failed = true;
+            return Err(error);
+        }
+        outcome
+    }
+
     pub(crate) fn control(&mut self, request: &Value) -> Result<Value, &'static str> {
         let action = request
             .get("action")
@@ -230,9 +327,14 @@ impl ProductHost {
         match action {
             "status" => {}
             "create" | "unlock" => {
+                if self.cleanup_failed {
+                    return Err("cleanup_failed");
+                }
                 if self.store.is_some() {
                     return Err("vault_already_unlocked");
                 }
+                self.restore = None;
+                credential_backup::cancel(&self.root)?;
                 let password = request
                     .get("password")
                     .and_then(Value::as_str)
@@ -244,7 +346,13 @@ impl ProductHost {
                 }
                 self.store = Some(self.verify_password(password, action == "create")?);
             }
-            "lock" | "shutdown" => self.invalidate(true)?,
+            "lock" | "shutdown" => {
+                self.restore = None;
+                let invalidated = self.invalidate(true);
+                let cancelled = credential_backup::cancel(&self.root);
+                invalidated?;
+                cancelled?;
+            }
             "list" => return self.store()?.list(request),
             "detail" => {
                 return self.store()?.detail(
@@ -294,6 +402,121 @@ impl ProductHost {
                 self.require_human(request)?;
                 return self.store()?.read_fields(request);
             }
+            "export_file" => {
+                self.require_human(request)?;
+                let record_id = crate::credential_store::record_id(request)?;
+                let field = request
+                    .get("field")
+                    .and_then(Value::as_str)
+                    .ok_or("field_required")?;
+                let (_, _, name, bytes) = self.store()?.asset_named(record_id, Some(field))?;
+                // Only the GUI's private IPC consumer receives these bytes. Its
+                // command writes the picker-bound destination, never the WebView.
+                return Ok(
+                    json!({"name":name,"bytesBase64":base64::engine::general_purpose::STANDARD.encode(bytes)}),
+                );
+            }
+            "inspect_files" => return self.inspect_files(request),
+            "backup_create" => {
+                self.store()?;
+                let password = request
+                    .get("password")
+                    .and_then(Value::as_str)
+                    .ok_or("password_required")?;
+                drop(self.verify_password(password, false)?);
+                let path = request
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or("backup_path_required")?;
+                return credential_backup::create(
+                    &self.root,
+                    self.store()?,
+                    password,
+                    Path::new(path),
+                );
+            }
+            "restore_preview" => {
+                self.invalidate(true)?;
+                self.restore = None;
+                if self.retry_after.is_some_and(|until| Instant::now() < until) {
+                    return Err("password_retry_later");
+                }
+                let path = request
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .ok_or("backup_path_required")?;
+                let password = request
+                    .get("password")
+                    .and_then(Value::as_str)
+                    .ok_or("password_required")?;
+                let result = credential_backup::preview(
+                    &self.root,
+                    Path::new(path),
+                    password,
+                    &self.vault_id,
+                );
+                let prepared = self.password_result(result)?;
+                let summary = prepared.summary.clone();
+                self.restore = Some(prepared);
+                return Ok(summary);
+            }
+            "restore_cancel" => {
+                self.restore = None;
+                let invalidated = self.invalidate(true);
+                let cancelled = credential_backup::cancel(&self.root);
+                invalidated?;
+                cancelled?;
+            }
+            "restore_commit" => {
+                let token = request
+                    .get("restoreId")
+                    .and_then(Value::as_str)
+                    .ok_or("restore_preview_required")?;
+                if self
+                    .restore
+                    .as_ref()
+                    .is_none_or(|prepared| prepared.token != token)
+                {
+                    return Err("restore_preview_required");
+                }
+                self.invalidate(true)?;
+                let prepared = self.restore.take().ok_or("restore_preview_required")?;
+                let new_id = credential_backup::commit(&self.root, prepared, &self.vault_id)?;
+                if new_id != self.vault_id {
+                    self.sharing = false;
+                    self.code = None;
+                    self.authorization_error = None;
+                    self.access_reset = true;
+                    self.vault_id = new_id;
+                }
+                let mut status = self.status();
+                status["restartRequired"] = json!(true);
+                return Ok(status);
+            }
+            "change_password" => {
+                self.store()?;
+                let old = request
+                    .get("oldPassword")
+                    .and_then(Value::as_str)
+                    .ok_or("password_required")?;
+                let new = request
+                    .get("newPassword")
+                    .and_then(Value::as_str)
+                    .ok_or("password_required")?;
+                if request.get("confirmPassword").and_then(Value::as_str) != Some(new) {
+                    return Err("password_confirmation_mismatch");
+                }
+                drop(self.verify_password(old, false)?);
+                let prepared = credential_backup::change_password(
+                    &self.root,
+                    self.store()?,
+                    &self.vault_id,
+                    old,
+                    new,
+                )?;
+                self.invalidate(true)?;
+                credential_backup::commit_password(&self.root, prepared, &self.vault_id)?;
+            }
             "invalidate_session" => {
                 let session = request
                     .get("sessionId")
@@ -319,7 +542,12 @@ impl ProductHost {
                     .ok_or("enabled_required")?;
                 if enabled {
                     self.store()?;
-                    let code = credential_auth::production_establish(&self.vault_id, false)?;
+                    let code =
+                        credential_auth::production_establish(&self.vault_id, self.access_reset)?;
+                    if self.access_reset {
+                        credential_backup::clear_access_reset(&self.root)?;
+                        self.access_reset = false;
+                    }
                     self.sharing = true;
                     if let Err(error) = self.persist_sharing() {
                         self.sharing = false;
@@ -342,6 +570,10 @@ impl ProductHost {
                 self.invalidate(false)?;
                 self.persist_sharing()?;
                 self.code = Some(credential_auth::production_establish(&self.vault_id, true)?);
+                if self.access_reset {
+                    credential_backup::clear_access_reset(&self.root)?;
+                    self.access_reset = false;
+                }
                 self.sharing = previously_enabled;
                 if let Err(error) = self.persist_sharing() {
                     self.sharing = false;
@@ -352,6 +584,9 @@ impl ProductHost {
             }
             "authorize_access" => {
                 self.store()?;
+                if self.access_reset {
+                    return Err("agent_access_missing");
+                }
                 self.code = None;
                 self.authorization_error = Some("credential_authorization_required");
                 self.invalidate(false)?;
@@ -367,6 +602,7 @@ impl ProductHost {
                 }
             }
             "retry_cleanup" => {
+                self.cleanup_failed = true;
                 self.leases.clear()?;
                 self.cleanup_failed = false;
             }
@@ -412,17 +648,22 @@ impl ProductHost {
                 let listed = self.store()?.list(args)?;
                 let records=listed["records"].as_array().ok_or("vault_data_invalid")?.iter().take(limit as usize)
                     .map(|record|json!({"recordId":record["recordId"],"type":record["type"],"name":record["name"],
-                        "metadata":record["metadata"]})).collect::<Vec<_>>();
+                        "metadata":record["metadata"],"files":record["files"],"secretFields":record["secretFields"]})).collect::<Vec<_>>();
                 json!({"records":records})
             }
             "srt_credentials_read_fields" => self.store()?.read_fields(args)?,
             "srt_credentials_lease_file" => {
                 let id = crate::credential_store::record_id(args)?;
-                let (version, bytes) = self.store()?.asset(id)?;
+                let field = args.get("field").and_then(Value::as_str);
+                let (version, field, name, bytes) = self.store()?.asset_named(id, field)?;
                 match self.leases.deliver(id, version, &bytes) {
-                    Ok(value) => value,
+                    Ok(mut value) => {
+                        value["field"] = json!(field);
+                        value["name"] = json!(name);
+                        value
+                    }
                     Err(error) => {
-                        self.cleanup_failed = true;
+                        self.cleanup_failed = Leases::cleanup_required(error);
                         return Err(error);
                     }
                 }
@@ -445,7 +686,8 @@ impl ProductHost {
 }
 
 pub(crate) fn run(root: &Path) -> Result<(), &'static str> {
-    let vault_id = prepare_root(root)?;
+    let _root_lock = credential_backup::lock_root(root)?;
+    let vault_id = prepare_root(root, true)?;
     let endpoint = credential_ipc::bind_listener(root, &vault_id)?;
     let host = Arc::new(Mutex::new(ProductHost::open(root, &vault_id)?));
     let stopping = Arc::new(AtomicBool::new(false));

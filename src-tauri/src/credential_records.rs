@@ -39,7 +39,7 @@ const METADATA: [&str; 17] = [
 ];
 
 pub(crate) struct VaultStore {
-    connection: Connection,
+    pub(crate) connection: Connection,
 }
 
 fn err(_: impl std::fmt::Debug) -> &'static str {
@@ -163,12 +163,14 @@ impl VaultStore {
         .map_err(|_| "vault_data_invalid")?;
         let mut secret_fields: Vec<String> = secrets.keys().cloned().collect();
         let mut statement = self.connection.prepare(
-            "SELECT field,name,length(bytes),text_readable FROM credential_files WHERE record_id=?1 ORDER BY field").map_err(err)?;
+            "SELECT field,name,length(bytes),text_readable,substr(bytes,1,160) FROM credential_files WHERE record_id=?1 ORDER BY field").map_err(err)?;
         let files = statement
             .query_map([record_id], |row| {
+                let prefix: Vec<u8> = row.get(4)?;
                 Ok(
                     json!({"field":row.get::<_,String>(0)?,"name":row.get::<_,String>(1)?,
-                "size":row.get::<_,u64>(2)?,"textReadable":row.get::<_,bool>(3)?}),
+                "size":row.get::<_,u64>(2)?,"textReadable":row.get::<_,bool>(3)?,
+                "formatHint":crate::credential_file_inspect::format_hint(&prefix)}),
                 )
             })
             .map_err(err)?
@@ -324,6 +326,25 @@ impl VaultStore {
             }
         }
         let files = validate_files(request, kind)?;
+        let retained_size: u64 = previous
+            .as_ref()
+            .and_then(|old| old["files"].as_array())
+            .map(|assets| {
+                assets
+                    .iter()
+                    .filter(|asset| {
+                        asset["field"].as_str().is_some_and(|field| {
+                            !changes.contains_key(field) && !files.contains_key(field)
+                        })
+                    })
+                    .filter_map(|asset| asset["size"].as_u64())
+                    .sum()
+            })
+            .unwrap_or(0);
+        let imported_size: usize = files.values().map(|(_, bytes)| bytes.len()).sum();
+        if retained_size.saturating_add(imported_size as u64) > MAX_FILE as u64 {
+            return Err("file_limit_exceeded");
+        }
         let mut present: Vec<String> = secrets
             .iter()
             .filter(|(_, v)| v.as_str().is_some_and(|s| !s.is_empty()))
@@ -454,14 +475,30 @@ impl VaultStore {
         Ok(json!({"recordId":record_id,"fields":output}))
     }
 
+    #[cfg(test)]
     pub(crate) fn asset(&self, record_id: &str) -> Result<(i64, Vec<u8>), &'static str> {
+        let (version, _, _, bytes) = self.asset_named(record_id, None)?;
+        Ok((version, bytes))
+    }
+
+    pub(crate) fn asset_named(
+        &self,
+        record_id: &str,
+        field: Option<&str>,
+    ) -> Result<(i64, String, String, Vec<u8>), &'static str> {
         let version = self.version(record_id)?;
         let mut statement = self
             .connection
-            .prepare("SELECT bytes FROM credential_files WHERE record_id=?1 ORDER BY field")
+            .prepare("SELECT field,name,bytes FROM credential_files WHERE record_id=?1 AND (?2 IS NULL OR field=?2) ORDER BY field")
             .map_err(err)?;
         let files = statement
-            .query_map([record_id], |row| row.get::<_, Vec<u8>>(0))
+            .query_map(params![record_id, field], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            })
             .map_err(err)?
             .collect::<Result<Vec<_>, _>>()
             .map_err(err)?;
@@ -472,7 +509,73 @@ impl VaultStore {
                 "file_selection_required"
             });
         }
-        Ok((version, files.into_iter().next().ok_or("file_not_found")?))
+        let (field, name, bytes) = files.into_iter().next().ok_or("file_not_found")?;
+        Ok((version, field, name, bytes))
+    }
+
+    pub(crate) fn validate_backup_contents(&self) -> Result<(), &'static str> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT id,kind,name,metadata,note,secrets,version FROM credential_records")
+            .map_err(err)?;
+        let mut rows = statement.query([]).map_err(err)?;
+        while let Some(row) = rows.next().map_err(err)? {
+            let id: String = row.get(0).map_err(err)?;
+            let kind: String = row.get(1).map_err(err)?;
+            let name: String = row.get(2).map_err(err)?;
+            let metadata: String = row.get(3).map_err(err)?;
+            let note: String = row.get(4).map_err(err)?;
+            let serialized: String = row.get(5).map_err(err)?;
+            let version: i64 = row.get(6).map_err(err)?;
+            if !crate::credential_auth::valid_id(&id)
+                || !KINDS.contains(&kind.as_str())
+                || name.trim().is_empty()
+                || name.chars().count() > 200
+                || note.len() > 8192
+                || version < 1
+                || serialized.len() > 32 * 1024 * 1024
+                || metadata.len() > 64 * 1024
+            {
+                return Err("backup_data_invalid");
+            }
+            let metadata = validate_metadata(&serde_json::from_str(&metadata).map_err(err)?)?;
+            let secrets: Map<String, Value> = serde_json::from_str(&serialized).map_err(err)?;
+            let mut present = Vec::new();
+            for (field, value) in &secrets {
+                let value = value.as_str().ok_or("backup_data_invalid")?;
+                if !fields(&kind).contains(&field.as_str()) || value.len() > MAX_SECRET {
+                    return Err("backup_data_invalid");
+                }
+                if !value.is_empty() {
+                    present.push(field.clone());
+                }
+            }
+            let detail = self.detail(&id)?;
+            let assets = detail["files"].as_array().ok_or("backup_data_invalid")?;
+            let mut total = 0u64;
+            for asset in assets {
+                let field = text(asset, "field")?;
+                let name = text(asset, "name")?;
+                let size = asset["size"].as_u64().ok_or("backup_data_invalid")?;
+                total = total.checked_add(size).ok_or("backup_data_invalid")?;
+                if !file_fields(&kind).contains(&field)
+                    || secrets.contains_key(field)
+                    || name.is_empty()
+                    || name.len() > 255
+                    || name.contains(['/', '\\', '\0'])
+                    || size == 0
+                    || total > MAX_FILE as u64
+                {
+                    return Err("backup_data_invalid");
+                }
+                present.push(field.to_owned());
+            }
+            if kind == "ssh" && !assets.iter().any(|asset| asset["field"] == "privateKey") {
+                return Err("backup_data_invalid");
+            }
+            validate_required(&kind, &metadata, &present)?;
+        }
+        Ok(())
     }
 }
 

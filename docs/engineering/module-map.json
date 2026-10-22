@@ -192,7 +192,7 @@
         "docs/adr/0005-prompt-export-and-migration.md",
         "docs/adr/0007-staged-modularization.md"
       ],
-      "paths": ["src/PromptsView.tsx", "src/prompts.css"]
+      "paths": ["src/PromptsView.tsx", "src/prompts.css", "src/readGfm.ts"]
     },
     {
       "id": "frontend-app-service",
@@ -452,6 +452,9 @@
         "src/CredentialEditor.tsx",
         "src/CredentialDetail.tsx",
         "src/CredentialSettings.tsx",
+        "src/CredentialRecovery.tsx",
+        "src/CredentialMaintenance.tsx",
+        "src/CredentialAgentGuide.tsx",
         "src/credentials.css"
       ]
     },
@@ -507,6 +510,21 @@
       ]
     },
     {
+      "id": "rust-credential-file-adapters",
+      "runtime": "rust",
+      "layer": "rust-adapter",
+      "ownerRule": "docs/rules/data-security.md",
+      "decisions": ["docs/adr/0013-credential-files-recovery-and-guides.md"],
+      "paths": [
+        "src-tauri/src/credential_file_io.rs",
+        "src-tauri/src/credential_export_journal.rs",
+        "src-tauri/src/credential_command_errors.rs",
+        "src-tauri/src/credential_file_inspect.rs",
+        "src-tauri/src/credential_backup.rs",
+        "src-tauri/src/credential_guides.rs"
+      ]
+    },
+    {
       "id": "rust-credential-commands",
       "runtime": "rust",
       "layer": "rust-composition",
@@ -515,7 +533,9 @@
         "docs/adr/0012-credential-human-vault.md"
       ],
       "paths": [
-        "src-tauri/src/credential_commands.rs"
+        "src-tauri/src/credential_commands.rs",
+        "src-tauri/src/credential_host_connection.rs",
+        "src-tauri/src/credential_command_model.rs"
       ]
     }
   ],

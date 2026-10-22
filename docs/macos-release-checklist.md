@@ -3,8 +3,9 @@
 本清单是人工验收视图，不是第二套发布脚本。唯一可执行合同、local/remote phase 和 manifest
 交接命令只维护在 [testing-release Rule](rules/testing-release.md)；这里不得复制命令。
 
-本清单对应 [v1.3.0](releases/v1.3.0.md) 正式发布，版本与 annotated tag 分别为 `1.3.0`、`v1.3.0`。
-唯一公开资产为 [`Skill.Repo.Tracker_1.3.0_aarch64.dmg`](https://github.com/xrevoman-hu/skill-repo-tracker/releases/download/v1.3.0/Skill.Repo.Tracker_1.3.0_aarch64.dmg)。
+本清单准备 [v1.4.0](releases/v1.4.0.md)：应用版本 `1.4.0`，候选标识 `v1.4.0-rc.1`。
+候选构建/tag 不代表正式发布；正式 `v1.4.0` 须在以下门禁通过后按既有合同生成。
+当前公开下载仍为 [`Skill.Repo.Tracker_1.3.0_aarch64.dmg`](https://github.com/xrevoman-hu/skill-repo-tracker/releases/download/v1.3.0/Skill.Repo.Tracker_1.3.0_aarch64.dmg)，不预先创建 1.4.0 下载链接。
 以下条目是验收要求，不代表已通过；每层结果以对应执行记录为准。
 
 ## 1. 授权与来源
@@ -20,6 +21,20 @@
 - 完整签名 App 后重新封装并签名 DMG；旧 DMG 不得复用。
 - 证明只读挂载内 App 的签名、版本、arm64、bytes 与 SHA-256。
 - manifest generation 目录只用于操作者交接，不是凭据或 Release 资产，不进入日志。
+
+### 凭据功能专项
+
+- 使用隔离的合成记录和文件验收创建、锁定、重开后手动解锁，以及新增、筛选、编辑、删除。
+- 验证小眼睛、复制、导出和文件检查的主密码门槛；覆盖失焦、关闭详情、切记录、锁库及迟到响应。
+- 原生文件框失焦后重新验证；取消不导出，陈旧票据不能越过记录版本或锁库边界。
+- 核对钥匙串首次/跨签名授权、共享开关、访问码重置、撤权后拒读及受管文件清理失败提示。
+- 各 Agent 分别记录实际版本、握手、四工具发现、指定字段读取、租约文件消费和释放结果；
+  Codex CLI/桌面分别记录。不得用配置生成、SDK smoke 或历史 E0 结果替代当前候选实测。
+- 核对上传/租约/导出的原字节与权限；PEM 解析/配对不替代真实 SSH 消费或证书部署验收。
+- 覆盖备份、错误密码/损坏备份、取消、同库/不同库恢复和主密码修改；确认设备访问码不进备份。
+- 浏览器演示仅证明界面行为；不得输入真实凭据或将其标成原生功能验收。
+- Windows 保持 **BLOCKED**，单独列明恢复、权限和文件消费缺口。公开产物不附本机资料、
+  客户端配置、凭据备份、真实账号、日志或未脱敏截图。
 
 ## 3. 远端实物验收
 

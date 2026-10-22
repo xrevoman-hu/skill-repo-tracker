@@ -13,7 +13,7 @@
     "src/PromptsView.tsx": {
       "status": "active",
       "maxLines": 2646,
-      "maxBytes": 110827,
+      "maxBytes": 110822,
       "targetLines": 800,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
@@ -33,8 +33,8 @@
     },
     "src-tauri/src/lib.rs": {
       "status": "active",
-      "maxLines": 10397,
-      "maxBytes": 352532,
+      "maxLines": 10381,
+      "maxBytes": 351840,
       "targetLines": 500,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
@@ -47,15 +47,15 @@
     },
     "src-tauri/src/prompt_zip.rs": {
       "status": "active",
-      "maxLines": 3399,
-      "maxBytes": 119699,
+      "maxLines": 3394,
+      "maxBytes": 119543,
       "targetLines": 800,
       "adr": "docs/adr/0007-staged-modularization.md"
     },
     "src-tauri/src/prompt_migration.rs": {
       "status": "active",
       "maxLines": 3153,
-      "maxBytes": 109364,
+      "maxBytes": 109336,
       "targetLines": 800,
       "adr": "docs/adr/0007-staged-modularization.md"
     },

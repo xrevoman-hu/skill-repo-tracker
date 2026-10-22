@@ -387,3 +387,7 @@ pub(crate) fn verify_peer(stream: &UnixStream) -> Result<(), &'static str> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "credential_ipc_tests.rs"]
+mod tests;

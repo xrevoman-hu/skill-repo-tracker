@@ -39,7 +39,7 @@ pub(crate) fn scan_plugins_from_zip(
         if !file.is_file() {
             continue;
         }
-        let relative = strip_zip_root(file.name());
+        let relative = strip_zip_root(&file.name()?);
         if !is_plugin_source_candidate(&relative) {
             continue;
         }

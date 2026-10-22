@@ -30,7 +30,7 @@ import {
   X,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import readGfm from "./readGfm";
 
 import { localizedApiErrorMessage } from "./api";
 
@@ -608,7 +608,7 @@ function SafeMarkdown({
           ) : <span className="prompt-blocked-link" title={copy[language].blockedLink}>{children}</span>,
           img: ({ alt, src }) => <span className="prompt-remote-image">{copy[language].remoteImageBlocked.replace("{alt}", alt || src || "")}</span>,
         }}
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[readGfm]}
         skipHtml
       >
         {content}

@@ -22,6 +22,7 @@ export function assertProductExplicitAuthorization(relative, structural, functio
   }
   const expected = `"authorize_access" => {
     self.store()?;
+    if self.access_reset { return Err("agent_access_missing"); }
     self.code=None; self.authorization_error=Some("credential_authorization_required");
     self.invalidate(false)?;
     match credential_auth::production_authorize(&self.vault_id) {

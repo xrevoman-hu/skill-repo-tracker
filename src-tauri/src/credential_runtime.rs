@@ -218,18 +218,11 @@ impl Host {
     }
 
     fn lease_result<T>(&mut self, result: Result<T, &'static str>) -> Result<T, &'static str> {
-        if matches!(
-            result.as_ref().err().copied(),
-            Some(
-                "path_unavailable"
-                    | "unsafe_path_permissions"
-                    | "private_file_create_failed"
-                    | "lease_write_failed"
-                    | "lease_cleanup_failed"
-                    | "lease_journal_failed"
-                    | "lease_journal_cleanup_failed"
-            )
-        ) {
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| Leases::cleanup_required(error))
+        {
             self.cleanup_failed = true;
         }
         result

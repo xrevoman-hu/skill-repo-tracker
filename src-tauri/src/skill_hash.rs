@@ -56,7 +56,7 @@ pub(super) fn skill_hashes_from_zip(
         if !file.is_file() {
             continue;
         }
-        let output_relative = strip_zip_root(file.name())
+        let output_relative = strip_zip_root(&file.name()?)
             .strip_prefix(&prefix)
             .unwrap_or("")
             .to_string();

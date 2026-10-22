@@ -1991,7 +1991,7 @@ mod tests {
         (0..archive.len())
             .map(|index| {
                 let mut entry = archive.by_index(index).unwrap();
-                let name = entry.name().to_string();
+                let name = entry.name().unwrap().into_owned();
                 let mut bytes = Vec::new();
                 entry.read_to_end(&mut bytes).unwrap();
                 (name, bytes)
@@ -3161,7 +3161,7 @@ mod tests {
             export_prompts_zip_to_path(&conn, &selection, &output, exported_at, "1.2.1").unwrap();
         assert_eq!(artifact.item_count, 1);
 
-        let mut archive = ZipArchive::new(File::open(output).unwrap()).unwrap();
+        let mut archive = ZipArchive::new(File::open(&output).unwrap()).unwrap();
         assert_eq!(archive.len(), 2);
         let mut manifest = String::new();
         archive
@@ -3176,16 +3176,11 @@ mod tests {
         assert!(!manifest.contains("逐字保留的正文。"));
         assert!(!manifest.contains(&source_tag_id));
 
-        let prompt_path = (0..archive.len())
-            .map(|index| archive.by_index(index).unwrap().name().to_string())
-            .find(|name| name.starts_with("prompts/") && name.ends_with(".md"))
+        let (_, bytes) = read_zip_files(&output)
+            .into_iter()
+            .find(|(name, _)| name.starts_with("prompts/") && name.ends_with(".md"))
             .unwrap();
-        let mut markdown = String::new();
-        archive
-            .by_name(&prompt_path)
-            .unwrap()
-            .read_to_string(&mut markdown)
-            .unwrap();
+        let markdown = String::from_utf8(bytes).unwrap();
         assert!(markdown.contains("tags: [\"研究\"]"));
         assert!(!markdown.contains(&source_tag_id));
         assert!(markdown.ends_with("逐字保留的正文。"));

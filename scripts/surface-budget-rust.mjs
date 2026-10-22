@@ -5,6 +5,7 @@ import { isRustProductionSourcePath } from "./source-classification.mjs";
 import { discoverDirBuilderPathSites } from "./surface-budget-rust-dir-builder.mjs";
 import { credentialLocalTransport } from "./credential-runtime-policy.mjs";
 import { credentialClipboardSurface, credentialFocusHook, credentialHostSpawn, credentialParentWatcher, credentialSpawnMask } from "./credential-product-policy.mjs";
+import { credentialInspectorMask, credentialInspectorSpawn } from "./credential-file-inspect-policy.mjs";
 
 const TASK_APIS = new Set([
   "async_std::task::spawn",
@@ -620,6 +621,10 @@ function rustPathSites(relative, source, masked) {
   }
   for (const call of commandCalls) {
     const owner = functionAt(functions, call.index);
+    if (credentialInspectorSpawn(relative, source, call.index, owner)) {
+      sites.push(`${relative}:Command::new("/usr/bin/openssl"):run#1`);
+      continue;
+    }
     if (credentialHostSpawn(relative, source, call.index, owner)) {
       const key = `Command::new(<credential-host>):${owner}`;
       const ordinal = (counts.get(key) ?? 0) + 1;
@@ -756,7 +761,8 @@ export function discoverRustExecutionSurface(root) {
     const functions = enclosingFunctions(masked);
     const ownerAt = (position) => functionAt(functions, position);
     const spawnMask = credentialSpawnMask(relative, source, masked, ownerAt);
-    rustTaskSitesResult.push(...rustTaskSites(relative, spawnMask.masked), ...spawnMask.sites);
+    const inspectorMask = credentialInspectorMask(relative, source, spawnMask.masked, ownerAt);
+    rustTaskSitesResult.push(...rustTaskSites(relative, inspectorMask), ...spawnMask.sites);
     rustPathSitesResult.push(...rustPathSites(relative, source, masked));
     rustPathSitesResult.push(...credentialClipboardSurface(relative, masked, ownerAt));
     rustPathSitesResult.push(...credentialParentWatcher(relative, source, masked));

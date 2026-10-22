@@ -3,6 +3,8 @@ import { BookOpenText, Copy, KeyRound, LockKeyhole, Plus, Search, Settings2 } fr
 import { Button, Modal } from "./UiPrimitives";
 import { CredentialDetail } from "./CredentialDetail";
 import { CredentialEditor } from "./CredentialEditor";
+import { CredentialRecovery } from "./CredentialRecovery";
+import { CredentialAgentGuide } from "./CredentialAgentGuide";
 import { CREDENTIAL_TYPES, credentialError, credentialErrorCode, credentialUsage } from "./credentialTypes";
 import type { CredentialRecord, CredentialSave, CredentialStatus, CredentialTransport } from "./credentialTypes";
 import { credentialLocation, credentialTypeLabel } from "./credentialForm";
@@ -37,7 +39,7 @@ export function CredentialsView({ transport, language, theme, compact, demo, cop
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [help, setHelp] = useState(false);
-  const [client, setClient] = useState("Codex");
+  const [recovering, setRecovering] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const generation = useRef(0);
   const listGeneration = useRef(0);
@@ -49,9 +51,9 @@ export function CredentialsView({ transport, language, theme, compact, demo, cop
 
   function changeDirty(value: boolean) { setDirty(value); onDirtyChange(value); }
   function clearRecords() { detailGeneration.current += 1; listGeneration.current += 1; setRecords([]); setSelected(null); setEditing(false); changeDirty(false); }
-  async function refreshStatus() {
+  async function refreshStatus(unavailableNotice?: string, retainedError = "") {
     const token = ++generation.current;
-    setError("");
+    setError(retainedError);
     try {
       const value = await transport.request({ action: "status" });
       if (!live.current || token !== generation.current) return;
@@ -59,7 +61,7 @@ export function CredentialsView({ transport, language, theme, compact, demo, cop
       if (value.locked) clearRecords();
     } catch (failure) {
       if (live.current && token === generation.current) {
-        if (credentialErrorCode(failure) === "credential_host_unavailable") hideUnavailable();
+        if (credentialErrorCode(failure) === "credential_host_unavailable") hideUnavailable(unavailableNotice);
         setError(credentialError(failure, language));
       }
     }
@@ -69,11 +71,11 @@ export function CredentialsView({ transport, language, theme, compact, demo, cop
     setLoading(true);
     try {
       const result = await transport.request({ action: "list", query, type });
-      if (live.current && token === listGeneration.current) setRecords(result.records);
+      if (live.current && token === listGeneration.current) { setRecords(result.records); setError(""); }
     } catch (failure) {
       if (live.current && token === listGeneration.current) {
         if (credentialErrorCode(failure) === "credential_host_unavailable") hostUnavailable();
-        else { setError(credentialError(failure, language)); void refreshStatus(); }
+        else void refreshStatus(undefined, credentialError(failure, language));
       }
     } finally { if (live.current && token === listGeneration.current) setLoading(false); }
   }
@@ -84,13 +86,13 @@ export function CredentialsView({ transport, language, theme, compact, demo, cop
       if (live.current) void refreshStatus();
     }, 31000);
   }
-  function hideUnavailable() {
+  function hideUnavailable(notice?: string) {
     generation.current += 1;
     clearRecords();
     setStatus((value) => value ? { ...value, locked: true, sharing: false } : value);
-    setMessage(zh ? "凭据服务已断开，已隐藏内容。请重新解锁后继续。" : "The credential service disconnected. Content is hidden; unlock again to continue.");
+    setMessage(notice ?? (zh ? "凭据服务已断开，已隐藏内容。请重新解锁后继续。" : "The credential service disconnected. Content is hidden; unlock again to continue."));
   }
-  function hostUnavailable() { hideUnavailable(); void refreshStatus(); }
+  function hostUnavailable(notice?: string) { hideUnavailable(notice); void refreshStatus(notice); }
   useEffect(() => {
     live.current = true;
     void refreshStatus();
@@ -199,6 +201,11 @@ export function CredentialsView({ transport, language, theme, compact, demo, cop
     }
   }
   const ready = Boolean(status && !status.locked);
+  function restoredStatus(value: CredentialStatus) {
+    setStatus(value);
+    setPassword(""); setConfirmation("");
+    if (value.locked) clearRecords();
+  }
   return <section className={`credentials-view ${compact ? "credential-compact" : ""}`} data-theme={theme} aria-label={zh ? "凭据库" : "Credential vault"}>
     <div className="credential-toolbar">
       <Button onClick={createRecord} disabled={!ready || pending}><Plus size={15} />{zh ? "新增凭据" : "New credential"}</Button>
@@ -225,7 +232,7 @@ export function CredentialsView({ transport, language, theme, compact, demo, cop
           {!status.exists && <p className="credential-hint">{zh ? "至少 12 个字符，最多 1024 个 UTF-8 字节。主密码无法找回，请妥善记忆。" : "At least 12 characters; at most 1024 UTF-8 bytes. The master password cannot be recovered."}</p>}
           <Button variant="primary" type="submit" pending={pending}>{status.exists ? (zh ? "解锁凭据库" : "Unlock vault") : (zh ? "创建并解锁" : "Create and unlock")}</Button>
           {pending && <Button onClick={() => void lock()}>{zh ? "取消" : "Cancel"}</Button>}
-        </form><p className="credential-hint">{zh ? "当前版本暂不支持从加密备份恢复。" : "Encrypted backup restore is not yet supported in this version."}</p></>}
+        </form><Button disabled={pending} onClick={() => setRecovering(true)}>{zh ? "从加密备份恢复" : "Restore encrypted backup"}</Button></>}
       {error && <p className="credential-error" role="alert">{error}</p>}{!status && error && <Button onClick={() => void refreshStatus()}>{zh ? "重试" : "Retry"}</Button>}
     </div></div>}
     {ready && editing && <CredentialEditor key={selected?.recordId ?? "new"} record={selected} language={language} onSave={save} onClose={closeDetail} onDirtyChange={changeDirty} />}
@@ -234,11 +241,7 @@ export function CredentialsView({ transport, language, theme, compact, demo, cop
       footer={<><Button onClick={() => setDeleting(false)} disabled={pending}>{zh ? "取消" : "Cancel"}</Button><Button variant="primary" pending={pending} onClick={() => void remove()}>{zh ? "删除" : "Delete"}</Button></>}>
       <p>{zh ? `删除「${selected.name}」（${credentialTypeLabel(selected.type, language)}）及库内文件？已经导出或交给 Agent 的内容不会被撤回。` : `Delete “${selected.name}” and its stored files? Previously exported or delivered content cannot be recalled.`}</p>{error && <p className="credential-error" role="alert">{error}</p>}
     </Modal>}
-    {help && <Modal title={zh ? "Agent 接入说明" : "Agent connection guide"} closeLabel={zh ? "关闭" : "Close"} onClose={() => setHelp(false)}
-      footer={<><Button onClick={() => setHelp(false)}>{zh ? "关闭" : "Close"}</Button><Button disabled>{zh ? "复制说明给 Agent" : "Copy guide for Agent"}</Button></>}>
-      <label className="credential-field"><span>Agent</span><select value={client} onChange={(event) => setClient(event.target.value)}>{["Codex", "Claude Code", "WorkBuddy", "DeepSeek Harness", "通用 MCP"].map((name) => <option key={name}>{name}</option>)}</select></label>
-      <p>{zh ? `当前版本暂不支持生成 ${client} 的客户端接入配置，不能复制可执行配置。` : `This version cannot yet generate client configuration for ${client}. Executable configuration is not ready to copy.`}</p>
-      <p className="credential-hint">{zh ? "请勿把主密码或访问码粘贴给 Agent。日常使用可复制卡片的记录定位指令；复制不代表客户端已连接。" : "Never paste the master password or access code into an Agent. Card instructions identify individual records; copying them does not connect a client."}</p>
-    </Modal>}
+    {help && <CredentialAgentGuide transport={transport} language={language} copyText={copyText} onClose={() => setHelp(false)} />}
+    {recovering && <CredentialRecovery transport={transport} language={language} demo={demo} onClose={() => setRecovering(false)} onStatus={restoredStatus} onMessage={setMessage} />}
   </section>;
 }

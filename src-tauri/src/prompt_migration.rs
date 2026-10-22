@@ -1095,7 +1095,7 @@ fn validate_archive_layout<R: Read + Seek>(
     let mut total = 0_u64;
     for index in 0..archive.len() {
         let file = archive.by_index(index)?;
-        let name = file.name().to_string();
+        let name = file.name()?.into_owned();
         if file.is_dir() || !valid_archive_name(&name) || !expected.contains(name.as_str()) {
             return Err(PromptMigrationError::new(
                 "prompt_migration_zip_path_invalid",
@@ -1121,7 +1121,7 @@ fn validate_archive_layout<R: Read + Seek>(
             ));
         }
     }
-    if seen != expected.into_iter().map(str::to_string).collect() {
+    if seen.len() != expected.len() {
         return Err(PromptMigrationError::new(
             "prompt_migration_zip_entry_missing",
             "迁移包缺少必要的 ZIP 项。",

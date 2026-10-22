@@ -28,7 +28,7 @@ pub(crate) struct Leases {
     deadlines: HashMap<String, Instant>,
 }
 
-fn remove_pending(directory: &Path) -> Result<(), &'static str> {
+fn pending_path(directory: &Path) -> Result<Option<PathBuf>, &'static str> {
     crate::credential_ipc::private_path(directory, true)?;
     let pending = directory.join("ledger.new");
     match fs::symlink_metadata(&pending) {
@@ -37,15 +37,50 @@ fn remove_pending(directory: &Path) -> Result<(), &'static str> {
                 return Err("lease_journal_cleanup_failed");
             }
             crate::credential_ipc::private_path(&pending, false)?;
-            fs::remove_file(&pending).map_err(|_| "lease_journal_cleanup_failed")
+            Ok(Some(pending))
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(_) => Err("lease_journal_cleanup_failed"),
     }
 }
 
+fn remove_pending(directory: &Path) -> Result<(), &'static str> {
+    if let Some(pending) = pending_path(directory)? {
+        fs::remove_file(pending).map_err(|_| "lease_journal_cleanup_failed")?;
+    }
+    Ok(())
+}
+
 impl Leases {
+    pub(crate) fn cleanup_required(error: &str) -> bool {
+        matches!(
+            error,
+            "path_unavailable"
+                | "unsafe_path_permissions"
+                | "private_file_create_failed"
+                | "lease_write_failed"
+                | "lease_cleanup_failed"
+                | "lease_journal_failed"
+                | "lease_journal_cleanup_failed"
+        )
+    }
+
     pub(crate) fn open(root: &Path) -> Result<Self, &'static str> {
+        let mut result = Self::load(root)?;
+        remove_pending(&result.directory)?;
+        result.clear()?;
+        Ok(result)
+    }
+
+    pub(crate) fn open_for_product(root: &Path) -> Result<(Self, bool), &'static str> {
+        let mut result = Self::load(root)?;
+        let failed = remove_pending(&result.directory)
+            .and_then(|()| result.clear())
+            .is_err();
+        Ok((result, failed))
+    }
+
+    fn load(root: &Path) -> Result<Self, &'static str> {
         let directory = root.join("leases");
         if !directory.exists() {
             std::fs::DirBuilder::new()
@@ -55,11 +90,13 @@ impl Leases {
         }
         crate::credential_ipc::private_path(&directory, true)?;
         let journal = directory.join("ledger.json");
-        let entries: Vec<Lease> = if journal.exists() {
-            serde_json::from_slice(&crate::credential_ipc::read_private(&journal, 32 * 1024)?)
-                .map_err(|_| "lease_journal_invalid")?
-        } else {
-            Vec::new()
+        let entries: Vec<Lease> = match fs::symlink_metadata(&journal) {
+            Ok(_) => {
+                serde_json::from_slice(&crate::credential_ipc::read_private(&journal, 32 * 1024)?)
+                    .map_err(|_| "lease_journal_invalid")?
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+            Err(_) => return Err("lease_journal_invalid"),
         };
         if entries.len() > MAX_LEASES
             || entries.iter().any(|entry| {
@@ -68,14 +105,13 @@ impl Leases {
         {
             return Err("lease_journal_invalid");
         }
-        remove_pending(&directory)?;
-        let mut result = Self {
+        // Invalid roots or journal staging are not a recoverable delete failure.
+        pending_path(&directory)?;
+        Ok(Self {
             directory,
             entries,
             deadlines: HashMap::new(),
-        };
-        result.clear()?;
-        Ok(result)
+        })
     }
 
     fn persist(&self) -> Result<(), &'static str> {
@@ -178,6 +214,10 @@ impl Leases {
         // Also repairs a failed final release, whose plaintext file and in-memory
         // entry are already gone while the older durable journal still remains.
         self.persist()
+    }
+
+    pub(crate) fn pending_count(&self) -> usize {
+        self.entries.len()
     }
 
     pub(crate) fn prune(&mut self) -> Result<(), &'static str> {

@@ -45,11 +45,15 @@ test("credential Unix sockets are inventoried only in the dedicated adapter and 
 test("credential CLI and executable identity inputs require exact files and functions", () => {
   fixture("srt-credential-input-policy-", (root) => {
     const runtime = path.join(root, "src-tauri/src/credential_runtime.rs");
+    const formal = path.join(root, "src-tauri/src/credential_mcp.rs");
     const ipc = path.join(root, "src-tauri/src/credential_ipc.rs");
     writeFileSync(runtime, "fn dispatch_from_env() { std::env::args_os(); }");
+    writeFileSync(formal, 'fn dispatch_from_env() { std::env::args_os(); } const VERSION: &str = env!("CARGO_PKG_VERSION");');
     writeFileSync(ipc, "fn verify_peer() { std::env::current_exe(); }");
     assert.deepEqual(discoverRuntimeInputSurface(root), [
       "rust:src-tauri/src/credential_ipc.rs:std::env::current_exe:<current-executable>#1",
+      "rust:src-tauri/src/credential_mcp.rs:env!:CARGO_PKG_VERSION#1",
+      "rust:src-tauri/src/credential_mcp.rs:std::env::args_os:<credential-cli>#1",
       "rust:src-tauri/src/credential_runtime.rs:std::env::args_os:<credential-cli>#1",
     ]);
     for (const mutation of [
@@ -60,6 +64,16 @@ test("credential CLI and executable identity inputs require exact files and func
       'fn dispatch_from_env() { std::env::var("ACCESS_CODE"); }',
     ]) {
       writeFileSync(runtime, mutation);
+      assert.throws(() => discoverRuntimeInputSurface(root), /environment input/);
+    }
+    writeFileSync(runtime, "fn dispatch_from_env() { std::env::args_os(); }");
+    for (const mutation of [
+      "fn wrong_scope() { std::env::args_os(); }",
+      "fn dispatch_from_env() { std::env::args(); }",
+      "fn dispatch_from_env() { let args = std::env::args_os; args(); }",
+      'fn dispatch_from_env() { std::env::var("ACCESS_CODE"); }',
+    ]) {
+      writeFileSync(formal, mutation);
       assert.throws(() => discoverRuntimeInputSurface(root), /environment input/);
     }
   });

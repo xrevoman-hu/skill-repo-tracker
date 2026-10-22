@@ -38,6 +38,12 @@ export class DemoCredentialTransport implements CredentialTransport {
   }
   private dispatch(request: CredentialRequest): unknown {
     if (request.action === "status") return this.state;
+    if (request.action === "agent_guide") return {
+      client: request.client, text: "浏览器演示：不能复制可执行配置。正式桌面版会生成本机 bridge 路径与所选 Agent 配置，且不含主密码或访问码。",
+      ready: false, reason: "demo_native_only", serverName: "",
+    };
+    if (["prepare_export", "export_file", "inspect_files", "backup_create", "restore_pick", "restore_preview", "restore_commit"].includes(request.action)) this.fail("demo_native_only");
+    if (request.action === "restore_cancel" || request.action === "retry_cleanup") return this.state;
     if (request.action === "invalidate_session") {
       this.invalidated.add(request.sessionId);
       this.sessions.delete(request.sessionId);
@@ -62,6 +68,15 @@ export class DemoCredentialTransport implements CredentialTransport {
       return this.state;
     }
     this.unlocked();
+    if (request.action === "change_password") {
+      if (this.password !== request.oldPassword) this.fail("vault_verification_failed");
+      if ([...request.newPassword].length < 12 || new TextEncoder().encode(request.newPassword).length > 1024) this.fail("password_length_invalid");
+      if (request.newPassword !== request.confirmPassword) this.fail("password_confirmation_mismatch");
+      this.password = request.newPassword;
+      this.sessions.clear();
+      this.state = { ...this.state, locked: true, sharing: false };
+      return this.state;
+    }
     if (request.action === "share") {
       this.state = { ...this.state, sharing: request.enabled, sharingRequested: request.enabled };
       return this.state;

@@ -29,12 +29,14 @@ export function CredentialEditor({ record, language, onSave, onClose, onDirtyCha
   const [pending, setPending] = useState(false);
   const [reading, setReading] = useState(false);
   const fileGeneration = useRef(0);
+  const readingField = useRef<string | null>(null);
   useEffect(() => () => { fileGeneration.current += 1; }, []);
   const dirty = () => onDirtyChange(true);
 
   async function chooseFile(field: string, file?: File) {
     if (!file) return;
     const generation = ++fileGeneration.current;
+    readingField.current = field;
     setReading(true);
     setFailure("");
     try {
@@ -48,7 +50,7 @@ export function CredentialEditor({ record, language, onSave, onClose, onDirtyCha
       dirty();
     } catch {
       if (generation === fileGeneration.current) setFailure(zh ? "未能读取文件。文件不能为空；本次附件合计最多 16 MiB。" : "Could not read the file. Files must be non-empty; combined attachments may not exceed 16 MiB.");
-    } finally { if (generation === fileGeneration.current) setReading(false); }
+    } finally { if (generation === fileGeneration.current) { readingField.current = null; setReading(false); } }
   }
   async function save() {
     const input: CredentialSave = {
@@ -66,9 +68,22 @@ export function CredentialEditor({ record, language, onSave, onClose, onDirtyCha
   }
   function changeSecret(field: string, value: string) {
     fileGeneration.current += 1;
+    readingField.current = null;
     setReading(false);
     setSecrets({ ...secrets, [field]: value });
     if (value !== "") setFiles((current) => current.filter((file) => file.field !== field));
+    dirty();
+  }
+  function clearStoredSecret(field: string, clear: boolean) {
+    if (clear) {
+      setFiles((current) => current.filter((file) => file.field !== field));
+      if (readingField.current === field) {
+        fileGeneration.current += 1;
+        readingField.current = null;
+        setReading(false);
+      }
+    }
+    setSecrets((current) => ({ ...current, [field]: clear ? null : "" }));
     dirty();
   }
   function metadataField(field: string) {
@@ -95,7 +110,7 @@ export function CredentialEditor({ record, language, onSave, onClose, onDirtyCha
     <form className="credential-editor" onSubmit={(event) => { event.preventDefault(); if (!pending && !reading) void save(); }}>
       <div className="credential-drawer-scroll">
         <label className="credential-field"><span>{zh ? "类型" : "Type"}</span><select value={type} disabled={Boolean(record) || pending}
-          onChange={(event) => { setType(event.target.value as CredentialType); setMetadata({}); setOtherEngine(false); setSecrets({}); setFiles([]); setErrors({}); fileGeneration.current += 1; setReading(false); dirty(); }}>
+          onChange={(event) => { setType(event.target.value as CredentialType); setMetadata({}); setOtherEngine(false); setSecrets({}); setFiles([]); setErrors({}); fileGeneration.current += 1; readingField.current = null; setReading(false); dirty(); }}>
           {CREDENTIAL_TYPES.map((kind) => <option value={kind} key={kind}>{credentialTypeLabel(kind, language)}</option>)}
         </select></label>
         <label className="credential-field"><span>{zh ? "名称 *" : "Name *"}</span><input value={name} autoFocus aria-invalid={Boolean(errors.name)}
@@ -119,7 +134,7 @@ export function CredentialEditor({ record, language, onSave, onClose, onDirtyCha
               aria-invalid={Boolean(errors[field])} onChange={(event) => changeSecret(field, event.target.value)}
               placeholder={record ? (zh ? "留空保留已保存值" : "Leave blank to keep the saved value") : ""} />}
           {record?.secretFields.includes(field) && ["passphrase", "certificate", "privateKey", "chain", "value"].includes(field) && <span className="credential-clear-secret">
-            <input type="checkbox" checked={secrets[field] === null} onChange={(event) => { setSecrets({ ...secrets, [field]: event.target.checked ? null : "" }); dirty(); }} />
+            <input type="checkbox" checked={secrets[field] === null} onChange={(event) => clearStoredSecret(field, event.target.checked)} />
             {zh ? "清除已保存值" : "Clear the saved value"}
           </span>}
           {errors[field] && <small className="credential-error">{errors[field]}</small>}
@@ -129,9 +144,7 @@ export function CredentialEditor({ record, language, onSave, onClose, onDirtyCha
           <small>{secrets[field] === null ? (zh ? "保存后移除现有文件" : "Existing file will be removed on save") : secrets[field] ? (zh ? "保存后以文本替换现有文件" : "Text will replace the existing file on save") : files.find((file) => file.field === field)?.name ?? record?.files.find((file) => file.field === field)?.name ?? (zh ? "导入文件本体，不依赖原文件路径" : "Import the file itself, independent of its source path")}</small>
           <input type="file" aria-label={credentialFileLabel(field, language)} disabled={reading || pending}
             onChange={(event) => { void chooseFile(field, event.target.files?.[0]); event.target.value = ""; }} />
-          {type === "generic" && record?.files.some((file) => file.field === field) && <Button onClick={() => {
-            setFiles((current) => current.filter((file) => file.field !== field)); setSecrets({ ...secrets, [field]: secrets[field] === null ? "" : null }); dirty();
-          }}>{secrets[field] === null ? (zh ? "保留已保存文件" : "Keep saved file") : (zh ? "移除已保存文件" : "Remove saved file")}</Button>}
+          {type === "generic" && record?.files.some((file) => file.field === field) && <Button onClick={() => clearStoredSecret(field, secrets[field] !== null)}>{secrets[field] === null ? (zh ? "保留已保存文件" : "Keep saved file") : (zh ? "移除已保存文件" : "Remove saved file")}</Button>}
           {errors[field] && <small className="credential-error">{errors[field]}</small>}
         </label>)}
         {record && <p className="credential-hint">{zh ? "旧秘密不会预填。查看或复制请返回详情验证主密码。" : "Saved secrets are not prefilled. Return to details and verify to view or copy them."}</p>}
