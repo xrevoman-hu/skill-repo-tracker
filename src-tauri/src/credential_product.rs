@@ -319,6 +319,42 @@ impl ProductHost {
         outcome
     }
 
+    fn commit_restore(
+        &mut self,
+        request: &Value,
+        commit: impl FnOnce(
+            &Path,
+            credential_backup::PreparedRestore,
+            &str,
+        ) -> Result<(String, bool), &'static str>,
+    ) -> Result<Value, &'static str> {
+        let token = request
+            .get("restoreId")
+            .and_then(Value::as_str)
+            .ok_or("restore_preview_required")?;
+        if self
+            .restore
+            .as_ref()
+            .is_none_or(|prepared| prepared.token != token)
+        {
+            return Err("restore_preview_required");
+        }
+        self.invalidate(true)?;
+        let prepared = self.restore.take().ok_or("restore_preview_required")?;
+        let (new_id, durability_warning) = commit(&self.root, prepared, &self.vault_id)?;
+        if new_id != self.vault_id {
+            self.sharing = false;
+            self.code = None;
+            self.authorization_error = None;
+            self.access_reset = true;
+            self.vault_id = new_id;
+        }
+        let mut status = self.status();
+        status["restartRequired"] = json!(true);
+        status["durabilityWarning"] = json!(durability_warning);
+        Ok(status)
+    }
+
     pub(crate) fn control(&mut self, request: &Value) -> Result<Value, &'static str> {
         let action = request
             .get("action")
@@ -468,30 +504,7 @@ impl ProductHost {
                 cancelled?;
             }
             "restore_commit" => {
-                let token = request
-                    .get("restoreId")
-                    .and_then(Value::as_str)
-                    .ok_or("restore_preview_required")?;
-                if self
-                    .restore
-                    .as_ref()
-                    .is_none_or(|prepared| prepared.token != token)
-                {
-                    return Err("restore_preview_required");
-                }
-                self.invalidate(true)?;
-                let prepared = self.restore.take().ok_or("restore_preview_required")?;
-                let new_id = credential_backup::commit(&self.root, prepared, &self.vault_id)?;
-                if new_id != self.vault_id {
-                    self.sharing = false;
-                    self.code = None;
-                    self.authorization_error = None;
-                    self.access_reset = true;
-                    self.vault_id = new_id;
-                }
-                let mut status = self.status();
-                status["restartRequired"] = json!(true);
-                return Ok(status);
+                return self.commit_restore(request, credential_backup::commit);
             }
             "change_password" => {
                 self.store()?;

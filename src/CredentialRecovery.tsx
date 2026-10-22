@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Button, Modal } from "./UiPrimitives";
-import { credentialError } from "./credentialTypes";
+import { credentialDurabilityNotice, credentialError } from "./credentialTypes";
 import type { CredentialRestorePreview, CredentialStatus, CredentialTransport } from "./credentialTypes";
 
 export function CredentialRecovery({ transport, language, demo, onClose, onStatus, onMessage }: {
@@ -59,9 +59,11 @@ export function CredentialRecovery({ transport, language, demo, onClose, onStatu
       if (!active.current) return;
       finished.current = true;
       onStatus(result);
-      onMessage(result.restartRequired
+      let notice = result.restartRequired
         ? (zh ? "备份已恢复，但凭据服务未能重启。请重新打开软件，再使用备份的主密码解锁。" : "The backup was restored, but the credential service could not restart. Reopen the app and unlock with the backup's master password.")
-        : (zh ? "恢复完成，凭据库保持锁定。请使用备份的主密码解锁。" : "Restored. The vault remains locked; unlock it with the backup's master password."));
+        : (zh ? "恢复完成，凭据库保持锁定。请使用备份的主密码解锁。" : "Restored. The vault remains locked; unlock it with the backup's master password.");
+      if (result.durabilityWarning) notice += credentialDurabilityNotice(zh);
+      onMessage(notice);
       onClose();
     } catch (failure) { if (active.current) setError(credentialError(failure, language)); }
     finally { if (active.current) setPending(false); }

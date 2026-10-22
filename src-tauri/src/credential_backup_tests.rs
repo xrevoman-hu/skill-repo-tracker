@@ -55,7 +55,7 @@ fn standalone_backup_roundtrip_restores_original_bytes_and_identity_without_devi
     assert_eq!(prepared.summary["replacesExisting"], false);
     assert_eq!(
         commit(&destination, prepared, "empty-local-identity").unwrap(),
-        ID
+        (ID.to_owned(), false)
     );
     assert!(!bool_setting(&destination, "sharing.json").unwrap());
     assert!(bool_setting(&destination, "access-reset.json").unwrap());
@@ -346,4 +346,97 @@ fn backup_failure_before_publication_attempts_both_cleanups_and_preserves_timest
     assert!(observed.contains(&CompletionStep::DeliveryCleanup));
     assert!(observed.contains(&CompletionStep::PendingCleanup));
     assert!(!current.join("backup.pending.db").exists());
+}
+
+#[test]
+fn restore_sync_failure_before_commit_restores_previous_database_identity_and_device_state() {
+    let parent = tempfile::tempdir().unwrap();
+    let source = root(
+        parent.path(),
+        "source-sync-failure",
+        "synthetic-source-vault",
+    );
+    let (source_store, _, _) = populate(&source, "synthetic-source-vault");
+    let archive = parent
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("sync-failure.srtvault");
+    create(&source, &source_store, PASSWORD, &archive).unwrap();
+    let current = root(parent.path(), "current-sync-failure", ID);
+    let (current_store, old_record, old_bytes) = populate(&current, ID);
+    drop(current_store);
+    write_private(&current, "sharing.json", &json!(true)).unwrap();
+    let before = digest(&current.join("vault.db")).unwrap();
+    let prepared = preview(&current, &archive, PASSWORD, ID).unwrap();
+    let outcome = commit_with_sync(&current, prepared, ID, |root| {
+        assert!(root.join("recovery.json").exists());
+        Err("vault_backup_io_failed")
+    });
+    assert_eq!(outcome, Err("vault_backup_io_failed"));
+    assert_eq!(digest(&current.join("vault.db")).unwrap(), before);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(current.join("vault.json")).unwrap()).unwrap()
+            ["vaultId"],
+        ID
+    );
+    assert!(bool_setting(&current, "sharing.json").unwrap());
+    assert!(!bool_setting(&current, "access-reset.json").unwrap());
+    assert_eq!(
+        VaultStore::unlock(&current.join("vault.db"), PASSWORD, ID)
+            .unwrap()
+            .asset_named(&old_record, None)
+            .unwrap()
+            .3,
+        old_bytes
+    );
+}
+
+#[test]
+fn restore_sync_failure_after_commit_is_warning_and_keeps_the_restored_identity() {
+    let parent = tempfile::tempdir().unwrap();
+    let new_id = "synthetic-restored-vault";
+    let source = root(parent.path(), "source-committed", new_id);
+    let (source_store, new_record, new_bytes) = populate(&source, new_id);
+    let archive = parent
+        .path()
+        .canonicalize()
+        .unwrap()
+        .join("committed.srtvault");
+    create(&source, &source_store, PASSWORD, &archive).unwrap();
+    let current = root(parent.path(), "current-committed", ID);
+    let (current_store, _, _) = populate(&current, ID);
+    drop(current_store);
+    write_private(&current, "sharing.json", &json!(true)).unwrap();
+    let prepared = preview(&current, &archive, PASSWORD, ID).unwrap();
+    let mut sync_calls = 0;
+    let outcome = commit_with_sync(&current, prepared, ID, |root| {
+        sync_calls += 1;
+        if sync_calls == 1 {
+            assert!(root.join("recovery.json").exists());
+            sync_directory(root)
+        } else {
+            assert!(!root.join("recovery.json").exists());
+            Err("vault_backup_io_failed")
+        }
+    });
+    assert_eq!(sync_calls, 2);
+    assert!(!current.join("recovery.json").exists());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(current.join("vault.json")).unwrap()).unwrap()
+            ["vaultId"],
+        new_id
+    );
+    assert!(!bool_setting(&current, "sharing.json").unwrap());
+    assert!(bool_setting(&current, "access-reset.json").unwrap());
+    assert!(VaultStore::unlock(&current.join("vault.db"), PASSWORD, ID).is_err());
+    assert_eq!(
+        VaultStore::unlock(&current.join("vault.db"), PASSWORD, new_id)
+            .unwrap()
+            .asset_named(&new_record, None)
+            .unwrap()
+            .3,
+        new_bytes
+    );
+    assert_eq!(outcome, Ok((new_id.to_owned(), true)));
 }

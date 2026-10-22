@@ -411,14 +411,18 @@ impl CredentialClient {
             && result.get("restartRequired") == Some(&Value::Bool(true))
         {
             *slot = None;
+            let durability_warning = result.get("durabilityWarning") == Some(&Value::Bool(true));
             // The disk switch has committed. A restart failure must not claim
             // that restoration failed or that the original vault is unchanged.
             match start(self).and_then(|mut next| {
                 let status = next.exchange(&json!({"action":"status"}))?;
                 Ok((next, status))
             }) {
-                Ok((next, status)) => {
+                Ok((next, mut status)) => {
                     *slot = Some(next);
+                    if durability_warning {
+                        status["durabilityWarning"] = json!(true);
+                    }
                     result = status;
                 }
                 Err(_) => {

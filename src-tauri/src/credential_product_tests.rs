@@ -675,3 +675,76 @@ fn lease_capacity_rejection_keeps_reading_and_releasing_existing_files_available
     host.control(&json!({"action":"lock"})).unwrap();
     assert_eq!(host.leases.pending_count(), 0);
 }
+
+#[test]
+fn committed_restore_adopts_new_identity_revokes_old_access_and_reports_sync_warning() {
+    for warning in [false, true] {
+        let (_source_directory, mut source) = setup();
+        create(&mut source);
+        let restored_record = save(&mut source);
+        let new_id = source.vault_id.clone();
+        let external = tempfile::tempdir().unwrap();
+        let backup = external
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join("restore.srtvault");
+        source
+            .control(&json!({"action":"backup_create","path":backup,"password":PASSWORD}))
+            .unwrap();
+        let (_current_directory, mut host) = setup();
+        create(&mut host);
+        let old_record = save(&mut host);
+        let old_id = host.vault_id.clone();
+        host.control(&json!({"action":"share","enabled":true}))
+            .unwrap();
+        let old_code = host.code.clone().unwrap();
+        let summary = host
+            .control(&json!({"action":"restore_preview","path":backup,"password":PASSWORD}))
+            .unwrap();
+        let request = json!({"action":"restore_commit","restoreId":summary["restoreId"]});
+        let status = if warning {
+            host.commit_restore(&request, |root, prepared, id| {
+                credential_backup::commit_with_sync(root, prepared, id, |root| {
+                    if root.join("recovery.json").exists() {
+                        fs::File::open(root)
+                            .and_then(|file| file.sync_all())
+                            .map_err(|_| "vault_backup_io_failed")
+                    } else {
+                        Err("vault_backup_io_failed")
+                    }
+                })
+            })
+            .unwrap()
+        } else {
+            host.control(&request).unwrap()
+        };
+        assert_eq!(status["durabilityWarning"], warning);
+        assert_eq!(status["restartRequired"], true);
+        assert_eq!(status["locked"], true);
+        assert_eq!(status["vaultId"], new_id);
+        assert_eq!(status["sharing"], false);
+        assert!(host.code.is_none());
+        assert!(host.access_reset);
+        assert_eq!(prepare_root(&host.root, false).unwrap(), new_id);
+        let mut old_request = json!({"auth":old_code,"name":"srt_credentials_read_fields","arguments":{"vaultId":old_id,"recordId":old_record["recordId"],"fields":["password"]}});
+        assert_eq!(host.request(&old_request).unwrap_err(), "sharing_disabled");
+        host.control(&json!({"action":"unlock","password":PASSWORD}))
+            .unwrap();
+        host.control(&json!({"action":"share","enabled":true}))
+            .unwrap();
+        assert_ne!(host.code.as_deref(), Some(old_code.as_str()));
+        assert_eq!(
+            host.request(&old_request).unwrap_err(),
+            "authorization_rejected"
+        );
+        old_request["auth"] = json!(host.code);
+        assert_eq!(host.request(&old_request).unwrap_err(), "vault_id_mismatch");
+        old_request["arguments"]["vaultId"] = json!(new_id);
+        old_request["arguments"]["recordId"] = restored_record["recordId"].clone();
+        assert_eq!(
+            host.request(&old_request).unwrap()["fields"]["password"],
+            " exact synthetic value \n"
+        );
+    }
+}

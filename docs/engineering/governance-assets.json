@@ -1003,7 +1003,7 @@
       "kind": "decision",
       "path": "docs/adr/0013-credential-files-recovery-and-guides.md",
       "status": "active",
-      "checksum": "sha256:8983e00c19280af731ddd09af4d39b3a4c118a910b4d14513d90efc451370ccc",
+      "checksum": "sha256:8700b650b91c7b84e3ea54aebde4f582bbb0d036373ea6cc07f2a74bdc2dcf5e",
       "principles": [1, 2, 3, 4, 5, 7],
       "reviewOnChange": [
         "src/CredentialMaintenance.tsx", "src/CredentialRecovery.tsx", "src/CredentialAgentGuide.tsx",

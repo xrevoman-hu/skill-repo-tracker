@@ -334,14 +334,18 @@ fn restore_cancel_invalid_ticket_changed_file_and_picker_error_do_not_load_a_bac
 
 #[test]
 fn restored_commit_is_reported_as_committed_even_if_locked_host_restart_fails() {
-    for restart in [true, false] {
+    for (restart, durability_warning) in
+        [(true, true), (false, true), (true, false), (false, false)]
+    {
         let (_dir, client, _clipboard, _destination) = cleanup_client();
         let input = json!({"action":"restore_commit","confirm":true});
         connect(
             &client,
             vec![(
                 input.clone(),
-                ok(json!({"restartRequired":true,"locked":true,"sharing":false})),
+                ok(
+                    json!({"restartRequired":true,"locked":true,"sharing":false,"durabilityWarning":durability_warning}),
+                ),
             )],
         );
         let request = request(input);
@@ -360,6 +364,10 @@ fn restored_commit_is_reported_as_committed_even_if_locked_host_restart_fails() 
             .unwrap();
         assert_eq!(result["locked"], true);
         assert_eq!(result["sharing"], false);
+        assert_eq!(
+            result["durabilityWarning"].as_bool().unwrap_or(false),
+            durability_warning
+        );
         if restart {
             assert_eq!(result["vaultId"], "new-identity");
             assert!(result.get("bridgeCommand").is_some());

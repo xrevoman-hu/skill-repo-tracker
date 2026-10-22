@@ -205,7 +205,36 @@ describe("encrypted backup recovery boundaries", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     expect(onStatus).toHaveBeenLastCalledWith(expect.objectContaining({ locked: true, restartRequired: true }));
     expect(onMessage).toHaveBeenCalledWith(expect.stringContaining("backup was restored, but the credential service could not restart"));
+    expect(onMessage.mock.calls[0][0]).not.toContain("Disk sync");
     unmount();
+    expect(calls.some((request) => request.action === "restore_cancel")).toBe(false);
+  });
+
+  it.each([
+    { language: "zh", restartRequired: false, completed: "恢复完成，凭据库保持锁定", warning: "磁盘同步未确认，请保留备份并核对数据" },
+    { language: "zh", restartRequired: true, completed: "备份已恢复，但凭据服务未能重启", warning: "磁盘同步未确认，请保留备份并核对数据" },
+    { language: "en", restartRequired: false, completed: "Restored. The vault remains locked", warning: "Disk sync is unconfirmed. Keep the backup and check the data" },
+    { language: "en", restartRequired: true, completed: "backup was restored, but the credential service could not restart", warning: "Disk sync is unconfirmed. Keep the backup and check the data" },
+  ])("keeps a completed restore successful with an independent sync warning ($language, restart=$restartRequired)", async ({ language, restartRequired, completed, warning }) => {
+    const user = userEvent.setup();
+    const result = state({ restartRequired, durabilityWarning: true });
+    const { transport, calls } = transportFor((request) => {
+      if (request.action === "restore_pick") return { selectionId: "synthetic-selection" };
+      if (request.action === "restore_preview") return preview;
+      if (request.action === "restore_commit") return result;
+      return undefined;
+    });
+    const { onMessage, onStatus, onClose, unmount } = recovery(transport, language);
+    await chooseAndVerify(user, language);
+    await user.click(await screen.findByRole("button", { name: language === "zh" ? "确认恢复" : "Confirm restore" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onStatus).toHaveBeenLastCalledWith(result);
+    expect(onMessage).toHaveBeenCalledOnce();
+    expect(onMessage.mock.calls[0][0]).toContain(completed);
+    expect(onMessage.mock.calls[0][0]).toContain(warning);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    unmount();
+    expect(calls.filter((request) => request.action === "restore_commit")).toHaveLength(1);
     expect(calls.some((request) => request.action === "restore_cancel")).toBe(false);
   });
 
@@ -302,7 +331,20 @@ describe("password and backup maintenance feedback", () => {
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     expect(onStatus).not.toHaveBeenCalled();
     expect(onMessage).toHaveBeenCalledWith(expect.stringContaining("Encrypted backup created"));
-    for (const notice of ["backup time could not be recorded", "Disk synchronization was not confirmed", "Encrypted staging cleanup is incomplete", "Status refresh failed"]) expect(onMessage.mock.calls[0][0]).toContain(notice);
+    for (const notice of ["backup time could not be recorded", "Disk sync is unconfirmed. Keep the backup and check the data", "Encrypted staging cleanup is incomplete", "Status refresh failed"]) expect(onMessage.mock.calls[0][0]).toContain(notice);
+  });
+
+  it("reports a completed backup with the shared sync warning in Chinese", async () => {
+    const user = userEvent.setup();
+    const { transport } = transportFor((request) => request.action === "backup_create" ? { created: true, warning: "backup_sync_unconfirmed" } : undefined);
+    const { onMessage, onStatus, onClose } = maintenance(transport, "backup");
+    await user.type(screen.getByLabelText("主密码", { exact: true }), master);
+    await user.click(screen.getByRole("button", { name: "选择位置并备份" }));
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
+    expect(onMessage.mock.calls[0][0]).toContain("加密备份已创建");
+    expect(onMessage.mock.calls[0][0]).toContain("磁盘同步未确认，请保留备份并核对数据");
+    expect(onStatus).toHaveBeenCalledWith(expect.objectContaining({ locked: true }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("labels a simulated backup explicitly and preserves a singular warning", async () => {

@@ -28,6 +28,7 @@ export type CredentialStatus = {
   cleanupRemaining?: number;
   lastBackupAt?: string | null;
   restartRequired?: boolean;
+  durabilityWarning?: boolean;
   clipboard?: { owned: boolean; error: string | null };
   limits?: { passwordMinChars: number; passwordMaxBytes: number; secretMaxBytes: number; fileMaxBytes: number; fileTotalMaxBytes: number; maxRecords: number };
 };
@@ -103,6 +104,10 @@ export type CredentialResults = {
 };
 export interface CredentialTransport {
   request<R extends CredentialRequest>(request: R): Promise<CredentialResults[R["action"]]>;
+}
+
+export function credentialDurabilityNotice(zh: boolean): string {
+  return zh ? " 磁盘同步未确认，请保留备份并核对数据。" : " Disk sync is unconfirmed. Keep the backup and check the data.";
 }
 
 export function newCredentialSessionId(): string {

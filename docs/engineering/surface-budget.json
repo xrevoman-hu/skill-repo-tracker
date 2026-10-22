@@ -2648,8 +2648,14 @@
       },
       {
         "id": "src-tauri/src/credential_backup.rs:fs::rename:commit#1",
+        "status": "retiring",
+        "retirementReason": "The same controlled rename now lives in commit_with_sync for restore fault injection.",
+        "purpose": "Moved unchanged to commit_with_sync so restore completion failures can be verified through the production path (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:fs::rename:commit_with_sync#1",
         "status": "active",
-        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+        "purpose": "Atomically publish the validated restore before the explicit journal-removal commit point (ADR 0013)."
       },
       {
         "id": "src-tauri/src/credential_backup.rs:fs::rename:recover#1",
@@ -2713,8 +2719,14 @@
       },
       {
         "id": "src-tauri/src/credential_backup.rs:Path::exists:commit#1",
+        "status": "retiring",
+        "retirementReason": "The same current-vault check now lives in commit_with_sync for restore fault injection.",
+        "purpose": "Moved unchanged to commit_with_sync for restore completion fault verification (ADR 0013)."
+      },
+      {
+        "id": "src-tauri/src/credential_backup.rs:Path::exists:commit_with_sync#1",
         "status": "active",
-        "purpose": "Create and validate bounded SQLCipher snapshots, recover an interrupted switch, and serialize the single credential host (ADR 0013)."
+        "purpose": "Record whether the current vault must be recoverable before beginning replacement (ADR 0013)."
       },
       {
         "id": "src-tauri/src/credential_backup.rs:Path::exists:lock_root#1",

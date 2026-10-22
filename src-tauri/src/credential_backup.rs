@@ -406,13 +406,22 @@ fn write_identity(root: &Path, vault_id: &str) -> Result<(), &'static str> {
     )
 }
 
-/// A durable recovery descriptor is written before the first rename. If any
-/// subsequent step fails or the process dies, startup restores the old vault.
+/// The recovery descriptor protects the switch until its removal commits it.
+/// Earlier errors roll back; a later sync failure warns without undoing a commit.
 pub(crate) fn commit(
     root: &Path,
     prepared: PreparedRestore,
     current_id: &str,
-) -> Result<String, &'static str> {
+) -> Result<(String, bool), &'static str> {
+    commit_with_sync(root, prepared, current_id, sync_directory)
+}
+
+pub(crate) fn commit_with_sync(
+    root: &Path,
+    prepared: PreparedRestore,
+    current_id: &str,
+    mut sync: impl FnMut(&Path) -> Result<(), &'static str>,
+) -> Result<(String, bool), &'static str> {
     let pending = root.join(STAGING);
     if digest(&pending)? != prepared.digest {
         return Err("backup_preview_changed");
@@ -437,20 +446,23 @@ pub(crate) fn commit(
     )?;
     let outcome = (|| {
         std::fs::rename(&pending, root.join("vault.db")).map_err(fail)?;
-        sync_directory(root)?;
+        sync(root)?;
         write_identity(root, &prepared.vault_id)?;
         if prepared.vault_id != current_id {
             write_private(root, "sharing.json", &json!(false))?;
             write_private(root, "access-reset.json", &json!(true))?;
         }
         remove_private(&root.join("recovery.json"))?;
-        sync_directory(root)?;
-        Ok(prepared.vault_id)
+        Ok(())
     })();
-    if outcome.is_err() {
+    if let Err(error) = outcome {
         recover(root)?;
+        return Err(error);
     }
-    outcome
+    // The journal no longer exists, so recovery can no longer roll back. The
+    // caller must adopt the new identity even if durable deletion is uncertain.
+    let durability_warning = sync(root).is_err();
+    Ok((prepared.vault_id, durability_warning))
 }
 
 pub(crate) fn change_password(

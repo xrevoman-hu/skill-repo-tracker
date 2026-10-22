@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button, Modal } from "./UiPrimitives";
-import { credentialError } from "./credentialTypes";
+import { credentialDurabilityNotice, credentialError } from "./credentialTypes";
 import type { CredentialStatus, CredentialTransport } from "./credentialTypes";
 
 export function CredentialMaintenance({ mode, transport, language, demo, onClose, onStatus, onMessage }: {
@@ -31,7 +31,7 @@ export function CredentialMaintenance({ mode, transport, language, demo, onClose
         const warnings = result.warnings ?? (result.warning ? [result.warning] : []);
         let notice = result.simulated ? (zh ? "仅演示备份，未写入真实文件。" : "Backup simulated; no real file was written.") : (zh ? "加密备份已创建。恢复时需要此备份创建时的主密码。" : "Encrypted backup created. Restoring it requires its original master password.");
         if (warnings.includes("backup_metadata_failed")) notice += zh ? " 备份时间未能登记。" : " The backup time could not be recorded.";
-        if (warnings.includes("backup_sync_unconfirmed")) notice += zh ? " 磁盘同步未能确认，请保留原库并核对备份。" : " Disk synchronization was not confirmed; keep the original vault and verify the backup.";
+        if (warnings.includes("backup_sync_unconfirmed")) notice += credentialDurabilityNotice(zh);
         if (warnings.includes("backup_cleanup_failed")) notice += zh ? " 加密暂存清理未完成。" : " Encrypted staging cleanup is incomplete.";
         try { onStatus(await transport.request({ action: "status" })); }
         catch { notice += zh ? " 状态刷新失败，请重新打开凭据页核对。" : " Status refresh failed; reopen the vault page to check."; }
