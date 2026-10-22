@@ -6,7 +6,7 @@
 
 **[下载 v1.3.0 · Apple Silicon DMG](https://github.com/xrevoman-hu/skill-repo-tracker/releases/download/v1.3.0/Skill.Repo.Tracker_1.3.0_aarch64.dmg)** · [版本说明 / Release notes](docs/releases/v1.3.0.md) · [贡献指南 / Contributing](CONTRIBUTING.md)
 
-`1.4.0` 凭据库版本准备中，候选标识为 `v1.4.0-rc.1`；尚未替代上方正式下载。Credential vault version `1.4.0` is in preparation, with candidate identifier `v1.4.0-rc.1`; the release download above remains unchanged. [准备中的版本说明 / Planned release notes](docs/releases/v1.4.0.md) · [凭据库使用指南 / Credential vault guide](docs/credential-vault.md)
+`1.4.0` 凭据库版本准备中，当前修订候选标识为 `v1.4.0-rc.2`；尚未替代上方正式下载。Credential vault version `1.4.0` is in preparation, with revision candidate identifier `v1.4.0-rc.2`; the release download above remains unchanged. [准备中的版本说明 / Planned release notes](docs/releases/v1.4.0.md) · [凭据库使用指南 / Credential vault guide](docs/credential-vault.md)
 
 macOS 12+ · Apple Silicon（arm64）。安装包为 **ad-hoc 签名测试分发，不是 Developer ID 签名，未经过 Apple notarization**；首次打开方式见下文。The installer is ad-hoc signed, not Developer ID signed, and not Apple notarized; first-launch instructions are below.
 
