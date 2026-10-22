@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 
 import { isRustProductionSourcePath } from "./source-classification.mjs";
+import { assertCredentialExplicitAuthorization } from "./credential-runtime-policy.mjs";
 
 const KEYCHAIN_SURFACE = [
   "service=Skill Repo Tracker;account=github-account-token:github:<slug>",
@@ -179,7 +180,7 @@ function productionRustFiles(root) {
 
 function singleFunctionBody(structural, literal, name) {
   const candidates = [
-    ...structural.matchAll(new RegExp(`\\bfn\\s+${name}\\s*\\(`, "g")),
+    ...structural.matchAll(new RegExp(`\\bfn\\s+${name}\\s*(?:<\\s*[A-Za-z_][A-Za-z0-9_]*\\s*>)?\\s*\\(`, "g")),
   ];
   if (candidates.length !== 1) {
     throw new Error(`expected exactly one canonical Keychain function ${name}`);
@@ -313,9 +314,86 @@ function assertCredentialAccessStore(structural, literal) {
     throw new Error("credential Keychain must use one validated account entry seam");
   }
   for (const [, type, member] of structural.matchAll(/\bkeyring\s*::\s*(\w+)(?:\s*::\s*(\w+))?/g)) {
-    if (!(type === "Entry" && (!member || member === "new")) && !(type === "Error" && member === "NoEntry")) {
+    if (!(type === "Entry" && (!member || member === "new")) &&
+        !(type === "Error" && (!member || ["NoEntry", "NoStorageAccess", "PlatformFailure"].includes(member)))) {
       throw new Error("credential Keychain contains an unreviewed API");
     }
+  }
+  assertCredentialInteractionPolicy(structural, literal);
+}
+
+function assertCredentialInteractionPolicy(structural, literal) {
+  const serial = 'let_serial=INTERACTION.lock().map_err(|_|"credential_store_unavailable")?;';
+  const noUi = 'let_no_ui=security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()' +
+    '.map_err(|_|"credential_store_unavailable")?;';
+  const bodies = {
+    noninteractive: `${serial}${noUi}operation()`,
+    load: "noninteractive(||load_existing(vault_id))",
+    establish: "noninteractive(||establish_without_ui(vault_id,reset))",
+    remove: "noninteractive(||remove_without_ui(vault_id))",
+    authorize_existing: `${serial}letprevious=load_existing(vault_id)?.ok_or("agent_access_missing")?;` +
+      `${noUi}letcurrent=load_existing(vault_id)?.ok_or("agent_access_missing")?;` +
+      'if!equal_material(&previous,&current){returnErr("credential_store_changed");}Ok(current)',
+    load_existing: `match entry(vault_id)?.get_password() {
+      Ok(value) if value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()) => { Ok(Some(value)) }
+      Ok(_) => Err("invalid_access_material"),
+      Err(keyring::Error::NoEntry) => Ok(None),
+      Err(error) => Err(storage_error(error)),
+    }`,
+    establish_without_ui: `let previous = load_existing(vault_id)?;
+      if !reset { if let Some(value) = previous { return Ok(value); } }
+      let value = random_id()?;
+      entry(vault_id)?.set_password(&value).map_err(storage_error)?;
+      if load_existing(vault_id)?.as_deref() != Some(value.as_str()) { return Err("credential_store_write_not_verified"); }
+      Ok(value)`,
+    remove_without_ui: `match entry(vault_id)?.delete_credential() {
+      Ok(()) | Err(keyring::Error::NoEntry) => {}
+      Err(error) => return Err(storage_error(error)),
+    }
+    if load_existing(vault_id)?.is_some() { return Err("credential_store_delete_not_verified"); }
+    Ok(())`,
+    storage_error: `match error {
+      keyring::Error::NoStorageAccess(error) | keyring::Error::PlatformFailure(error) => {
+        match error.downcast_ref::<security_framework::base::Error>().map(|error| error.code()) {
+          Some(-25308 | -25315) => "credential_authorization_required",
+          Some(-25293) => "credential_authorization_denied",
+          Some(-128) => "credential_authorization_cancelled",
+          _ => "credential_store_unavailable",
+        }
+      }
+      _ => "credential_store_unavailable",
+    }`,
+  };
+  for (const [name, expectedBody] of Object.entries(bodies)) {
+    if (singleFunctionBody(structural, literal, name) !== expectedBody.replace(/\s+/g, "")) {
+      throw new Error(`credential Keychain interaction contract changed: ${name}`);
+    }
+  }
+  const mutex = structural.replace(/\s+/g, "");
+  if (!mutex.includes("staticINTERACTION:std::sync::Mutex<()>=std::sync::Mutex::new(());")) {
+    throw new Error("credential Keychain interaction requires the process-local serial mutex");
+  }
+  // Counts reject extra helper calls outside the reviewed bodies, including indirect aliases.
+  for (const [name, count] of Object.entries({
+    INTERACTION: 3, noninteractive: 4, load_existing: 7,
+    establish_without_ui: 2, remove_without_ui: 2, entry: 4,
+    get_password: 1, set_password: 1, delete_credential: 1,
+  })) {
+    if ([...structural.matchAll(new RegExp(`\\b${name}\\b`, "g"))].length !== count) {
+      throw new Error(`credential Keychain interaction helper has an unreviewed reference: ${name}`);
+    }
+  }
+  for (const name of ["noninteractive", "load_existing", "establish_without_ui", "remove_without_ui", "entry"]) {
+    if (new RegExp(`\\bpub(?:\\s*\\([^)]*\\))?\\s+fn\\s+${name}\\b`).test(structural)) {
+      throw new Error("credential Keychain interaction helpers must remain private");
+    }
+  }
+  const withoutReviewedApi = structural
+    .replace(/\bsecurity_framework\s*::\s*os\s*::\s*macos\s*::\s*keychain\s*::\s*SecKeychain\s*::\s*disable_user_interaction\s*\(\s*\)/g, "")
+    .replace(/\.\s*downcast_ref\s*::\s*<\s*security_framework\s*::\s*base\s*::\s*Error\s*>\s*\(\s*\)/g, "");
+  if (/\b(?:security_framework|SecKeychain)\b/.test(withoutReviewedApi) ||
+      [...structural.matchAll(/\bsecurity_framework\b/g)].length !== 3) {
+    throw new Error("credential Keychain security-framework API, alias or reference is not reviewed");
   }
 }
 
@@ -329,6 +407,11 @@ export function discoverKeychainSurface(root) {
     if (relative === "src-tauri/src/lib.rs") libViews = views;
     if (relative === "src-tauri/src/adapters.rs") adapterViews = views;
     if (relative === "src-tauri/src/credential_auth.rs") credentialViews = views;
+    if (/\b(?:security_framework|SecKeychain)\b/.test(views.structural) && relative !== "src-tauri/src/credential_auth.rs") {
+      throw new Error(`${relative} security-framework is restricted to the credential Keychain interaction adapter`);
+    }
+    assertCredentialExplicitAuthorization(relative, views.structural,
+      (name) => singleFunctionBody(views.structural, views.literal, name));
     if (/\bkeyring\s*::/.test(views.structural) && !["src-tauri/src/adapters.rs", "src-tauri/src/credential_auth.rs"].includes(relative)) {
       throw new Error(
         `${relative} keyring references are restricted to src-tauri/src/adapters.rs`,
@@ -337,7 +420,7 @@ export function discoverKeychainSurface(root) {
   }
   if (!libViews || !adapterViews) throw new Error("canonical Keychain source files are missing");
   const credentialSurface = [];
-  if (credentialViews && /\bkeyring\s*::/.test(credentialViews.structural)) {
+  if (credentialViews && /\b(?:keyring|security_framework)\s*::/.test(credentialViews.structural)) {
     assertCredentialAccessStore(credentialViews.structural, credentialViews.literal);
     credentialSurface.push("service=Skill Repo Tracker E0 Credential Access;account=vault:<id>");
   }

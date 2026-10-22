@@ -25,6 +25,82 @@ fn request(name: &str, arguments: Value) -> Value {
 }
 
 #[test]
+fn unavailable_keychain_keeps_host_operable_and_existing_sharing_intent() {
+    let (_directory, original) = fixture();
+    original.persist_sharing(true).unwrap();
+    let root = original.root.clone();
+    drop(original);
+    for access in [
+        Err("credential_authorization_required"),
+        Err("credential_store_unavailable"),
+        Ok(None),
+    ] {
+        let expected = access
+            .as_ref()
+            .err()
+            .copied()
+            .unwrap_or("agent_access_missing");
+        let mut host = Host::open_with_access(&root, "e0-unit-vault", |_| access).unwrap();
+        let status = host.control(&json!({"action":"status"})).unwrap();
+        assert_eq!(status["locked"], true);
+        assert_eq!(status["sharing"], false);
+        assert_eq!(status["sharingRequested"], true);
+        assert_eq!(status["authorizationError"], expected);
+        assert_eq!(fs::read(root.join("sharing.json")).unwrap(), b"true");
+        assert_eq!(
+            host.request(&request("srt_credentials_search", json!({})))
+                .unwrap_err(),
+            expected
+        );
+        assert_eq!(
+            host.authorize_with(|_| panic!("locked must not prompt"))
+                .unwrap_err(),
+            "vault_locked"
+        );
+        host.control(&json!({"action":"shutdown"})).unwrap();
+    }
+}
+
+#[test]
+fn explicit_reauthorization_requires_unlock_and_preserves_existing_access_material() {
+    let (_directory, mut host) = fixture();
+    let lease = host
+        .leases
+        .deliver("ssh-001", 1, b"synthetic leased bytes")
+        .unwrap();
+    let leased_path = PathBuf::from(lease["path"].as_str().unwrap());
+    let result = host.authorize_with(|_| Err("credential_authorization_cancelled"));
+    assert_eq!(result.unwrap_err(), "credential_authorization_cancelled");
+    assert!(!leased_path.exists());
+    assert!(host.code.is_none());
+    assert_eq!(
+        host.request(&request("srt_credentials_search", json!({})))
+            .unwrap_err(),
+        "credential_authorization_cancelled"
+    );
+    host.authorize_with(|id| {
+        assert_eq!(id, "e0-unit-vault");
+        Ok("a".repeat(64))
+    })
+    .unwrap();
+    assert!(host
+        .request(&request("srt_credentials_search", json!({})))
+        .is_ok());
+    host.control(&json!({"action":"share","enabled":false}))
+        .unwrap();
+    host.authorize_with(|_| Ok("a".repeat(64))).unwrap();
+    let status = host.control(&json!({"action":"status"})).unwrap();
+    assert_eq!(status["sharingRequested"], false);
+    assert_eq!(status["sharing"], false);
+    assert_eq!(fs::read(host.root.join("sharing.json")).unwrap(), b"false");
+    assert_eq!(
+        host.request(&request("srt_credentials_search", json!({})))
+            .unwrap_err(),
+        "sharing_disabled"
+    );
+}
+
+#[test]
 fn credential_mode_errors_never_fall_through_to_the_ordinary_app() {
     let args = |items: &[&str]| items.iter().map(|item| OsString::from(*item)).collect();
     assert!(credential_arguments(args(&[])).is_none());

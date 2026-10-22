@@ -85,6 +85,38 @@ test("credential Keychain namespace cannot widen or acquire an additional Entry 
   });
 });
 
+test("interactive credential authorization is only an unlocked explicit local control action", () => {
+  fixture("srt-credential-explicit-auth-", (root) => {
+    const target = path.join(root, "src-tauri/src/credential_runtime.rs");
+    const baseline = readFileSync(new URL("../../src-tauri/src/credential_runtime.rs", import.meta.url), "utf8");
+    writeFileSync(target, baseline);
+    assert.doesNotThrow(() => discoverKeychainSurface(root));
+    const inAuthorization = (before, after) => {
+      const start = baseline.indexOf("fn authorize_with(");
+      assert.ok(start > 0);
+      return baseline.slice(0, start) + baseline.slice(start).replace(before, after);
+    };
+    for (const mutation of [
+      baseline.replace('"authorize_access" =>', '"status" =>'),
+      baseline.replace("self.authorize_with(credential_auth::authorize_existing)?;", "credential_auth::authorize_existing(&self.vault_id)?;"),
+      inAuthorization('self.store.as_ref().ok_or("vault_locked")?;', ""),
+      inAuthorization("self.code = None;", "self.sharing = true; self.code = None;"),
+      inAuthorization("self.code = None;", "self.persist_sharing(true)?; self.code = None;"),
+      inAuthorization("self.invalidate(false)?;", ""),
+      inAuthorization("self.authorization_error = Some(error);", "self.authorization_error = None;"),
+      `${baseline}\nfn mcp_request() { credential_auth::authorize_existing("vault"); }`,
+    ]) {
+      assert.notEqual(mutation, baseline);
+      writeFileSync(target, mutation);
+      assert.throws(() => discoverKeychainSurface(root), /credential Keychain interactive access/);
+    }
+    rmSync(target);
+    writeFileSync(path.join(root, "src-tauri/src/credential_mcp.rs"),
+      "fn request() { credential_auth::authorize_existing(\"vault\"); }");
+    assert.throws(() => discoverKeychainSurface(root), /credential Keychain interactive access/);
+  });
+});
+
 test("credential directories permit only mode 0700 at their exact owner functions", () => {
   fixture("srt-credential-directory-policy-", (root) => {
     const target = path.join(root, "src-tauri/src/credential_ipc.rs");

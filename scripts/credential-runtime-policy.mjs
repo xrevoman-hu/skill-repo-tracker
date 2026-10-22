@@ -31,3 +31,37 @@ export function credentialRuntimeInputAllowed(relative, functionName, name) {
   return (relative === "src-tauri/src/credential_runtime.rs" && functionName === "dispatch_from_env" && name === "args_os")
     || (relative === "src-tauri/src/credential_ipc.rs" && functionName === "verify_peer" && name === "current_exe");
 }
+
+// Only the local control action may request interactive access to existing material.
+// MCP requests, startup and bridge reconnects must never reach this operation.
+export function assertCredentialExplicitAuthorization(relative, structural, functionBody) {
+  const references = [...structural.matchAll(/\bauthorize_existing\b/g)];
+  if (relative === "src-tauri/src/credential_auth.rs") {
+    if (references.length !== 1 || !/\bfn\s+authorize_existing\s*\(/.test(structural)) {
+      throw new Error("credential Keychain interactive access must have one adapter definition");
+    }
+    return;
+  }
+  if (references.length === 0) return;
+  if (relative !== "src-tauri/src/credential_runtime.rs" || references.length !== 1) {
+    throw new Error("credential Keychain interactive access is restricted to the explicit local action");
+  }
+  const expectedAction = '"authorize_access"=>{self.authorize_with(credential_auth::authorize_existing)?;}';
+  const control = functionBody("control");
+  if (!control.includes(expectedAction) || [...structural.matchAll(/\.\s*authorize_with\s*\(/g)].length !== 1) {
+    throw new Error("credential Keychain interactive access requires the exact authorize_access action");
+  }
+  const expected = `
+    self.store.as_ref().ok_or("vault_locked")?;
+    self.code = None;
+    self.authorization_error = Some("credential_authorization_required");
+    self.invalidate(false)?;
+    match authorize(&self.vault_id) {
+      Ok(code) => { self.code = Some(code); self.authorization_error = None; Ok(()) }
+      Err(error) => { self.authorization_error = Some(error); Err(error) }
+    }
+  `.replace(/\s+/g, "");
+  if (functionBody("authorize_with") !== expected) {
+    throw new Error("credential Keychain interactive access must require unlock and invalidation while preserving sharing intent");
+  }
+}

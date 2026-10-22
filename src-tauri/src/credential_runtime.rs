@@ -120,6 +120,7 @@ pub(crate) struct Host {
     vault_id: String,
     store: Option<Store>,
     code: Option<String>,
+    authorization_error: Option<&'static str>,
     sharing: bool,
     generation: u64,
     leases: Leases,
@@ -130,29 +131,39 @@ pub(crate) struct Host {
 
 impl Host {
     pub(crate) fn open(root: &Path, vault_id: &str) -> Result<Self, &'static str> {
+        Self::open_with_access(root, vault_id, credential_auth::load)
+    }
+
+    fn open_with_access(
+        root: &Path,
+        vault_id: &str,
+        access: impl FnOnce(&str) -> Result<Option<String>, &'static str>,
+    ) -> Result<Self, &'static str> {
         prepare_root(root, vault_id)?;
         // Recover registered plaintext before Keychain access can fail or prompt.
         let leases = Leases::open(root)?;
-        let access = root.join("sharing.json");
-        let sharing = if access.exists() {
-            serde_json::from_slice::<bool>(&credential_ipc::read_private(&access, 8)?)
+        let sharing_path = root.join("sharing.json");
+        let sharing = if sharing_path.exists() {
+            serde_json::from_slice::<bool>(&credential_ipc::read_private(&sharing_path, 8)?)
                 .map_err(|_| "sharing_state_invalid")?
         } else {
             false
         };
-        let code = if sharing {
-            credential_auth::load(vault_id)?
+        let (code, authorization_error) = if sharing {
+            match access(vault_id) {
+                Ok(Some(code)) => (Some(code), None),
+                Ok(None) => (None, Some("agent_access_missing")),
+                Err(error) => (None, Some(error)),
+            }
         } else {
-            None
+            (None, None)
         };
-        if sharing && code.is_none() {
-            return Err("agent_access_missing");
-        }
         Ok(Self {
             root: root.to_owned(),
             vault_id: vault_id.to_owned(),
             store: None,
             code,
+            authorization_error,
             sharing,
             generation: 1,
             leases,
@@ -268,6 +279,9 @@ impl Host {
                 action == "create",
             )?,
             "lock" | "shutdown" => self.invalidate(true)?,
+            "authorize_access" => {
+                self.authorize_with(credential_auth::authorize_existing)?;
+            }
             "share" => {
                 let enabled = value
                     .get("enabled")
@@ -277,6 +291,7 @@ impl Host {
                     let code = credential_auth::establish(&self.vault_id, false)?;
                     self.persist_sharing(true)?;
                     self.code = Some(code);
+                    self.authorization_error = None;
                     self.sharing = true;
                 } else {
                     self.disable_sharing()?;
@@ -289,12 +304,14 @@ impl Host {
                 let code = credential_auth::establish(&self.vault_id, true)?;
                 self.persist_sharing(enabled)?;
                 self.code = Some(code);
+                self.authorization_error = None;
                 self.sharing = enabled;
             }
             "clear_authorization" => {
                 self.code = None;
                 self.disable_sharing()?;
                 credential_auth::remove(&self.vault_id)?;
+                self.authorization_error = None;
             }
             "fixture_file" => {
                 self.invalidate(false)?;
@@ -314,13 +331,43 @@ impl Host {
             }
             _ => return Err("unknown_control_action"),
         }
-        Ok(json!({"locked":self.store.is_none(),"sharing":self.sharing,
-            "generation":self.generation,"cleanupFailed":self.cleanup_failed}))
+        Ok(
+            json!({"locked":self.store.is_none(),"sharing":self.sharing && self.code.is_some(),
+            "sharingRequested":self.sharing,"authorizationError":self.authorization_error,
+            "generation":self.generation,"cleanupFailed":self.cleanup_failed}),
+        )
+    }
+
+    fn authorize_with(
+        &mut self,
+        authorize: impl FnOnce(&str) -> Result<String, &'static str>,
+    ) -> Result<(), &'static str> {
+        self.store.as_ref().ok_or("vault_locked")?;
+        // Keep this available after a failed reset or explicit sharing disable.
+        // Recovering Keychain access does not itself enable sharing.
+        // Reauthorization invalidates existing deliveries even if the OS denies it.
+        self.code = None;
+        self.authorization_error = Some("credential_authorization_required");
+        self.invalidate(false)?;
+        match authorize(&self.vault_id) {
+            Ok(code) => {
+                self.code = Some(code);
+                self.authorization_error = None;
+                Ok(())
+            }
+            Err(error) => {
+                self.authorization_error = Some(error);
+                Err(error)
+            }
+        }
     }
 
     pub(crate) fn request(&mut self, value: &Value) -> Result<Value, &'static str> {
         if !self.sharing {
             return Err("sharing_disabled");
+        }
+        if let Some(error) = self.authorization_error {
+            return Err(error);
         }
         if !value
             .get("auth")

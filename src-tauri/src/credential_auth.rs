@@ -1,6 +1,39 @@
 //! E0 access material; never used to decrypt the vault or printed by the bridge.
 
 const SERVICE: &str = "Skill Repo Tracker E0 Credential Access";
+// These adapters run only in the dedicated credential host/bridge processes.
+// Keychain's UI policy is process-wide; serialize every operation, including the
+// one explicitly interactive operation, so no background call inherits it.
+static INTERACTION: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn noninteractive<T>(
+    operation: impl FnOnce() -> Result<T, &'static str>,
+) -> Result<T, &'static str> {
+    let _serial = INTERACTION
+        .lock()
+        .map_err(|_| "credential_store_unavailable")?;
+    let _no_ui = security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
+        .map_err(|_| "credential_store_unavailable")?;
+    operation()
+}
+
+fn storage_error(error: keyring::Error) -> &'static str {
+    match error {
+        keyring::Error::NoStorageAccess(error) | keyring::Error::PlatformFailure(error) => {
+            match error
+                .downcast_ref::<security_framework::base::Error>()
+                .map(|error| error.code())
+            {
+                // errSecInteractionNotAllowed / errSecInteractionRequired.
+                Some(-25308 | -25315) => "credential_authorization_required",
+                Some(-25293) => "credential_authorization_denied",
+                Some(-128) => "credential_authorization_cancelled",
+                _ => "credential_store_unavailable",
+            }
+        }
+        _ => "credential_store_unavailable",
+    }
+}
 
 pub(crate) fn valid_id(value: &str) -> bool {
     !value.is_empty()
@@ -19,14 +52,38 @@ fn entry(vault_id: &str) -> Result<keyring::Entry, &'static str> {
 }
 
 pub(crate) fn load(vault_id: &str) -> Result<Option<String>, &'static str> {
+    noninteractive(|| load_existing(vault_id))
+}
+
+fn load_existing(vault_id: &str) -> Result<Option<String>, &'static str> {
     match entry(vault_id)?.get_password() {
         Ok(value) if value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit()) => {
             Ok(Some(value))
         }
         Ok(_) => Err("invalid_access_material"),
         Err(keyring::Error::NoEntry) => Ok(None),
-        Err(_) => Err("credential_store_unavailable"),
+        Err(error) => Err(storage_error(error)),
     }
+}
+
+// Called only after a local, explicit action and a successful master unlock.
+// The OS decides whether to grant this executable access. Never change ACLs,
+// synthesize a replacement code, or retry interactively from an MCP request.
+pub(crate) fn authorize_existing(vault_id: &str) -> Result<String, &'static str> {
+    let _serial = INTERACTION
+        .lock()
+        .map_err(|_| "credential_store_unavailable")?;
+    let previous = load_existing(vault_id)?.ok_or("agent_access_missing")?;
+    // Confirm this process can read unchanged material without another prompt.
+    // Persistence across new bridge/host processes requires separate acceptance;
+    // a one-off Allow must not be reported as a persistent upgrade grant.
+    let _no_ui = security_framework::os::macos::keychain::SecKeychain::disable_user_interaction()
+        .map_err(|_| "credential_store_unavailable")?;
+    let current = load_existing(vault_id)?.ok_or("agent_access_missing")?;
+    if !equal_material(&previous, &current) {
+        return Err("credential_store_changed");
+    }
+    Ok(current)
 }
 
 pub(crate) fn random_id() -> Result<String, &'static str> {
@@ -39,7 +96,11 @@ pub(crate) fn random_id() -> Result<String, &'static str> {
 }
 
 pub(crate) fn establish(vault_id: &str, reset: bool) -> Result<String, &'static str> {
-    let previous = load(vault_id)?;
+    noninteractive(|| establish_without_ui(vault_id, reset))
+}
+
+fn establish_without_ui(vault_id: &str, reset: bool) -> Result<String, &'static str> {
+    let previous = load_existing(vault_id)?;
     if !reset {
         if let Some(value) = previous {
             return Ok(value);
@@ -48,19 +109,23 @@ pub(crate) fn establish(vault_id: &str, reset: bool) -> Result<String, &'static 
     let value = random_id()?;
     entry(vault_id)?
         .set_password(&value)
-        .map_err(|_| "credential_store_write_failed")?;
-    if load(vault_id)?.as_deref() != Some(value.as_str()) {
+        .map_err(storage_error)?;
+    if load_existing(vault_id)?.as_deref() != Some(value.as_str()) {
         return Err("credential_store_write_not_verified");
     }
     Ok(value)
 }
 
 pub(crate) fn remove(vault_id: &str) -> Result<(), &'static str> {
+    noninteractive(|| remove_without_ui(vault_id))
+}
+
+fn remove_without_ui(vault_id: &str) -> Result<(), &'static str> {
     match entry(vault_id)?.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => {}
-        Err(_) => return Err("credential_store_delete_failed"),
+        Err(error) => return Err(storage_error(error)),
     }
-    if load(vault_id)?.is_some() {
+    if load_existing(vault_id)?.is_some() {
         return Err("credential_store_delete_not_verified");
     }
     Ok(())
@@ -76,4 +141,27 @@ pub(crate) fn equal_material(left: &str, right: &str) -> bool {
         .zip(right.bytes())
         .fold(0_u8, |diff, (a, b)| diff | (a ^ b))
         == 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_auth_failures_are_distinct_and_never_reported_as_missing() {
+        for (code, expected) in [
+            (-25308, "credential_authorization_required"),
+            (-25315, "credential_authorization_required"),
+            (-25293, "credential_authorization_denied"),
+            (-128, "credential_authorization_cancelled"),
+            (-25291, "credential_store_unavailable"),
+            (-25295, "credential_store_unavailable"),
+        ] {
+            let error = security_framework::base::Error::from_code(code);
+            assert_eq!(
+                storage_error(keyring::Error::PlatformFailure(Box::new(error))),
+                expected
+            );
+        }
+    }
 }

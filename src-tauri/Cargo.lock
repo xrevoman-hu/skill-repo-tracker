@@ -3228,6 +3228,7 @@ dependencies = [
  "opener",
  "reqwest 0.12.28",
  "rusqlite",
+ "security-framework 3.7.0",
  "serde",
  "serde_json",
  "sha2",

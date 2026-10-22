@@ -414,7 +414,7 @@
       "runtime": "rust",
       "layer": "rust-domain",
       "ownerRule": "docs/rules/data-security.md",
-      "decisions": ["docs/adr/0010-credential-native-runtime.md"],
+      "decisions": ["docs/adr/0010-credential-native-runtime.md", "docs/adr/0011-credential-keychain-interaction.md"],
       "paths": ["src-tauri/src/credential_runtime.rs", "src-tauri/src/credential_leases.rs"]
     },
     {
@@ -422,7 +422,7 @@
       "runtime": "rust",
       "layer": "rust-adapter",
       "ownerRule": "docs/rules/data-security.md",
-      "decisions": ["docs/adr/0010-credential-native-runtime.md"],
+      "decisions": ["docs/adr/0010-credential-native-runtime.md", "docs/adr/0011-credential-keychain-interaction.md"],
       "paths": [
         "src-tauri/src/credential_auth.rs",
         "src-tauri/src/credential_ipc.rs",

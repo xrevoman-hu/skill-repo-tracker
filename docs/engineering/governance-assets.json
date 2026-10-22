@@ -950,6 +950,53 @@
           }
         ]
       }
+    },
+    {
+      "id": "adr-0011-credential-keychain-interaction",
+      "kind": "decision",
+      "path": "docs/adr/0011-credential-keychain-interaction.md",
+      "status": "active",
+      "checksum": "sha256:272aaba6a8ed7df80e703cee258638ed1cdd4241efb572853e51c32b51f0a7bd",
+      "principles": [
+        1,
+        2,
+        4,
+        5,
+        7
+      ],
+      "reviewOnChange": [
+        "src-tauri/Cargo.toml",
+        "src-tauri/Cargo.lock",
+        "src-tauri/src/credential_auth.rs",
+        "src-tauri/src/credential_runtime.rs",
+        "src-tauri/src/credential_runtime_tests.rs",
+        "src-tauri/src/credential_mcp.rs",
+        "scripts/surface-budget-keychain.mjs",
+        "scripts/credential-runtime-policy.mjs",
+        "scripts/__tests__/surface-budget-keychain.test.mjs",
+        "scripts/__tests__/credential-runtime-policy.test.mjs"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": [
+          "verify",
+          "ci"
+        ],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/surface-budget-keychain.test.mjs",
+            "selector": "credential Keychain background access cannot enable UI or bypass the serialized guard"
+          },
+          {
+            "path": "scripts/__tests__/credential-runtime-policy.test.mjs",
+            "selector": "interactive credential authorization is only an unlocked explicit local control action"
+          },
+          {
+            "path": "scripts/__tests__/credential-runtime-policy.test.mjs",
+            "selector": "credential Keychain namespace cannot widen or acquire an additional Entry seam"
+          }
+        ]
+      }
     }
   ],
   "invariants": [

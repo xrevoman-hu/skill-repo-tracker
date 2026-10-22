@@ -859,6 +859,11 @@
         "purpose": "Reviewed production dependency serde_json; additions require explicit dependency, permission, and attack-surface review."
       },
       {
+        "id": "normal:security-framework={\"defaultFeatures\":true,\"features\":[],\"optional\":false,\"package\":\"security-framework\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":\"'cfg(target_os = \\\"macos\\\")'\"}",
+        "status": "active",
+        "purpose": "ADR 0011: macOS-only direct access to the existing locked security-framework crate for serialized RAII suppression of background Keychain prompts and exact native error classification; only credential_auth may reference the two reviewed APIs, never ACL mutation or arbitrary Keychain access."
+      },
+      {
         "id": "normal:serde={\"defaultFeatures\":true,\"features\":[\"derive\"],\"optional\":false,\"package\":\"serde\",\"source\":{\"kind\":\"registry\",\"registry\":\"crates-io\"},\"target\":null}",
         "status": "active",
         "purpose": "Reviewed production dependency serde; additions require explicit dependency, permission, and attack-surface review."
@@ -2339,8 +2344,14 @@
       },
       {
         "id": "src-tauri/src/credential_runtime.rs:Path::exists:open#1",
+        "status": "retiring",
+        "purpose": "ADR 0010: Read the explicit owned sharing state before host initialization; no application-data lookup.",
+        "retirementReason": "The same bounded sharing.json existence query moved into open_with_access so storage failures preserve sharing intent while the host starts locked; no new path or fallback."
+      },
+      {
+        "id": "src-tauri/src/credential_runtime.rs:Path::exists:open_with_access#1",
         "status": "active",
-        "purpose": "ADR 0010: Read the explicit owned sharing state before host initialization; no application-data lookup."
+        "purpose": "ADR 0011: existing isolated-root sharing.json check moved from open into the injected access-result seam; startup remains locked and missing or denied material never recreates the shared code."
       },
       {
         "id": "src-tauri/src/credential_runtime.rs:Path::exists:persist_sharing#1",

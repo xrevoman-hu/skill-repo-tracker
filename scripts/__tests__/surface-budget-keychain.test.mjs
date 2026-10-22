@@ -138,3 +138,39 @@ test("the checked-in Keychain adapter matches the exact namespace contract", () 
     ...expected,
   ]);
 });
+
+test("credential Keychain background access cannot enable UI or bypass the serialized guard", () => {
+  const root = mkdtempSync(path.join(tmpdir(), "srt-keychain-interaction-"));
+  try {
+    writeFixture(root);
+    const target = path.join(root, "src-tauri/src/credential_auth.rs");
+    const baseline = readFileSync(path.join(repositoryRoot, "src-tauri/src/credential_auth.rs"), "utf8");
+    writeFileSync(target, baseline);
+    assert.equal(discoverKeychainSurface(root).length, 3);
+    for (const mutation of [
+      baseline.replace("noninteractive(|| load_existing(vault_id))", "load_existing(vault_id)"),
+      baseline.replace("noninteractive(|| establish_without_ui(vault_id, reset))", "establish_without_ui(vault_id, reset)"),
+      baseline.replace("noninteractive(|| remove_without_ui(vault_id))", "remove_without_ui(vault_id)"),
+      baseline.replace(".lock()", ".try_lock()"),
+      baseline.replace("    operation()", "    drop(_no_ui); operation()"),
+      baseline.replace("if !equal_material(&previous, &current)", "if false && !equal_material(&previous, &current)"),
+      baseline.replace('let previous = load_existing(vault_id)?.ok_or("agent_access_missing")?;', "let previous = establish(vault_id, true)?;"),
+      baseline.replace("Some(-128)", "Some(-1)"),
+      baseline.replace("fn load_existing(", "pub(crate) fn load_existing("),
+      `${baseline}\nfn hidden() { load_existing("elsewhere"); }`,
+      `${baseline}\nfn hidden() { let _ = security_framework::os::macos::keychain::SecKeychain::default(); }`,
+      `${baseline}\nuse security_framework::os::macos::keychain::SecKeychain as Hidden;`,
+      `${baseline}\ntype Hidden = security_framework::os::macos::keychain::SecKeychain;`,
+    ]) {
+      assert.notEqual(mutation, baseline);
+      writeFileSync(target, mutation);
+      assert.throws(() => discoverKeychainSurface(root), /credential Keychain/);
+    }
+    writeFileSync(target, baseline);
+    writeFileSync(path.join(root, "src-tauri/src/other.rs"),
+      "fn hidden() { security_framework::os::macos::keychain::SecKeychain::disable_user_interaction(); }");
+    assert.throws(() => discoverKeychainSurface(root), /security-framework is restricted/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

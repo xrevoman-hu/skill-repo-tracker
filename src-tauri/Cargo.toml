@@ -42,5 +42,8 @@ unicode-normalization = "0.1"
 walkdir = "2"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+
 [dev-dependencies]
 tauri = { version = "2", features = ["test"] }
