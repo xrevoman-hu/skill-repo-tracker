@@ -13,6 +13,7 @@
 - **预算（Budget）**：只能保持或收紧的结构、包体、覆盖率、权限或状态上限。
 - **验收层（Acceptance layer）**：结论实际被证明的位置，例如 source、static、browser、
   database/filesystem、remote ref、artifact 或 human acceptance；不同层不能互相替代。
-- **PR evidence**：本次变更留下的失败复现、根因、同类扫描、成本变化和验证层记录。
+- **Change evidence（历史称 PR evidence）**：本次变更留下的失败复现、根因、同类扫描、
+  成本变化和验证层记录；main-only 下不依赖远端 PR 承载。
 - **Supersede / Retire**：用新决策替代旧决策，或在产品边界消失后同时移除旧 Rule、测试、
   状态与兼容分支；不是把过时资产永久保留。

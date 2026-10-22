@@ -1,5 +1,89 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
+  "policyRemovals": [
+    {
+      "id": "main-only-2026-10",
+      "kind": "pr-to-main-only-v1",
+      "decision": "adr-0014-main-only",
+      "bootstrapHead": "6051bb0b31defe0343bb160aa886ec4f23388ace",
+      "retire": {
+        "gates": [
+          "trusted-policy"
+        ],
+        "assets": [
+          "pr-evidence-template"
+        ],
+        "invariants": [
+          "PR-EVIDENCE-001",
+          "TRUSTED-SUITE-001"
+        ]
+      },
+      "drop": [
+        {
+          "collection": "assets",
+          "id": "github-governance-policy",
+          "field": "enforcement.gates",
+          "values": [
+            "trusted-policy"
+          ]
+        },
+        {
+          "collection": "assets",
+          "id": "github-governance-policy",
+          "field": "enforcement.evidence",
+          "values": [
+            {
+              "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+              "selector": "trusted default-branch script publishes success on the exact PR head"
+            },
+            {
+              "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+              "selector": "trusted workflow executes only base code and grants only the required write scope"
+            },
+            {
+              "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+              "selector": "native job runner maps policy success and failure to fail-closed exit codes"
+            },
+            {
+              "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+              "selector": "governance evidence assertion changes require a fresh governance-reviewed label"
+            }
+          ]
+        },
+        {
+          "collection": "invariants",
+          "id": "GH-GATE-001",
+          "field": "gates",
+          "values": [
+            "trusted-policy"
+          ]
+        },
+        {
+          "collection": "invariants",
+          "id": "GH-GATE-001",
+          "field": "protectedPaths",
+          "values": [
+            "scripts/trusted-policy-guard.mjs"
+          ]
+        },
+        {
+          "collection": "invariants",
+          "id": "GH-GATE-001",
+          "field": "evidence",
+          "values": [
+            {
+              "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+              "selector": "critical changes fail closed until governance-reviewed is present"
+            },
+            {
+              "path": "scripts/__tests__/trusted-policy-guard.test.mjs",
+              "selector": "API failures also publish a failure check when the event head is valid"
+            }
+          ]
+        }
+      ]
+    }
+  ],
   "contextBudgets": {
     "default": { "maxLines": 180, "maxBytes": 14000 },
     "alwaysLoad": { "maxLines": 160, "maxBytes": 12000 },
@@ -28,11 +112,37 @@
     { "id": "github-governance", "status": "active", "kind": "package-script", "ref": "github:governance:check", "capabilities": ["remote-governance-state"] },
     { "id": "release", "status": "active", "kind": "package-script", "ref": "release:verify", "capabilities": ["local-artifact-contract", "remote-artifact-contract"] },
     { "id": "ci", "status": "active", "kind": "workflow", "ref": ".github/workflows/ci.yml", "capabilities": ["clean-runner-verify", "clean-runner-coverage", "clean-runner-msrv"] },
-    { "id": "trusted-policy", "status": "active", "kind": "workflow", "ref": ".github/workflows/trusted-policy.yml", "capabilities": ["base-sourced-policy-review"] },
+    { "id": "trusted-policy", "status": "retiring", "kind": "workflow", "ref": ".github/workflows/trusted-policy.yml", "capabilities": ["base-sourced-policy-review"],
+      "retirement": { "policyRemoval": "main-only-2026-10", "reason": "采用仅main快进推送，明确退出PR前置与正文机器审查；新push检查不具有等价保护能力" } },
     { "id": "weekly", "status": "active", "kind": "workflow", "ref": ".github/workflows/weekly-resilience.yml", "capabilities": ["flaky-repetition", "release-performance"] },
     { "id": "security", "status": "active", "kind": "workflow", "ref": ".github/workflows/security-audit.yml", "capabilities": ["npm-security-audit", "cargo-security-audit"] }
   ],
   "assets": [
+    {
+      "id": "adr-0014-main-only",
+      "kind": "decision",
+      "path": "docs/adr/0014-main-only-governance.md",
+      "status": "active",
+      "checksum": "sha256:ff67d104f91c9580726ed8eaa53861512045a51e1841d9eceeaa375b956d1a12",
+      "principles": [2, 3, 4, 5, 6, 7],
+      "reviewOnChange": [
+        "scripts/governance-policy-removal.mjs", "scripts/governance-assets.mjs",
+        "scripts/governance-assets-history.mjs", "scripts/governance-assets-check.mjs",
+        "scripts/main-push-evidence.mjs", "scripts/main-push-github.mjs",
+        "scripts/surface-budget-history.mjs", "scripts/github-governance-check.mjs",
+        "scripts/release-verify.mjs", ".github/workflows/ci.yml",
+        "docs/engineering/governance-assets.json", "docs/engineering/github-governance.md"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          { "path": "scripts/__tests__/governance-policy-removal.test.mjs", "selector": "main-only policy requires the exact two-stage retirement and five drops" },
+          { "path": "scripts/__tests__/governance-policy-removal.test.mjs", "selector": "policy declaration and deletion in one cumulative push is rejected" },
+          { "path": "scripts/__tests__/governance-policy-removal.test.mjs", "selector": "policy entries metadata and full retired tombstones are permanently immutable" }
+        ]
+      }
+    },
     {
       "id": "shared-glossary",
       "kind": "glossary",
@@ -395,7 +505,8 @@
       "id": "pr-evidence-template",
       "kind": "template",
       "path": ".github/pull_request_template.md",
-      "status": "active",
+      "status": "retiring",
+      "retirement": { "policyRemoval": "main-only-2026-10", "reason": "采用仅main快进推送，明确退出PR前置与正文机器审查；新push检查不具有等价保护能力" },
       "principles": [3, 4, 5, 7],
       "enforcement": {
         "mode": "mixed",
@@ -1461,7 +1572,8 @@
     },
     {
       "id": "PR-EVIDENCE-001",
-      "status": "active",
+      "status": "retiring",
+      "retirement": { "policyRemoval": "main-only-2026-10", "reason": "采用仅main快进推送，明确退出PR前置与正文机器审查；新push检查不具有等价保护能力" },
       "principles": [3, 4, 5, 6, 7],
       "rule": "rule-testing-release",
       "decisions": ["adr-0008-executable-governance"],
@@ -1580,7 +1692,8 @@
     },
     {
       "id": "TRUSTED-SUITE-001",
-      "status": "active",
+      "status": "retiring",
+      "retirement": { "policyRemoval": "main-only-2026-10", "reason": "采用仅main快进推送，明确退出PR前置与正文机器审查；新push检查不具有等价保护能力" },
       "principles": [2, 3, 4, 6, 7],
       "rule": "rule-testing-release",
       "decisions": ["adr-0008-executable-governance"],

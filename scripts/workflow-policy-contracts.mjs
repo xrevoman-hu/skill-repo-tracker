@@ -202,7 +202,7 @@ npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --p
         },
       },
     },
-    permissions: { contents: "read" },
+    permissions: { contents: "read", actions: "read" },
     concurrency: {
       group: "release-gate-${{ inputs.version }}-${{ inputs.phase }}",
       "cancel-in-progress": false,
@@ -262,10 +262,10 @@ npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --p
     permissions == null ||
     typeof permissions !== "object" ||
     Array.isArray(permissions) ||
-    Object.keys(permissions).length !== 1 ||
-    permissions.contents !== "read"
+    Object.keys(permissions).length !== 2 ||
+    permissions.contents !== "read" || permissions.actions !== "read"
   ) {
-    errors.push("release workflow permissions must be exactly contents: read");
+    errors.push("release workflow permissions must be exactly contents: read and actions: read");
   }
   const jobs = workflow?.jobs;
   const jobNames = jobs && typeof jobs === "object" && !Array.isArray(jobs) ? Object.keys(jobs) : [];
@@ -289,10 +289,10 @@ npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --p
     if (
       typeof jobPermissions !== "object" ||
       Array.isArray(jobPermissions) ||
-      Object.keys(jobPermissions).length !== 1 ||
-      jobPermissions.contents !== "read"
+      Object.keys(jobPermissions).length !== 2 ||
+      jobPermissions.contents !== "read" || jobPermissions.actions !== "read"
     ) {
-      errors.push("release workflow job permissions may not exceed contents: read");
+      errors.push("release workflow job permissions must retain contents: read and actions: read");
     }
   }
   const jobCanAlterVerifierFailure =

@@ -1,8 +1,6 @@
 name: CI
 
 on:
-  pull_request:
-    types: [opened, reopened, synchronize, edited]
   push:
     branches: [main]
 
@@ -11,17 +9,45 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   NODE_VERSION: 22.23.1
-  VERIFY_BASE_REF: ${{ github.event.pull_request.base.sha }}
-  ARCHITECTURE_BASE_REF: ${{ github.event.pull_request.base.sha }}
-  COVERAGE_BASE_REF: ${{ github.event.pull_request.base.sha }}
+  PUSH_BEFORE: ${{ github.event.before }}
 
 jobs:
+  baseline:
+    name: baseline
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      validated_base: ${{ steps.resolve.outputs.validated_base }}
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up pinned Node.js without package cache
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+      - name: Resolve the cumulative successful main ancestor
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/main-push-evidence.mjs baseline
   verify:
     name: verify
+    needs: baseline
+    env:
+      VERIFY_BASE_REF: ${{ needs.baseline.outputs.validated_base }}
+      ARCHITECTURE_BASE_REF: ${{ needs.baseline.outputs.validated_base }}
+      COVERAGE_BASE_REF: ${{ needs.baseline.outputs.validated_base }}
     runs-on: macos-15
     timeout-minutes: 45
     steps:
@@ -30,6 +56,21 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Validate the shared cumulative baseline
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]]
+          test "$PUSH_BEFORE" != 0000000000000000000000000000000000000000
+          [[ "$VERIFY_BASE_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$VERIFY_BASE_REF" != 0000000000000000000000000000000000000000
+          test "$VERIFY_BASE_REF" != "$GITHUB_SHA"
+          test "$VERIFY_BASE_REF" = "$ARCHITECTURE_BASE_REF"
+          test "$VERIFY_BASE_REF" = "$COVERAGE_BASE_REF"
+          git cat-file -e "${VERIFY_BASE_REF}^{commit}"
+          git merge-base --is-ancestor "$VERIFY_BASE_REF" "$PUSH_BEFORE"
+          git merge-base --is-ancestor "$PUSH_BEFORE" "$GITHUB_SHA"
       - name: Reject tracked dependency and Cargo overrides
         run: |
           set -euo pipefail
@@ -63,12 +104,6 @@ jobs:
           rustup default 1.95.0
       - name: Validate gate invocation before npm lifecycle execution
         run: node scripts/governance.mjs boundaries
-      - name: Enforce PR learning evidence
-        if: github.event_name == 'pull_request'
-        env:
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: node scripts/pr-evidence.mjs
       - name: Install pinned Chromium
         run: npx playwright install chromium
       - name: Run the deterministic repository gate
@@ -78,6 +113,11 @@ jobs:
 
   coverage:
     name: coverage
+    needs: baseline
+    env:
+      VERIFY_BASE_REF: ${{ needs.baseline.outputs.validated_base }}
+      ARCHITECTURE_BASE_REF: ${{ needs.baseline.outputs.validated_base }}
+      COVERAGE_BASE_REF: ${{ needs.baseline.outputs.validated_base }}
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -86,6 +126,21 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - name: Validate the shared cumulative baseline
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]]
+          test "$PUSH_BEFORE" != 0000000000000000000000000000000000000000
+          [[ "$VERIFY_BASE_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$VERIFY_BASE_REF" != 0000000000000000000000000000000000000000
+          test "$VERIFY_BASE_REF" != "$GITHUB_SHA"
+          test "$VERIFY_BASE_REF" = "$ARCHITECTURE_BASE_REF"
+          test "$VERIFY_BASE_REF" = "$COVERAGE_BASE_REF"
+          git cat-file -e "${VERIFY_BASE_REF}^{commit}"
+          git merge-base --is-ancestor "$VERIFY_BASE_REF" "$PUSH_BEFORE"
+          git merge-base --is-ancestor "$PUSH_BEFORE" "$GITHUB_SHA"
       - name: Reject tracked dependency and Cargo overrides
         run: |
           set -euo pipefail
@@ -127,13 +182,34 @@ jobs:
 
   msrv:
     name: msrv
+    needs: baseline
+    env:
+      VERIFY_BASE_REF: ${{ needs.baseline.outputs.validated_base }}
+      ARCHITECTURE_BASE_REF: ${{ needs.baseline.outputs.validated_base }}
+      COVERAGE_BASE_REF: ${{ needs.baseline.outputs.validated_base }}
     runs-on: macos-15
     timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: Validate the shared cumulative baseline
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = push
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]]
+          test "$PUSH_BEFORE" != 0000000000000000000000000000000000000000
+          [[ "$VERIFY_BASE_REF" =~ ^[0-9a-f]{40}$ ]]
+          test "$VERIFY_BASE_REF" != 0000000000000000000000000000000000000000
+          test "$VERIFY_BASE_REF" != "$GITHUB_SHA"
+          test "$VERIFY_BASE_REF" = "$ARCHITECTURE_BASE_REF"
+          test "$VERIFY_BASE_REF" = "$COVERAGE_BASE_REF"
+          git cat-file -e "${VERIFY_BASE_REF}^{commit}"
+          git merge-base --is-ancestor "$VERIFY_BASE_REF" "$PUSH_BEFORE"
+          git merge-base --is-ancestor "$PUSH_BEFORE" "$GITHUB_SHA"
       - name: Reject tracked dependency and Cargo overrides
         run: |
           set -euo pipefail

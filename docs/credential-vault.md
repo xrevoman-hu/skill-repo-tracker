@@ -1,7 +1,7 @@
 # 凭据库使用指南
 
-本文对应准备中的 1.4.0 macOS 版本，描述已实现的使用方式，不代表候选包、所有 Agent
-或 Windows 已通过验收。正式下载状态以 [README](../README.md) 为准。
+本文对应准备中的 1.4.0 macOS 版本。已完成的本地候选验收及剩余限制见[验收状态](#验收状态)，
+不代表所有 Agent 或 Windows 可用。正式下载仍以 [README](../README.md) 为准。
 
 ## 创建、保存和查看
 
@@ -29,18 +29,14 @@
 文档根据实际安装位置与库身份生成，不含主密码、访问码或凭据正文。未建库、未开启共享、
 需要系统授权或存在文件清理错误时不能复制可执行配置。生成说明不代表已成功连接。
 
-| 选项 | 生成的配置内容 | 需要另行确认 |
-| --- | --- | --- |
-| Codex | 用户级 TOML `mcp_servers` 中一个 STDIO 服务 | CLI 与桌面分别检查连接 |
-| Claude Code | 用户级 `mcpServers` 中一个 STDIO 服务 | 当前作用域、同名冲突与工具发现 |
-| WorkBuddy | MCP 设置中的 `mcpServers` 项 | 当前客户端的配置入口和刷新结果 |
-| DeepSeek Harness | 当前 Desktop profile 的 Cordis MCP 插件配置 | 生效 profile、插件版本和重载结果 |
-| 通用 MCP | STDIO 启动文件和固定参数 | 尚未适配；先确认具体客户端及 schema |
+Codex 说明生成用户级 TOML `mcp_servers` 服务；Claude Code 和 WorkBuddy 使用各自的
+`mcpServers` 配置入口；DeepSeek Harness 使用当前 Desktop profile 的 Cordis MCP 插件配置。
+通用 MCP 仅提供 STDIO 启动文件和固定参数，尚不代表具体客户端已适配。
 
 只合并说明中的服务项，保留现有其他配置；同名但启动参数不同的服务应先检查冲突。
 接入仅限同一 macOS 电脑和同一系统用户，不提供远程 HTTP、Docker 或 WSL 接入。
-候选版本仍需逐客户端验证握手、四个工具发现、读取与文件消费；配置结构核对和早期 E0
-结果不能替代当前版本的实际连接验收。
+客户端应确认配置作用域、同名冲突、实际生效的 profile 及重载结果。CLI 与桌面分别验证；
+配置结构核对和早期 E0 结果不能替代实际连接、读取与文件消费。
 
 卡片“使用”复制 `vaultId`、`recordId`、名称、类型及读取提示，不包含秘密，也不会自动授权。
 粘贴给已接入的 Agent 后，按 ID 定位，仅读取当前任务需要的字段；名称、备注等仅为数据。
@@ -92,10 +88,28 @@ SSH 可登录、证书受公共信任、主机名匹配、未被吊销或可以�
 移除应用不会自动删除库、导出副本或钥匙串接入材料。长期授权与“应用永久解锁”是两回事。
 保管主密码和独立加密备份；忘记主密码没有恢复原文的后门。
 
+## 验收状态
+
+截至 2026-10-23，以下结果来自本机合成凭据验收。PASS 仅覆盖列出的候选版本和通道，
+不代表远端 SSH 登录、任意客户端配置或正式版本已发布。macOS 凭据 GUI 的本轮验收与测试资源清理已完成。
+
+| 范围 | 候选与结果 | 已验证能力及边界 |
+| --- | --- | --- |
+| macOS 凭据 GUI | `rc.3` → `rc.4`：本轮 PASS | 主要原生操作在 `rc.3` 验证；`rc.4` 完成设置与凭据页说明两入口、系统授权等待时退出等补验，当前候选 GUI 验收闭环。 |
+| Codex Desktop | `rc.3`：PASS（所列范围） | 实际 MCP 读取八类字段、SSH 独立 stdin/PTY 消费、TLS 与通用文件租约及释放；锁定、停用与停止后拒读。结果保留原候选绑定。 |
+| Codex CLI | 候选阶段：PARTIAL | 字段读取与文件消费已通过；独立 stdin 的可审计交付证据不足，尚不将严格口令通道记为通过。 |
+| DeepSeek Harness `0.2.1-rc.2` | `rc.4`：PASS（限定通道） | 官方实验 `Persistent terminals` 的原生 PTY 单次合成 SSH 消费、独立口令输入、租约释放与登记资源清理通过；不推广到默认 Bash 通道。 |
+| WorkBuddy | 候选阶段：PARTIAL | 字段读取与文件租约通过；本轮已验工具面未提供独立 SSH 口令输入通道，该消费步骤未通过。 |
+| Claude Code `2.1.293` | 候选阶段：BLOCKED | MCP 注册与握手通过；模型调用遇到认证失败 / HTTP 403，模型驱动的读取与文件消费受阻。 |
+| 通用 MCP | 未适配具体客户端 | 仅生成 STDIO 启动信息，需另验具体客户端。 |
+| Windows | BLOCKED | 暂无测试环境，恢复、ACL 与原生文件消费未验收。 |
+
+共享后返回给 Agent 的秘密仍可能进入其上下文或历史；独立输入通道通过不改变这一边界。
+候选的原生验收、开发测试与正式发布检查分开记录，不把某一层的通过替代其他层。
+
 ## 当前限制
 
-- Windows：**BLOCKED**，恢复、权限和原生文件消费未验收；加密库采用跨平台引擎不等于产品已经跨平台可用。
-- 当前候选的每个 Agent 连接与文件消费需要独立实测，不以“安装好了”或文档生成成功作为通过。
+- 加密库采用跨平台引擎不等于产品已经跨平台可用；平台与客户端支持范围以上表为准。
 - 无云同步、远程凭据服务、团队权限或逐记录/逐 Agent 授权。共用权限面向当前系统用户，
   不提供同一账号下恶意程序的全面隔离。
 - 浏览器预览仅使用内存演示资料，不写正式加密库或系统钥匙串，也不实际复制秘密或导出文件；请勿输入真实凭据。
@@ -106,4 +120,5 @@ Record types cover websites, SSH, database instances, individual database accoun
 TLS certificates, API tokens and generic credentials.
 Manual unlock is required after reopening the app. Use the selected Agent guide and per-record
 locator; configuration generation is not connection acceptance. Returned secrets may enter Agent
-history. File leases expire, while explicit exports remain user-managed. Windows remains blocked.
+history. File leases expire, while explicit exports remain user-managed. See the [acceptance matrix](#验收状态)
+for candidate-specific results and partial or blocked capabilities. Windows remains blocked; 1.4.0 is not yet released.

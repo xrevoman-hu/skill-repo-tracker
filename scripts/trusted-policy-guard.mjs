@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isPolicyRetirement, validateMainOnlyPolicyCatalog } from "./governance-policy-removal.mjs";
 
 export const CHECK_NAME = "Trusted policy / guard";
 export const REVIEW_LABEL = "governance-reviewed";
@@ -165,8 +166,12 @@ export function extractTrustedGovernanceEvidencePaths(contents) {
   if (!isPlainObject(catalog)) {
     throw new Error("trusted governance catalog root must be an object");
   }
-  if (catalog.schemaVersion !== 1) {
-    throw new Error("trusted governance catalog schemaVersion must equal 1");
+  if (![1, 2].includes(catalog.schemaVersion)) {
+    throw new Error("trusted governance catalog schemaVersion must equal 1 or 2");
+  }
+  if (catalog.schemaVersion === 2) {
+    const errors = validateMainOnlyPolicyCatalog(catalog);
+    if (errors.length) throw new Error(errors.join("; "));
   }
   if (!Array.isArray(catalog.assets)) {
     throw new Error("trusted governance catalog assets must be an array");
@@ -183,7 +188,7 @@ export function extractTrustedGovernanceEvidencePaths(contents) {
     validateIdentifier(asset.id, owner);
     if (assetIds.has(asset.id)) throw new Error(`${owner} has a duplicate id: ${asset.id}`);
     assetIds.add(asset.id);
-    if (!ASSET_STATUSES.has(asset.status)) {
+    if (!ASSET_STATUSES.has(asset.status) && !isPolicyRetirement(catalog, "assets", asset)) {
       throw new Error(`${owner} has an unsupported status: ${asset.status ?? "missing"}`);
     }
     if (!isPlainObject(asset.enforcement)) {
@@ -193,7 +198,7 @@ export function extractTrustedGovernanceEvidencePaths(contents) {
       asset.enforcement.evidence,
       owner,
       collectedPaths,
-      asset.status === "active",
+      asset.status === "active" || asset.status === "retiring",
     );
   }
 

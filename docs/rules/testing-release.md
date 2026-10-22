@@ -17,7 +17,7 @@ protected path 变化触发，不以日历续期代替真实复审。
 生产 TypeScript 禁止显式 `any`。测试代码禁止 `.skip`、`.only`、`.todo`；Rust `#[ignore]`
 只白名单 `prompt_library_release_performance_gate`，且 weekly/Release 必须显式运行。确需临时
 隔离时只能改到已批准的独立 lane，并在 `docs/engineering/test-waivers.json` 登记最长 30 天的
-active `WAIVER-YYYY-NNN`；PR 只引用该 ID，不能用自由文本 issue/owner/date 代替。active scope
+active `WAIVER-YYYY-NNN`；变更记录只引用该 ID，不能用自由文本 issue/owner/date 代替。active scope
 不可改写，过期即失败；退出时改为永久不可删除的 retired tombstone。主测试套件仍不得 skip。JS
 test/suite callback 禁止 generator/async-generator，第三参数只允许 numeric literal timeout；
 `.each` 只接受非空且无 spread/空洞的 literal rows，避免 runner 注册 0 项或 TestOptions 假绿。
@@ -35,15 +35,12 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   Cargo 的真实 target 由 `cargo metadata` 复核为唯一 lib/bin/build 入口；Cargo manifest 不得
   自定义 lint level，Rust 源码不得 `allow/expect(warnings)`，因此 Clippy `-D warnings` 保持
   最高优先级。
-  仓库的 `.github/workflows/` 只允许五个已登记且整份精确校验的 GitHub workflows；新增
-  repo-controlled workflow 或本地 Action 会失败，避免普通 push 发布、扩大写权限或用同名
-  Check Run 冒充 required check。仅精确登记 GitHub 托管的 Dependabot Updates 动态 workflow，
-  并由对应 GitHub 功能的独立设置校验；workflow state 缺失/未知，或 active tuple 字段缺失，
-  均 fail closed。所有 workflow 的 `actions/checkout` 与 `actions/setup-node` 必须固定为已审查的
-  Node 24-native 完整 commit SHA；普通 CI 明确启用 npm cache，执行 trusted base code 的
-  Trusted policy 必须显式设置 `package-manager-cache: false`，不能让 package manager 字段隐式
-  创建或读取 cache。Dependabot 每周检查 GitHub Actions，最多保留两个 PR，只分组 minor/patch；
-  major 由人工审查和迁移。仓库内
+  仓库 workflow 采用阶段化精确清单：main-only 阶段 A 保留五份，阶段 B 只保留 CI、Release gate、
+  Security audit、Weekly resilience。未知 workflow 或本地 Action 失败；普通 push 永不发布。
+  GitHub 托管的 Dependabot Updates 动态 workflow 单独登记，功能设置另行校验；状态缺失/未知
+  均失败。checkout/setup-node 固定已审查的 Node 24-native 完整 SHA；普通 CI 显式 npm cache，
+  baseline 和 A 阶段 Trusted policy 禁用 package-manager-cache。Dependabot 三类版本更新限额
+  均为零，安全修复 PR 关闭但告警保留；修复通过本地分支验证后快进 main。
   JavaScript/TypeScript 可执行代码只允许位于 `src/`、`scripts/`、`e2e/` 与三份精确根配置，
   治理工具的本地 module import 也不得逃出 `scripts/` 的预算和 trusted-review 范围。
   治理脚本只允许沿 canonical 顶层静态 import/export 执行图可达；`eval`、`Function`、VM、
@@ -54,7 +51,7 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   渐进增强须保留 Safari 15 focus fallback。sourcemap 关闭；bundle gate 拒绝 map、
   远程/内联脚本、meta refresh/CSP 冲突。生产禁用 eval/Function/WebAssembly 执行 raw/URL payload；
   新可执行资产类型必须先纳入 module ownership、coverage、预算和负向测试。
-- Coverage：`npm run coverage:check`；基线只能上调，PR 生产代码 changed lines >=80%、
+- Coverage：`npm run coverage:check`；基线只能上调，累计变更生产代码 changed lines >=80%、
   branches >=70%；测试文件和 coverage 配置明确排除的入口不计入 changed-lines 分母。
   前端覆盖率采集固定使用单一 test-file 执行上下文和单一报告合并线程；普通 Vitest 仍可并行。
   同次详细 JSON 与 LCOV 的语句起始行、函数、分支命中状态对账后，可用命中语句范围和函数
@@ -74,7 +71,7 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   默认 Rust 仍为 1.95.0；仅 Rust branch coverage 固定使用
   `nightly-2026-08-01` + `llvm-tools-preview` + `cargo-llvm-cov 0.9.0`，不得缺失后
   静默降为 0。
-  首次治理 PR 只 bootstrap “整体基线不得下降”的历史比较；只要有有效 base commit，
+  首次治理引入只 bootstrap “整体基线不得下降”的历史比较；只要有有效 base commit，
   本次生产代码仍必须执行 80%/70% changed threshold。基线进入 `main` 后不得下调。
   无效 base ref 会失败，已跟踪基线的读取错误、无效 JSON 或缺失指标也会失败，不会被
   当成 bootstrap。
@@ -90,19 +87,11 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   只允许当前 `127.0.0.1` 预览服务，并在测试结束时断言没有尝试访问外部地址。当前最小验收
   覆盖检测、备份、新增远端仓库、取消本地目录选择、retry 晚回流、设置回灌、GitHub 429
   恢复及 Prompt 创建/tag/search/ZIP 导入导出；不得用无动作按钮或任意 sleep 制造假绿。
-- Trusted policy：`pull_request_target` 只执行 default-branch/base SHA 中的 trusted guard，
-  通过 GitHub API读取 changed filenames、rename 旧路径与 labels；绝不 checkout 或执行 PR
-  head。所有 `scripts/`、workflow 和机器治理事实源的变更必须带
-  `governance-reviewed`。原生 job 精确命名 `Trusted policy / guard` 并关联 PR head，脚本只有
-  `contents: read`、`pull-requests: read`，以退出码决定 job；不得通过 `/check-runs` 自建同名
-  检查，因为其 suite 归属不可控。critical PR 的 `synchronize`、`edited`、`reopened` 与
-  `unlabeled` 都会重新评估；只有 API 复核过的当前 head 上精确
-  `governance-reviewed` labeled event 才成功，无关 label 不能代替复审。它是独立远端
-  lane，不属于本地 `npm run verify`；首次合入后还要让 ruleset 把 context 绑定到明确
-  integration。GitHub Actions integration 不是隔离同仓恶意同名 workflow 的独立身份，因此
-  当前机制是有限信任的流程加固，不能称为不可绕过的信任根。强边界需要专用 GitHub App 或
-  独立受控的组织级 required
-  workflow，并将 ruleset 绑定到那个隔离 integration。
+- main-only：CI 仅响应 main push；baseline job 只读选择最近成功祖先 V，verify/coverage/msrv
+  复核并共用 V 的三个 BASE_REF。最新 run 的最新 attempt 四 job 全部成功才能发布；失败提交
+  不能截断累计 diff。bootstrap S、schema 2 精确退休与两次真实推送按 ADR 0014。
+  A 保留旧 PR/Trusted 执行证据且禁止发布；B 才退休。Accepted ADR 原文和仍引用的历史测试
+  不改写。服务器移除 PR/check 前置拦截后，失败代码可能先进入 main；不声称保护等价。
 - MSRV：CI 用 Rust 1.88.0 `cargo check --locked`。
 - 性能：weekly 与 Release 跑 10,000 prompts / 100 MiB ignored test。
 - Test waiver：`npm run verify` 与 weekly 都执行 tracked ledger checker；active selector 必须指向
@@ -131,9 +120,11 @@ npm run release:verify -- --lane adhoc --version X.Y.Z --phase local
 )
 ```
 
-本地 phase 会先以隔离、精确 refspec 获取最新 `origin/main`，确认 `HEAD` 与其完全一致且
+本地 phase 先确认政策已完成阶段 B，并校验同一 SHA 最新 CI attempt 的四个 job 全部成功；
+随后从固定的官方 GitHub Git URL 以隔离、精确 refspec 获取最新 `origin/main`，确认 `HEAD` 与其完全一致且
 远端尚不存在本次版本 tag；在生成 manifest 前还要重新执行同一检查，防止验证期间远端
-状态漂移。随后跑全部门禁和性能测试，再构建 `.app`/DMG。ad-hoc 顺序固定为：完整
+状态漂移；同时重新核对最新 CI。remote phase 开始也复核阶段与同提交 CI。
+三个 BASE_REF 都绑定同一成功祖先 V，不能以 HEAD 充当基线。随后跑全部门禁和性能测试，再构建 `.app`/DMG。ad-hoc 顺序固定为：完整
 签名 `.app` -> 把该 App 单独复制到临时 staging -> 从 staging 重新封装 DMG -> 签名 DMG
 -> 只读挂载复验。staging 顶层只能有正式 App；挂载顶层只允许正式 App、指向
 `/Applications` 的精确软链和 Finder 的 `.DS_Store`，出现其他文件即失败。local phase 在
@@ -148,7 +139,8 @@ version/commit/name/bytes/SHA 字段放在同一载体中的 unsigned artifact-f
 phase 必须从该目录内 `0600` 的 `manifest.token` 读取并显式接收 token，再独立核对
 main/tag/Release/digest 并下载复验，且 release refs、下载实物和服务端元数据必须与
 manifest 字段一致；
-GitHub Release 标题必须精确为 `Skill Repo Tracker vX.Y.Z`，正文须与 tracked
+GitHub API、Release 查询/下载与 tag 抓取绑定同一官方仓库，不接受 `GH_REPO`/`GH_HOST`
+替换来源；官方 main SHA 在发布证据查询前后核对。GitHub Release 标题必须精确为 `Skill Repo Tracker vX.Y.Z`，正文须与 tracked
 `docs/releases/vX.Y.Z.md` 规范化后完全相同，并保留中英文 ad-hoc/首次打开披露；不能只核对
 tag 和资产。上传结果不明时先查询，禁止盲目重试。
 远端 phase 获取 refs 时必须使用 `git fetch --no-tags`，并把正式远端 tag 非强制地拉到

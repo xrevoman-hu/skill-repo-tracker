@@ -59,7 +59,7 @@ Skill Repo Tracker 的做法是：所有 Skill 先进入一个独立主库，再
 - 卡片“使用”复制记录定位信息；凭据页右上角和设置中的“Agent 接入说明”共用同一弹窗，只生成所选客户端的文档，不包含密码或访问码。开启共享后，同一电脑、同一系统用户的已配置 Agent 可读取现有和以后新增的全部凭据；返回的秘密可能进入 Agent 上下文与历史。
 - 设置提供共享开关、访问码重置、主密码修改及独立加密备份恢复。每次重新打开应用仍须手动解锁。SSH 文件按需以限时租约交给本机工具，显式导出的副本由用户保管。
 
-本版本仍在准备和验收中。Windows 为 **BLOCKED**；Codex、Claude Code、WorkBuddy、DeepSeek Harness 的说明已按已核对结构实现，当前候选的实际连接、读取和文件消费仍须逐项验收。通用 MCP 选项仅提供 STDIO 启动信息，不代表任意客户端已经适配。详见[使用指南](docs/credential-vault.md)与[准备中的版本说明](docs/releases/v1.4.0.md)。
+本版本尚未正式发布。macOS `rc.4` 凭据 GUI 已完成本轮验收；Agent 的读取、文件消费和独立口令输入按实测候选分别记录，仍有部分能力与环境阻断。详见[验收状态](docs/credential-vault.md#验收状态)与[准备中的版本说明](docs/releases/v1.4.0.md)。
 
 ### v1.3.0 更新
 
@@ -229,7 +229,7 @@ Current version: `v1.3.0` for Apple Silicon, macOS 12+.
 - Each card's Use button copies a record locator. The Agent guide produces only the selected client's instructions, without passwords or access codes. Sharing grants configured Agents on the same computer and OS user access to all existing and future records; returned secrets may enter Agent context and history.
 - Settings provide sharing, access-code reset, password change, encrypted backup and recovery. Reopening the app requires manual unlock. SSH files use expiring local leases; users manage explicitly exported copies.
 
-This version is still in preparation and acceptance testing. Windows remains **BLOCKED**. Client guides implement previously checked configuration structures for Codex, Claude Code, WorkBuddy and DeepSeek Harness; connection, reading and file consumption must still be accepted for the current candidate. The generic option supplies STDIO launch information, not universal client compatibility. See the [vault guide](docs/credential-vault.md) and [planned release notes](docs/releases/v1.4.0.md).
+This version has not been released. The macOS `rc.4` credential GUI has completed this acceptance round. Agent reads, file consumption and independent passphrase input are recorded for the specific candidates and channels tested; partial results and environment blockers remain. See the [acceptance matrix](docs/credential-vault.md#验收状态) and [planned release notes](docs/releases/v1.4.0.md).
 
 ### v1.3.0 Highlights
 

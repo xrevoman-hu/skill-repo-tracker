@@ -29,6 +29,7 @@ import {
 } from "./git-paths.mjs";
 import { findForbiddenTestModifiers } from "./test-evidence-policy.mjs";
 import { checkRepositoryTestWaivers } from "./test-waivers.mjs";
+import { collectRepositoryWorkflowFiles } from "./workflow-files.mjs";
 import {
   isAlternateTauriConfigPath,
   validateCargoMetadataPolicy,
@@ -1251,22 +1252,13 @@ export function checkBoundaries(root = REPOSITORY_ROOT) {
     errors.push(...validateIndexHtmlPolicy(htmlContents));
     errors.push(...findHtmlModuleEntryHazards("index.html", htmlContents));
   }
-  const actionPolicyFiles = [];
-  const collectActionYaml = (directory) => {
-    if (!existsSync(directory)) return;
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) collectActionYaml(path);
-      else if (entry.isFile() && /\.ya?ml$/.test(entry.name)) actionPolicyFiles.push(path);
-    }
-  };
-  collectActionYaml(join(root, ".github/workflows"));
-  collectActionYaml(join(root, ".github/actions"));
+  const actionPolicyFiles = collectRepositoryWorkflowFiles(root);
   const workflowPaths = actionPolicyFiles.map((path) => relative(root, path));
   const dependabotPath = join(root, ".github/dependabot.yml");
   errors.push(
     ...validateRepositoryAutomationPolicy({
       workflowPaths,
+      catalog: readJson(join(root, "docs/engineering/governance-assets.json")),
       dependabotContents: existsSync(dependabotPath)
         ? readFileSync(dependabotPath, "utf8")
         : undefined,

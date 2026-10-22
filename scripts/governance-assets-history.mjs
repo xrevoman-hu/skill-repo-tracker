@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
-import { parse as parseYaml } from "yaml";
-
-import { canonicalCommandInvocations } from "./static-command-policy.mjs";
+import { evidenceRunner } from "./governance-runners.mjs";
+export { evidenceRunner, gateRunnerCoverage } from "./governance-runners.mjs";
+import { authorizedPolicyDrop, isPolicyRetirement, validatePolicyRemovalTransition } from "./governance-policy-removal.mjs";
 
 function evidenceKey(item) {
   return `${item?.path}#${item?.selector}`;
@@ -54,92 +54,6 @@ function missingMigratedCoverage(previous, replacement, mappings, key = (value) 
       replacementSet.has(target),
     );
   });
-}
-
-export function evidenceRunner(path) {
-  if (/^scripts\/__tests__\/.+\.test\.[cm]?js$/.test(path)) return "node-test:scripts";
-  if (/^e2e\/.+\.(?:spec|test)\.[cm]?[jt]sx?$/.test(path)) return "playwright";
-  if (/^src\/.+\.(?:test|spec)\.[cm]?[jt]sx?$/.test(path)) return "vitest";
-  if (/\.rs$/.test(path)) return "cargo-test";
-  return undefined;
-}
-
-function commandRunners(command, packageScripts, readFile, seenScripts = new Set()) {
-  const runners = new Set();
-  const nestedScripts = [];
-  for (const invocation of canonicalCommandInvocations(command)) {
-    const [program, ...args] = invocation;
-    if (
-      program === "node" &&
-      args[0] === "--test" &&
-      args.some((argument) => argument.startsWith("scripts/__tests__/"))
-    ) runners.add("node-test:scripts");
-    if (program === "vitest") runners.add("vitest");
-    if (program === "playwright" && args[0] === "test") runners.add("playwright");
-    if (
-      program === "cargo" &&
-      (args[0] === "test" || (args[0] === "llvm-cov" && args[1] === "test"))
-    ) runners.add("cargo-test");
-    if (program === "npm" && args[0] === "test") nestedScripts.push("test");
-    if (program === "npm" && args[0] === "run") {
-      const scriptIndex = args[1] === "--silent" ? 2 : 1;
-      if (/^[A-Za-z0-9:_-]+$/.test(args[scriptIndex] ?? "")) {
-        nestedScripts.push(args[scriptIndex]);
-      }
-    }
-  }
-  for (const script of nestedScripts) {
-    if (seenScripts.has(script)) continue;
-    const nextSeen = new Set(seenScripts).add(script);
-    for (const runner of commandRunners(packageScripts?.[script], packageScripts, readFile, nextSeen)) {
-      runners.add(runner);
-    }
-    if (script === "verify") {
-      try {
-        const plan = JSON.parse(String(readFile("docs/engineering/verify-plan.json") ?? ""));
-        for (const step of plan.steps ?? []) {
-          const stepCommand = [step.command, ...(step.args ?? [])].join(" ");
-          for (const runner of commandRunners(stepCommand, packageScripts, readFile, nextSeen)) {
-            runners.add(runner);
-          }
-        }
-      } catch {
-        // The verify-plan validator reports malformed or missing plan data separately.
-      }
-    }
-  }
-  return runners;
-}
-
-function workflowRunCommands(contents) {
-  const commands = [];
-  const workflow = parseYaml(String(contents ?? "")) ?? {};
-  for (const job of Object.values(workflow.jobs ?? {})) {
-    for (const step of job?.steps ?? []) {
-      if (typeof step?.run === "string") {
-        commands.push(step.run);
-      }
-    }
-  }
-  return commands;
-}
-
-export function gateRunnerCoverage(gates, packageScripts, readFile) {
-  const coverage = new Map();
-  for (const gate of gates ?? []) {
-    const commands =
-      gate.kind === "package-script"
-        ? [`npm run ${gate.ref}`]
-        : workflowRunCommands(readFile(gate.ref));
-    const runners = new Set();
-    for (const command of commands) {
-      for (const runner of commandRunners(command, packageScripts, readFile)) {
-        runners.add(runner);
-      }
-    }
-    coverage.set(gate.id, runners);
-  }
-  return coverage;
 }
 
 function positiveInteger(value) {
@@ -406,7 +320,7 @@ export function migrationAuthorizationErrors(ownerId, migration, assetById) {
   return errors;
 }
 
-export function validateGateRetirements(gates, gateById, assetById, { gateCoverage } = {}) {
+export function validateGateRetirements(gates, gateById, assetById, { gateCoverage, catalog } = {}) {
   const errors = [];
   for (const gate of gates) {
     if (
@@ -429,10 +343,12 @@ export function validateGateRetirements(gates, gateById, assetById, { gateCovera
     const owner = `${gate.status} governance gate ${gate.id}`;
     const replacement = gate.retirement?.replacement;
     const featureRemoved = gate.retirement?.featureRemoved === true;
-    if (replacement && featureRemoved) {
-      errors.push(`${owner} retirement cannot declare both replacement and featureRemoved`);
+    const policyRemoval = Boolean(gate.retirement?.policyRemoval);
+    if ([Boolean(replacement), featureRemoved, policyRemoval].filter(Boolean).length > 1) {
+      errors.push(`${owner} retirement cannot declare both replacement and featureRemoved or policyRemoval`);
       continue;
     }
+    if (policyRemoval && isPolicyRetirement(catalog, "gates", gate)) continue;
     if (replacement) {
       const resolution = resolveActiveGateReplacement(gate, gateById);
       if (resolution.error) errors.push(`${owner} ${resolution.error}`);
@@ -491,6 +407,9 @@ export function invariantReplacementCoverageErrors(previous, replacement, { gate
 export function compareGovernanceAssetCatalogs(current, base, { trackedPaths } = {}) {
   if (!base) return [];
   const errors = compareContextBudgets(current, base);
+  errors.push(...validatePolicyRemovalTransition(current, base));
+  const allowedDrop = (collection, id, field, value) =>
+    authorizedPolicyDrop(current, base, { collection, id, field, value });
   const currentGates = new Map((current.gates ?? []).map((gate) => [gate.id, gate]));
   for (const previous of base.gates ?? []) {
     const gate = currentGates.get(previous.id);
@@ -527,6 +446,9 @@ export function compareGovernanceAssetCatalogs(current, base, { trackedPaths } =
     if (previousStatus === "retired" && gate.status !== "retired") {
       errors.push(`retired governance gate ${previous.id} cannot return to ${gate.status}`);
     }
+    if (previousStatus === "retired" && !isDeepStrictEqual(gate, previous)) {
+      errors.push(`retired governance gate ${previous.id} record changed`);
+    }
     if (
       ["retiring", "retired"].includes(previousStatus) &&
       !isDeepStrictEqual(gate.retirement, previous.retirement)
@@ -555,6 +477,8 @@ export function compareGovernanceAssetCatalogs(current, base, { trackedPaths } =
         );
       } else if (previous.status === "superseded") {
         errors.push(`superseded governance asset record was removed: ${previous.id}`);
+      } else if (["retiring", "retired"].includes(previous.status)) {
+        errors.push(`${previous.status} governance asset tombstone was removed: ${previous.id}`);
       }
       continue;
     }
@@ -611,7 +535,8 @@ export function compareGovernanceAssetCatalogs(current, base, { trackedPaths } =
         asset.enforcement?.gates,
         previous.enforcement?.gates,
       )) {
-        if (!gateRemovalHasActiveReplacement(gate, asset.enforcement?.gates, currentGates)) {
+        if (!gateRemovalHasActiveReplacement(gate, asset.enforcement?.gates, currentGates) &&
+            !allowedDrop("assets", previous.id, "enforcement.gates", gate)) {
           errors.push(`active governance asset ${previous.id} removed gate: ${gate}`);
         }
       }
@@ -620,7 +545,9 @@ export function compareGovernanceAssetCatalogs(current, base, { trackedPaths } =
         evidence,
         (previous.enforcement?.evidence ?? []).map(evidenceKey),
       )) {
-        errors.push(`active governance asset ${previous.id} removed evidence: ${item}`);
+        if (!allowedDrop("assets", previous.id, "enforcement.evidence", item)) {
+          errors.push(`active governance asset ${previous.id} removed evidence: ${item}`);
+        }
       }
     }
     if (previous.status === "active" && asset.status === "superseded") {
@@ -696,7 +623,8 @@ export function compareGovernanceAssetCatalogs(current, base, { trackedPaths } =
             selector.endsWith("/") ? path.startsWith(selector) : path === selector,
           ),
         );
-        if (!replacementIsComplete && (!hasRemovalDecision || liveSelectors.length > 0)) {
+        if (!isPolicyRetirement(current, "invariants", invariant) &&
+            !replacementIsComplete && (!hasRemovalDecision || liveSelectors.length > 0)) {
           errors.push(
             `retiring governance invariant ${previous.id} cannot become retired without a complete active replacement or ADR-backed feature removal with no protected paths remaining`,
           );
@@ -715,12 +643,14 @@ export function compareGovernanceAssetCatalogs(current, base, { trackedPaths } =
         ? " during retirement"
         : "";
       for (const path of removedValues(invariant.protectedPaths, previous.protectedPaths)) {
+        if (allowedDrop("invariants", previous.id, "protectedPaths", path)) continue;
         errors.push(
           `${invariant.status === "active" ? "active governance invariant" : "governance invariant"} ${previous.id} removed protected path${retirementSuffix}: ${path}`,
         );
       }
       for (const gate of removedValues(invariant.gates, previous.gates)) {
-        if (!gateRemovalHasActiveReplacement(gate, invariant.gates, currentGates)) {
+        if (!gateRemovalHasActiveReplacement(gate, invariant.gates, currentGates) &&
+            !allowedDrop("invariants", previous.id, "gates", gate)) {
           errors.push(
             `${invariant.status === "active" ? "active governance invariant" : "governance invariant"} ${previous.id} removed gate${retirementSuffix}: ${gate}`,
           );
@@ -730,6 +660,7 @@ export function compareGovernanceAssetCatalogs(current, base, { trackedPaths } =
         (invariant.evidence ?? []).map(evidenceKey),
         (previous.evidence ?? []).map(evidenceKey),
       )) {
+        if (allowedDrop("invariants", previous.id, "evidence", item)) continue;
         errors.push(
           `${invariant.status === "active" ? "active governance invariant" : "governance invariant"} ${previous.id} removed evidence${retirementSuffix}: ${item}`,
         );

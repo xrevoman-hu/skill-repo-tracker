@@ -28,14 +28,17 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
+  assertLocalReleaseSource,
   buildLocalMainFetchArguments,
   buildRemoteFetchArguments,
   remoteVerifierTagRef,
   validateFinalReleaseMetadata,
   validateLocalReleaseSource,
+  requireSuccessfulMainHead,
 } from "./release-source-policy.mjs";
 import { prepareCredentialNative } from "./credential-native-build.mjs";
 import { nativeLinkEnvironment } from "./credential-native-environment.mjs";
+import { EXPECTED_REPOSITORY } from "./main-push-github.mjs";
 
 export {
   buildLocalMainFetchArguments,
@@ -469,18 +472,6 @@ function run(command, args, options = {}) {
   });
 }
 
-function assertLocalReleaseSource(version) {
-  run("git", buildLocalMainFetchArguments());
-  const head = run("git", ["rev-parse", "HEAD"], { capture: true }).trim();
-  const remoteMain = run("git", ["rev-parse", "origin/main"], { capture: true }).trim();
-  const remoteTagOutput = run(
-    "git",
-    ["ls-remote", "--tags", "--refs", "origin", `refs/tags/v${version}`],
-    { capture: true },
-  );
-  validateLocalReleaseSource({ version, head, remoteMain, remoteTagOutput });
-}
-
 function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -603,9 +594,9 @@ function verifyMountedDmg(dmgPath, version) {
 function localPhase(version) {
   validateReleaseHost(process.platform, process.arch);
   assertCleanWorktree();
-  assertLocalReleaseSource(version);
-  run("npm", ["run", "verify"]);
-  run("npm", ["run", "coverage:check"]);
+  const baselineOptions = assertLocalReleaseSource(version, run, ROOT);
+  run("npm", ["run", "verify"], baselineOptions);
+  run("npm", ["run", "coverage:check"], baselineOptions);
   run("npm", ["run", "test:e2e"]);
   const nativeOptions = { env: { ...process.env, ...nativeLinkEnvironment(prepareCredentialNative(ROOT)) } };
   run(cargoExecutable(), [
@@ -676,7 +667,7 @@ function localPhase(version) {
   const { bytes, commit, digest, manifest } = withCleanWorktreeBoundary(
     () => {
       assertCleanWorktree();
-      assertLocalReleaseSource(version);
+      assertLocalReleaseSource(version, run, ROOT);
     },
     () => {
       const cleanCommit = run("git", ["rev-parse", "HEAD"], { capture: true }).trim();
@@ -730,6 +721,7 @@ function remotePhase(version, manifest) {
   }
   validateRemoteCommit({ expectedCommit: manifest.commit, releaseCommit: head });
   if (tagType !== "tag") throw new Error(`remote v${version} is not an annotated tag`);
+  requireSuccessfulMainHead({ root: ROOT });
 
   const release = JSON.parse(
     run(
@@ -738,6 +730,7 @@ function remotePhase(version, manifest) {
         "release",
         "view",
         `v${version}`,
+        "--repo", `https://github.com/${EXPECTED_REPOSITORY}`,
         "--json",
         "tagName,name,url,isDraft,isPrerelease,body,assets",
       ],
@@ -756,6 +749,7 @@ function remotePhase(version, manifest) {
       "release",
       "download",
       `v${version}`,
+      "--repo", `https://github.com/${EXPECTED_REPOSITORY}`,
       "--pattern",
       assetName,
       "--dir",

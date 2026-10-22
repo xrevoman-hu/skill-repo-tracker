@@ -1,134 +1,92 @@
 # GitHub 远端治理
 
-仓库内 workflow 和 Dependabot 配置不能自动证明 GitHub 远端保护已经启用。首次将本批
-治理代码通过 PR 合入、且 `CI / verify`、`CI / coverage`、`CI / msrv` 全绿后，仓库
-管理员需要在 GitHub Settings 完成一次显式设置。仓库内文件只能定义候选策略；远端
-workflow 状态和 ruleset 才是实际执行层。
+本文定义 main-only 目标合同，实际是否启用以只读远端检查和执行记录为准。
+仓库文件已修改不等于服务器规则已迁移。决策与精确退休范围见
+[ADR 0014](../adr/0014-main-only-governance.md)。
 
-## 默认分支治理审查及其信任边界
+## 推送与发布边界
 
-`.github/workflows/trusted-policy.yml` 使用 `pull_request_target`，但只 checkout
-`pull_request.base.sha` 并执行该 base commit 中的 `scripts/trusted-policy-guard.mjs`。PR
-head 代码、workflow、脚本、依赖和 artifact 均不 checkout、不执行、也不进入 cache；变更
-文件名、rename 的旧文件名、labels、事件 action/label 和 head SHA 只作为 GitHub event/REST
-API 数据处理。
+开发分支仅存在于本地；远端默认分支必须为 `main`，最终只保留这一分支。
+先审查与本地验证，再快进推送 main；不强推、不删除 main、不创建临时远端分支。
+服务器移除 PR 必经与合并前 required checks，因此失败代码可能先进入 main。
+普通 push 永不发布；Release 必须等待同一 SHA 最新 CI run 的最新 attempt 中
+`baseline`、`verify`、`coverage`、`msrv` 四个 job 全部成功，再通过既有 local/remote 实物门禁。
 
-普通产品代码 PR 不需要额外 label。guard 会从同一 trusted base checkout 严格读取
-`governance-assets.json`，把 active asset 以及 active/retiring Invariant 的全部 evidence 路径动态
-加入 critical 集；catalog 缺失、结构非法或含危险路径一律失败。若变更触及这些 evidence、
-`.agents/skills/`、`scripts/`、workflow、Rules、ADR、测试/编译配置、Tauri 权限或其他治理事实源，只有当前 head
-上明确的 `governance-reviewed` labeled event 才通过。测试 selector 即使不变，只要 evidence
-文件内容或 rename 前文件名变化也必须复审；guard 始终不读取 PR 文件内容。`synchronize`、
-`edited`、`reopened` 与 `unlabeled` 会重新评估并使原生 job 失败，无关 label event 不能代替
-复审。guard 同时复核 API 返回的 `head.sha`、base ref 与事件值；CI 另行订阅
-`pull_request.edited`，title/body 修改后会重跑 PR evidence。
+同仓库脚本与 workflow 可以同时改变，main-only CI 不能充当独立信任根。人工策略审查、
+精确合同、累计基线、禁止历史改写和发布门禁分别承担有限保护，不宣称恢复 PR 的前置拦截。
+失败时保留红灯记录并以新提交修复；不能使用同 SHA 较早成功的 run/attempt。
 
-workflow 的原生 job 精确命名为 `Trusted policy / guard`。Actions 将这个
-`pull_request_target` job 的 Check Run 关联到事件中的 PR head，并放入 `Trusted policy`
-自己的 Check Suite；checkout 和可执行脚本仍明确来自 `base.sha`。脚本只做 Pull Request API
-GET，退出码直接决定原生 job 成败，权限严格为 `contents: read` 与 `pull-requests: read`。
-不能恢复手工 POST `/check-runs`：Create Check Run API 不能指定 `check_suite_id`，同一 SHA
-有多套 Actions workflow 时，自建 Check Run 可能被归入另一套已取消的 suite，使 ruleset
-永久显示 expected。API、输入、catalog 或策略判断异常都以非零退出码失败。
+## 累计验证基线
 
-这里仍有不能靠仓库代码消除的边界：Ruleset 将 context 绑定到 GitHub Actions integration，
-但不能隔离同仓库内另一份故意使用同名 job 的 workflow。因此这套方案是默认分支代码驱动的
-有限信任流程加固，不是密码学意义上的“不可绕过信任根”。需要强信任根时，应使用凭据隔离
-的专用 GitHub App，或组织级、从独立受控仓库提供的 required workflow，并把 ruleset 的
-`integration_id` 绑定到该独立主体。
+CI 仅订阅 main 的 push，不取消正在运行的同分支 CI。`baseline` job 使用完整 Git 历史，
+只读解析 GitHub API；其余三个 job 复核同一个 `validated_base`，分别传入
+`VERIFY_BASE_REF`、`ARCHITECTURE_BASE_REF`、`COVERAGE_BASE_REF`。
 
-## Action 运行时与 cache 边界
+V 是本次 before 到冻结 bootstrap S 范围内最近的合格祖先：同仓库、ci.yml、push/main、
+最新 run 的最新 attempt 四个 job 完整成功，且 catalog 已有合法迁移计划。
+无合格祖先时回到 S，不能选择最近红灯或本次 HEAD。事件、SHA、祖先关系、单父链、
+catalog、ADR 摘要和分页任一无法核验则失败。搜索最多 1,000 个提交，每 SHA 最多 10 页、
+全局最多 200 次 API 请求；超限失败，不截断后报绿。
 
-五个仓库 workflow 只允许使用完整 commit SHA 固定的 Node 24-native
-`actions/checkout@v7.0.1` 与 `actions/setup-node@v7.0.0`；tag 名只作为注释，机器合同核对实际
-SHA。普通 CI、Release、Security audit 和 Weekly lane 都显式声明 npm cache。Trusted policy
-执行的是受信任 base code，但其输入来自不可信 PR 元数据，因此显式设置
-`package-manager-cache: false`，不自动恢复或保存 package-manager cache。
+本地 `node scripts/main-push-evidence.mjs local-baseline` 返回同一算法的基线与远端 head，
+仅用于准备验证环境，不自动推送。Release 在构建前、manifest 生成前、remote phase 开始
+分别复核最终阶段、来源 SHA 与最新四 job 结果；阶段 A 不得发布。
 
-Dependabot 每周检查仓库内 GitHub Actions，最多同时打开两个 PR；minor/patch 可以分组，major
-更新被忽略并由维护者按独立迁移计划处理。Action pin、cache 语义和 Dependabot 策略都属于
-`GH-GATE-001` 的机器证据，不能只改 workflow 而不同步合同测试。
+表面积历史单独按 V→HEAD 的真实逐提交边验证 active→retiring→删除，再验证工作树末边；
+拒绝浅克隆、merge、缺对象、超过 1,000 条边与非法中间状态。历史只读取固定
+surface-budget.json，不执行历史脚本；当前源代码发现与登记仍须匹配。catalog、架构、
+coverage 继续用同一个 V 累计比较。
 
-上述设计依据 GitHub 官方说明：[`pull_request_target` 在默认分支上下文运行且不能执行不可信
-head](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request_target)、
-[不可信 checkout 的安全风险](https://docs.github.com/en/actions/reference/security/secure-use)、
-[required check 必须成功于最新 commit SHA](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/troubleshooting-required-status-checks)、
-[Check Suite 由 GitHub App 与 commit 组织](https://docs.github.com/en/rest/checks/suites?apiVersion=2022-11-28)、
-[required check 可选择预期 GitHub App 来源](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets)，
-以及 [Rulesets REST 的 `integration_id` 字段](https://docs.github.com/en/rest/repos/rules?apiVersion=2022-11-28)。
+## 两阶段迁移
 
-## 人工应用步骤
+1. A：schema 2 catalog 登记不可变 main-only-2026-10 计划；旧 PR template asset、Trusted
+   gate、两个 PR 专属 Invariant 改为 retiring，旧五份 workflow 与证据保留。启用 main-only
+   CI，Dependabot 版本更新限额置零，关闭安全修复 PR，保留安全告警。
+2. A 快进 main 后等该提交完整 CI 成功。A/B 两个本地提交一次推送不能代替两阶段。
+3. B：以成功 A 为累计基线，四实体转永久 retired tombstone，仅应用计划声明的五处精确
+   关系删除；删除失效 PR workflow/template 和入口。Accepted ADR 原文不变；仍被 ADR
+   selector 引用的 pr-evidence.mjs 及真实回归保留，不再作为活动 CI 审批门禁。
+4. B 本地验证、main 快进和同提交完整 CI 成功后，才进入正式发布。
 
-1. 在 Settings -> Rules -> Rulesets 新建 target 为 Branch、作用于 `main` 的 active
-   ruleset；可显式选择 `main`，或仅在仓库真实 default branch 就是 `main` 时选择
-   default branch。
-2. 启用 Require a pull request before merging；单维护者阶段 required approvals 设为 0。
-3. 启用 Require status checks，并选择 `CI / verify`、`CI / coverage`、`CI / msrv` 和
-   `Trusted policy / guard`；每一项都通过 GitHub 的来源选择器绑定到产生该检查的明确
-   integration。本仓库已从成功的 `verify`、`coverage`、`msrv` Check Run 只读核对 GitHub
-   Actions App ID 为 `15368`；远端 checker 要求四项 `integration_id` 都精确等于 `15368`，
-   缺失或任意其他正整数都失败。
-   GitHub Rulesets REST payload 中对应的 Check Run context 分别是 `verify`、`coverage`、
-   `msrv`、`Trusted policy / guard`；前三个 `CI / ...` 是界面显示标签，不能写进 API 的
-   `context` 字段。最后一个是 `pull_request_target` 原生 job 在 PR head 上产生的精确名称。
-4. 启用 Require branches to be up to date before merging。
-5. 阻止 force push 和 branch deletion；确认 ruleset API 中 `bypass_actors` 字段存在且为
-   空数组，不允许任何 bypass actor；单维护者阶段还必须明确设置
-   `require_extra_approval_for_unattributed_changes=false`，避免 GitHub 新增默认字段使零审批
-   规则漂移。
-6. 在 Settings -> Security / Code security and analysis 启用 Dependabot alerts 和
-   Dependabot security updates。
-7. 在 Settings -> Environments 创建 `release`，将唯一 required reviewer 配置为
-   `xrevoman-hu`，并关闭管理员
-   bypass（API 中 `can_admins_bypass` 必须明确为 `false`），供仅 `workflow_dispatch` 可
-   触发的 `Release gate` 使用。
+计划、bootstrap 和决策摘要不可重写；非计划字段继续遵守原生命周期合同。失败则停止
+发布并向前修复，不回写历史 ADR、tag 或整个 catalog。
 
-本计划不在本地工作树阶段修改远端；管理员必须在首次 CI 全绿后执行以上步骤。
+## 远端设置与恢复材料
 
-## 首次启用顺序
+变更前保存仓库、规则集、workflow、分支及开放 PR 的完整分页快照，为待清理的精确非 main
+SHA 建立可验证恢复载体。旧分支不自动合并；删除前核对当前 SHA 和关联 PR，保留 PR 历史。
+旧 Dependabot YAML 活动时先暂停更新维护，再清理和切换规则。
 
-`pull_request_target` workflow 只有存在于 default branch 后才会运行，因此不能在它
-首次合入前就把 `Trusted policy / guard` 设为 required，否则当前 PR 会永久等待一个尚不可能
-产生的 context。正确顺序是：
+在同一 active Branch ruleset 内使用 include=[~ALL]、exclude=[]、bypass_actors=[]，
+仅保留 creation、deletion、non_fast_forward 三项规则；不加入 update restriction 或 bypass。
+既有 main 可快进，新远端分支创建被阻止。结果不明先 GET，不盲目重复修改。
 
-1. 用现有三个 required checks 将 workflow、base guard 和测试合入 default branch。
-2. 确认 GitHub API 报告 `Trusted policy` workflow 为 active。
-3. 创建一个普通、不合并的 probe PR，确认原生 job `Trusted policy / guard` 出现在该 PR
-   最新 head SHA，且它的 Check Suite 属于 `Trusted policy` run、不同于同 SHA 的 CI suite；
-   再触及 critical path，确认无 label 失败、添加 `governance-reviewed` 后成功；记录实际
-   App/integration。
-4. 将精确 context `Trusted policy / guard` 加入 main ruleset并绑定上一步验证的 integration，
-   再运行
-   `npm run github:governance:check`。
+Dependabot 三类版本更新限额为零，security updates 关闭，alerts 开启；保留 dependency
+graph、现有 secret scanning/push protection、Security audit 与 Weekly resilience。
+关闭自动修复 PR 不代表漏洞解决，后续修复从本地走同一流程。
+release Environment 唯一 required reviewer 仍为 xrevoman-hu，can_admins_bypass=false；
+两个发布 phase 的人工审批不因 main-only 而取消。
 
-第 4 步完成前，本地脚本与 workflow 只能称为“已实现”，不能称为保护已激活；远端
-governance checker 预期失败是正确结果。即使激活，若绑定的是 GitHub Actions 而非独立主体，
-也只属于有限信任的治理审查。
+## 工作流与只读验收
 
-## 只读验收
+最终活动 workflow 精确为 CI、Release gate、Security audit、Weekly resilience；A 还保留
+Trusted policy，B 拒绝它继续活动。仅另允许已登记的 GitHub 托管 Dependabot Updates
+动态 workflow，并校验其实际功能设置。未知 workflow/state、额外规则集或 bypass 均失败。
 
-登录能够读取完整 ruleset/Environment 细节的 GitHub CLI 后运行；GitHub 仅向具有仓库写
-权限的调用者返回 ruleset `bypass_actors`，因此只读账号会按“无法核验”失败，但脚本自身
-仍只执行读取操作：
+checkout/setup-node 固定已审查的 Node 24-native 完整 commit SHA。普通 CI/Release/
+Security/Weekly 显式声明 npm cache；baseline 不安装仓库依赖且 package-manager-cache=false。
+阶段 A 的 Trusted workflow 同样禁用 package cache。Action pin、权限与新增入口需同步负向合同。
+
+登录有权读取完整规则集和 Environment 的 GitHub CLI 后运行：
 
 ```bash
 npm run github:governance:check
 ```
 
-脚本只调用只读 `gh repo view`/`gh api`；Rulesets 与 workflows 均使用 GitHub pagination 读取
-全部页面，不把第一页冒充完整远端状态。随后确认真实 default branch 精确为 `main`（Trusted
-policy 的 `pull_request_target` 必须从受保护的默认分支加载），再核对仓库只有一个
-target=Branch 的 active ruleset，且该 ruleset 保护 `main`、`bypass_actors` 明确为空、PR 必经、approvals 精确为 0、
-`require_extra_approval_for_unattributed_changes` 明确为 `false`、四个且仅
-四个 required checks及其精确
-`integration_id=15368`。第二个 active branch ruleset 会叠加 GitHub 的有效规则，可能暗中加入
-陈旧 context，因此即使它表面只针对其他分支也必须先合并进唯一事实源或停用。检查器还要求
-strict/up-to-date、force/delete 禁用、两项 Dependabot 设置、active `CI`、`Release gate`、
-`Security audit`、`Weekly resilience`、`Trusted policy` workflows，以及 main ruleset 中
-精确 required context `Trusted policy / guard`。任何额外 active repo workflow、未知
-`dynamic/` workflow、缺失/未知 workflow state、重复 context 或永不产生的 required context
-都会失败，避免旁路发布、冒充检查或把单维护者永久锁死；仅精确登记 GitHub 托管的
-Dependabot Updates 动态 workflow，其功能状态仍由独立远端设置校验。最后再核对
-`release` Environment 的唯一 required
-reviewer 为 `xrevoman-hu` 且
-`can_admins_bypass=false`。字段缺失、权限不足或无法核验都失败，不会把未知状态当成通过。
+检查器只读并完整分页，核对真实 default branch、唯一规则集精确规则、无非 main 分支、
+Dependabot 设置、阶段 workflow 清单和 release Environment。未知或权限不足不能算通过。
+不以破坏性试强推、试删除 main 验收保护。
+
+API 语义参考 [Rulesets](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-rulesets/available-rules-for-rulesets)、
+[规则集 REST](https://docs.github.com/en/rest/repos/rules?apiVersion=2022-11-28) 与
+[workflow runs REST](https://docs.github.com/en/rest/actions/workflow-runs?apiVersion=2022-11-28)。

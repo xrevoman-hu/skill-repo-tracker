@@ -78,6 +78,13 @@ test("retirement transitions keep evidence until the next base and gate retireme
     "governance gate weekly ref changed from .github/workflows/weekly.yml to test",
     "governance gate weekly retirement metadata changed",
     "retired governance gate weekly cannot return to active",
+    "retired governance gate weekly record changed",
+  ]);
+
+  const expanded = structuredClone(retired);
+  expanded.gates.find((gate) => gate.id === "weekly").capabilities.push("new-capability");
+  assert.deepEqual(compareGovernanceAssetCatalogs(expanded, retired), [
+    "retired governance gate weekly record changed",
   ]);
 });
 

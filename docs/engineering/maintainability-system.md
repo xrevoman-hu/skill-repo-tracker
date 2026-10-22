@@ -13,7 +13,7 @@
   -> Rule / Invariant（现在必须保持什么）
   -> 回归测试与 fixture（旧行为如何失败）
   -> Gate / Budget（仓库内如何 fail closed）
-  -> PR / Release evidence（本次在哪一层得到证明）
+  -> Change / Release evidence（本次在哪一层得到证明）
   -> Supersede / Retire（边界消失时如何一起删除）
 ```
 
@@ -30,8 +30,8 @@
 - 每个生产文件都有唯一 module、layer 和 owner Rule，禁止依赖边与架构例外可审计；
 - settings、Tauri commands、capability/window/permission、entitlement、CSP、外部 host、前台
   recurring schedule 与全部 timer/frame callback 的实际表面积和机器预算一致；
-- PR 模板仍保留显式变更类型、轻量 Change Brief、失败复现、根因、同类扫描、权限/状态
-  成本、Rule/ADR/Invariant 和验证字段；
+- 变更记录保留用户问题、验收层、失败复现、根因、同类扫描、成本与 Rule/ADR/Invariant；
+  旧 PR 模板仅在阶段 A 作为退休证据保留，不把机器字段检查冒充当前推送审批；
 - tracked verify plan 的步骤、顺序、`--locked` 与 Clippy `-D warnings` 没有相对 base
   被弱化，运行器执行的正是该计划；
 - 生产代码与治理工具预算只能下降。
@@ -48,7 +48,7 @@ always-load 文档）受 `contextBudgets` 的 `maxLines`/`maxBytes` 约束；alw
 Vite 的 `public/` 被关闭且 `index.html` 精确锁定；`src/` 未登记资产扩展和前端动态代码执行
 同样 fail closed，避免把会进入 App/DMG 的 payload 放在 ownership、strict、coverage 与预算之外。
 可执行 JS/TS 与治理 module closure 只能位于已建档 source/tooling roots；GitHub automation
-也采用五个 workflow 的 exact allowlist。需要新增入口时先扩展资产图、预算、负向测试与 ADR，
+也采用按政策阶段变化的 workflow exact allowlist。需要新增入口时先扩展资产图、预算、负向测试与 ADR，
 不能先把代码或 workflow 放进一个未受治理的路径。
 
 ## 开始改动：按范围加载上下文
@@ -67,28 +67,18 @@ npm run governance:context -- --base-ref origin/main
 新增生产文件必须先登记归属；模块迁移、依赖策略放宽或临时例外必须有 ADR 和明确退出条件，
 不能在同一 PR 里静默重写边界。
 
-## 默认分支治理审查：有限信任，不冒充信任根
+## main-only 的信任边界
 
-普通 `pull_request` 检查会执行 PR 分支里的脚本，因此只靠它不能证明 PR 没有同时削弱门禁。
-`Trusted policy / guard` 从默认分支通过 `pull_request_target` 运行，只把 PR 的文件清单和标签
-当作数据，不 checkout、import 或执行 PR 代码。它从同一 trusted base 严格解析治理 catalog，
-把 active asset 与 active/retiring Invariant 的 evidence 路径动态纳入 critical；catalog 缺失、
-非法、路径危险或 evidence 文件被改名/弱化都失败并要求当前 head 上重新发生明确的
-`governance-reviewed` label event。原生 job `Trusted policy / guard` 关联 PR head；脚本只读
-API，退出码决定 job，且 checkout/执行始终来自 base SHA。CI 也订阅 `pull_request.edited`。
-
-这是仓库内的防篡改加固，不是密码学意义上的独立信任根：共享的 GitHub Actions
-integration 不能隔离同仓库内另一份同名 job。手工 POST CheckRun 还可能落入其他已取消
-suite，因此被禁止。远端 checker 会要求 required checks 显式绑定 integration，并锁定 job/权限
-合同，但不能把 GitHub Actions 自己变成独立安全主体。需要“PR 无法给自己开绿灯”的强边界
-时，必须改用凭据隔离的专用 GitHub App，或组织级、从独立受控仓库提供的 required workflow，
-再让 ruleset 绑定该专用 integration。远端规则尚未激活时，只能称为机制已实现；在当前
-in-repository 方案激活后，也只能称为有限信任的治理审查。
+ADR 0014 明确退出 PR 前置门禁与 fresh-label 审查：本地审查/验证后快进 main，
+同 SHA 最新 CI attempt 的 baseline/verify/coverage/msrv 成功后才允许发布。
+失败代码可能先进入 main；同仓库脚本和 workflow 不是独立信任根。
+完整累计基线、只读 API 分页、精确远端规则及两阶段真实推送见 github-governance.md。
+旧 Accepted ADR 不改写；仍被引用的历史回归保留，不作为活动 PR gate。
 
 ## 新功能：先支付长期成本
 
 新增设置、Tauri command、网络 host、目录能力、capability、entitlement、timer、daemon、
-常驻开销或兼容分支前，PR 必须说明为什么合理默认值和现有实体不能解决。改变现有产品
+常驻开销或兼容分支前，变更记录必须说明为什么合理默认值和现有实体不能解决。改变现有产品
 边界时先写 ADR，再更新 `surface-budget.json`、负向测试与 Rule；源代码里出现未登记实体会
 直接失败。没有明确用户价值时不增加实体。
 
@@ -101,22 +91,16 @@ in-repository 方案激活后，也只能称为有限信任的治理审查。
 5. 新增长期边界时更新 Rule/ADR/Invariant；没有新边界时明确说明。
 6. 只有功能和全部入口消失，或已有更高层契约完整替代时，才能退休旧测试和 Rule。
 
-Squash merge 后仓库通常不能重放 red commit，因此 PR evidence 必须写出失败测试的名字和旧
-行为；`CI / verify` 会检查字段完整、changed paths 对应的 Invariant ID 都已列出，Bug PR
-由模板内必选且互斥的“变更类型”认定，并必须填写根因与同类扫描；标题显式写出 fix/bug/
-hotfix/修复却选择非 Bug 会失败。模板同时承担轻量 Change Brief，所有 PR 都写明用户问题、
-非目标和实际验收层；docs/chore 不另造一份独立简报。module map 与 governance context 还会
-返回 changed paths 对应的 owning Rule/ADR asset ID，PR 必须用稳定 ID 明确列出，不能只贴路径。
-独立 lane 必须在“已运行并附结果/链接”和“不适用并说明原因”中且只选择一个，同时显式确认
-diff 没有秘密、真实用户数据或本机/内部资料。自动化只能证明字段完整、ID 与 changed paths
-一致，不能证明 run、链接或人工声明真实；最终测试负责持续保护，作者和审查者负责核对证据，
-也不伪称能够证明历史 commit 当时确实运行过。
+变更记录必须写出失败测试名称与旧行为、根因、同类扫描、用户问题和非目标，
+列出 changed paths 对应的 owning Rule/ADR 及高风险 Invariant ID。
+独立 lane 附实际结果，或明确不适用原因；确认 diff 不含秘密、用户数据或本机资料。
+main-only 不再自动审查 PR 正文，不能声称字段已被原 PR gate 验证；回归测试继续保护行为。
 
 ## 证据层与完成定义
 
 绿色 source/static check 不能替代浏览器行为，绿色测试不能替代数据库/文件系统回滚，
 本地正确 commit 不能替代远端 tag/Release，Release 元数据也不能替代下载后的 DMG 实物。
-PR 只声明实际验证过的层；Release 继续通过 local manifest 与 remote download 两阶段复验。
+变更只声明实际验证过的层；Release 继续通过 local manifest 与 remote download 两阶段复验。
 
 ## 生命周期与新鲜度
 
@@ -132,7 +116,8 @@ PR 只声明实际验证过的层；Release 继续通过 local manifest 与 remo
   global assets，必须保持 active 且 `alwaysLoad=true`。已有全局资产不能在后续 base 中降级为
   按需加载。
 - published fixture 只允许追加新版本，不重写历史版本。
-- 产品表面积按 active -> retiring(reason) -> 后续 PR 删除，新增实体必须从 active 开始。
+- 产品表面积按 active -> retiring(reason) -> 后续提交删除，新增实体从 active 开始；
+  V 到 HEAD 逐边读取固定 JSON 并检查工作树末边，不执行历史代码，当前源码登记仍须匹配。
 - 临时 test waiver 只允许 tracked ledger 中最长 30 天的 active ID，并且只能隔离独立 lane；
   active scope 不可改写，过期即失败，retired tombstone 永久保留，主测试仍禁止 skip；依赖风险
   active 最长 90 天且不可延期，只能退休后另建 ID。
@@ -152,7 +137,7 @@ PR 只声明实际验证过的层；Release 继续通过 local manifest 与 remo
 | 确定性 gate 步骤 | `docs/engineering/verify-plan.json` |
 | 设置、权限、网络、schedule 与 timer/frame callback 表面积 | `docs/engineering/surface-budget.json` |
 | 独立 lane 临时测试豁免与退休记录 | `docs/engineering/test-waivers.json` |
-| 贡献/PR 证据格式 | `CONTRIBUTING.md`、PR template |
+| 贡献与变更证据 | `CONTRIBUTING.md` |
 | 安全披露 | `SECURITY.md` |
 | 确定性验证 | `npm run verify` |
 | 发布实物合同 | `docs/rules/testing-release.md` |

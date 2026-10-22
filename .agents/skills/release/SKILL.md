@@ -20,13 +20,14 @@ description: 执行或审查 Skill Repo Tracker 的 macOS 发布、发布前验�
 产物名与操作顺序以当前 tracked 文件和实时远端为准，不能从历史成功日志继承。
 
 核对发布授权、目标版本、分支/HEAD、dirty 状态、远端 main、目标 tag/Release 是否已存在。
-保留未提交工作；所有编辑用 apply_patch，不 reset/stash，不直接 push main、不 force-push，
+保留未提交工作；所有编辑用 apply_patch，不 reset/stash；main 只在授权及本地验证后快进推送，不 force-push，
 不修改历史 tag/Release/fixture。仅要求预检或审查时不创建 tag、Release 或上传。
 
 ## 准备与 local phase
 
-版本、README、Release notes、发布文档在独立 release 分支保持一致，经 PR required checks、
-Security audit 与最终 head 治理审查后合入。正式来源必须是最终干净 main，确认远端没有
+版本、README、Release notes、发布文档在本地分支保持一致，完成本地验证与治理审查后
+快进推送 main。等待同一 SHA 最新 CI attempt 的 baseline/verify/coverage/msrv 与
+适用安全审计通过；迁移阶段 A 禁止正式发布，须完成阶段 B。正式来源必须是最终干净 main，确认远端没有
 前进；已发布同版本或来源不一致时先停止并报告，不能移动旧 tag 解决。
 
 按 Rule 的唯一 `release:verify` 接口执行 local phase，不手工挑子步骤代替它。Environment
@@ -54,7 +55,7 @@ Release 标题、正文与 tracked notes 一致，公开 DMG 下载后的签名�
 
 ## 完成报告
 
-给出版本、PR、各 lane 的实际 run、local/main/remote/tag peeled/manifest commit、唯一公开
+给出版本、各 lane 的实际 run、local/main/remote/tag peeled/manifest commit、唯一公开
 DMG 的名称/bytes/SHA-256 与下载复验结果。最终证明本地 main = origin/main = tag peeled
 commit = manifest.commit = 公开 DMG 构建来源。任何缺项写“待完成”并给下一步；不能只凭
 Release 页面存在、同名文件或 unsigned token 声称发布已验证。

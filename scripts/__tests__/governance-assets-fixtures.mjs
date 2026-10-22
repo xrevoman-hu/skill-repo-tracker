@@ -12,7 +12,8 @@ const PRINCIPLE_NAMES = [
 ];
 
 export const validCatalog = () => ({
-  schemaVersion: 1,
+  schemaVersion: 2,
+  policyRemovals: [],
   contextBudgets: {
     default: { maxLines: 180, maxBytes: 14000 },
     alwaysLoad: { maxLines: 160, maxBytes: 12000 },

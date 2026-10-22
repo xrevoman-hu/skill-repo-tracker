@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parse as parseYaml } from "yaml";
+import { catalogFixture } from "./main-push-fixtures.mjs";
 
 import {
   checkArchitectureSnapshot,
@@ -40,7 +41,7 @@ import {
   validateIndexHtmlPolicy,
   validateRuntimeToolchain,
   validateReleaseWorkflowPolicy,
-  validateRepositoryAutomationPolicy,
+  validateRepositoryAutomationPolicy as validateAutomationPolicy,
   validateSecurityAuditWorkflowPolicy,
   validatePlaywrightConfigPolicy,
   validateTrustedPolicyWorkflowPolicy,
@@ -51,6 +52,8 @@ import {
   validateVitestConfigPolicy,
   validateWeeklyResilienceWorkflowPolicy,
 } from "../governance.mjs";
+
+const validateRepositoryAutomationPolicy = (options) => validateAutomationPolicy({ catalog: catalogFixture(), ...options });
 
 const CRITICAL_PACKAGE_SCRIPTS = {
   typecheck: "tsc --noEmit",
@@ -232,27 +235,24 @@ test("CI workflow keeps every required gate fail-closed and exact", () => {
       ),
     ],
     [
-      "remove pull request trigger",
+      "restore pull request trigger",
       valid.replace(
-        "  pull_request:\n    types: [opened, reopened, synchronize, edited]\n",
-        "",
+        "on:\n",
+        "on:\n  pull_request:\n    types: [opened, reopened, synchronize, edited]\n",
       ),
     ],
     [
-      "remove PR metadata edit trigger",
-      valid.replace(", edited]", "]"),
+      "cancel a preceding cumulative run",
+      valid.replace("cancel-in-progress: false", "cancel-in-progress: true"),
     ],
     ["rename required job", valid.replace("  verify:\n    name: verify", "  verify-renamed:\n    name: verify")],
     [
-      "run PR evidence before its npm dependencies exist",
-      valid.replace(
-        "      - name: Install npm dependencies from the official registry\n        run: npm ci --registry=https://registry.npmjs.org\n      - name: Enforce PR learning evidence",
-        "      - name: Enforce PR learning evidence",
-      ).replace(
-        "      - name: Set up pinned Rust",
-        "      - name: Install npm dependencies from the official registry\n        run: npm ci --ignore-scripts --registry=https://registry.npmjs.org\n      - name: Set up pinned Rust",
-      ),
+      "use the immediate push before instead of the shared successful ancestor",
+      valid.replace("${{ needs.baseline.outputs.validated_base }}", "${{ github.event.before }}"),
     ],
+    ["detach heavy jobs from baseline", valid.replace("    needs: baseline\n", "")],
+    ["remove read-only Actions access", valid.replace("      actions: read\n", "")],
+    ["weaken ancestry validation", valid.replace('          test "$VERIFY_BASE_REF" != "$GITHUB_SHA"\n', "")],
     [
       "remove the executor override preflight",
       valid.replace(
@@ -442,8 +442,10 @@ test("every dependency-consuming workflow rejects shrinkwrap and nested Cargo co
         (step) => step.name === "Reject tracked dependency and Cargo overrides",
       );
       const consumers = steps.flatMap((step, index) =>
-        String(step.uses ?? "").startsWith("actions/setup-node@") ||
-        /(?:^|\s)(?:npm|cargo|tauri)\s/m.test(step.run ?? "")
+        (String(step.uses ?? "").startsWith("actions/setup-node@") &&
+          step.with?.["package-manager-cache"] !== false) ||
+        /(?:^|\s)(?:npm|cargo|tauri)\s/m.test(step.run ?? "") ||
+        /(?:^|\n)node scripts\/native-command\.mjs check-msrv(?:\s|$)/.test(step.run ?? "")
           ? [index]
           : [],
       );
@@ -470,16 +472,20 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: /
-    schedule: { interval: weekly }
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 0
+    labels: [dependencies, javascript]
   - package-ecosystem: cargo
     directory: /src-tauri
-    schedule: { interval: weekly }
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 0
+    labels: [dependencies, rust]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
     labels: [dependencies, ci]
     groups:
       minor-and-patch:
@@ -519,7 +525,7 @@ updates:
     [],
   );
   for (const mutation of [
-    dependabot.replace("open-pull-requests-limit: 2", "open-pull-requests-limit: 3"),
+    dependabot.replace("open-pull-requests-limit: 0\n    labels: [dependencies, ci]", "open-pull-requests-limit: 3\n    labels: [dependencies, ci]"),
     dependabot.replace("labels: [dependencies, ci]", "labels: [dependencies]"),
     dependabot.replace("update-types: [minor, patch]", "update-types: [major, minor, patch]"),
     dependabot.replace(
@@ -533,4 +539,15 @@ updates:
       ),
     );
   }
+  for (const ecosystem of ["npm", "cargo"]) {
+    const parsed = parseYaml(dependabot);
+    parsed.updates.find((entry) => entry["package-ecosystem"] === ecosystem)["open-pull-requests-limit"] = 1;
+    assert.ok(validateRepositoryAutomationPolicy({ workflowPaths, dependabotContents: JSON.stringify(parsed) }).length);
+  }
+  const finalPaths = workflowPaths.filter((path) => !path.endsWith("trusted-policy.yml"));
+  assert.deepEqual(validateRepositoryAutomationPolicy({ catalog: catalogFixture("retired"), workflowPaths: finalPaths,
+    dependabotContents: actualDependabot }), []);
+  assert.ok(validateRepositoryAutomationPolicy({ workflowPaths: finalPaths, dependabotContents: actualDependabot }).length);
+  assert.ok(validateRepositoryAutomationPolicy({ catalog: catalogFixture("retired"), workflowPaths,
+    dependabotContents: actualDependabot }).length);
 });

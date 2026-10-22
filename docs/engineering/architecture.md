@@ -118,10 +118,11 @@ recurring timer 的精确清单由 `surface-budget.json` 锁定，新增项必�
 ## 验证层次
 
 `npm run verify` 是本地和 CI 的唯一确定性入口；其步骤与顺序来自 tracked
-`verify-plan.json`，并在 PR 上与 base 比较。每一步声明稳定 `capabilities`；退休链的最终
+`verify-plan.json`，与最近完整成功的 main 祖先 V 累计比较。每一步声明稳定 `capabilities`；退休链的最终
 active replacement 必须覆盖旧步骤全部能力；现有 constitution capability 还绑定 exact
 command/args，不能由新步骤只靠自报字符串冒充。历史 retired step 作为 append-only tombstone
-保留，不能靠两次 PR 静默移除一类验证。
+保留，不能靠多次提交静默移除一类验证。ADR 0014 的 main-only 政策削减只授权精确四实体、
+五处关系，须经两个真实成功 main 推送；它不放宽其他生命周期或数值预算。
 `CI / verify` 随后追加 Playwright E2E。
 Coverage、MSRV、网络安全审计、性能门和发布实物验证是独立 lane；一个 lane 的绿色不能
 代替另一个。发布流程

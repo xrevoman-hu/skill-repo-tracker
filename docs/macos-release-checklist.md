@@ -11,7 +11,8 @@
 ## 1. 授权与来源
 
 - 只有用户明确要求发布时才进入正式发布；普通 push 不发布。
-- 发布必须来自受保护 PR 合入后的最终干净 `main`，tag 为 annotated tag。
+- 发布必须来自最终干净 `main`，治理迁移已完成阶段 B，且该 SHA 最新 CI attempt 的
+  baseline/verify/coverage/msrv 均成功；tag 为 annotated tag。
 - GitHub `release` Environment 必须人工批准；上传结果不明时先查询，禁止盲目重试。
 
 ## 2. 本地实物验收

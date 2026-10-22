@@ -2,7 +2,7 @@
 
 owner: xrevoman-hu。review cadence: per-release；受保护路径变化时提前复审。
 output contract: 简明中文裁定与可追溯证据，保留实际base/head及未验证项。
-rollback boundary: 当前PR分支普通提交回退Skill，不覆盖用户工作或改写历史发布。
+rollback boundary: 通过本地分支的新提交修复或回退 Skill，仅快进 main，不覆盖用户工作或改写历史发布。
 
 本包绑定Skill Repo Tracker仓库，安装目录不等于执行cwd。先在用户指定仓库定位
 CONTRIBUTING.md、SECURITY.md、docs/engineering/architecture.md与owning Rules；

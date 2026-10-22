@@ -486,7 +486,7 @@ test("remote verification fetches fresh main and tag into explicit destinations"
     "fetch",
     "--no-tags",
     "--prune",
-    "origin",
+    "https://github.com/xrevoman-hu/skill-repo-tracker.git",
     "+refs/heads/main:refs/remotes/origin/main",
     "refs/tags/v1.2.2:refs/tags/_srt-release-remote/v1.2.2",
   ]);
@@ -497,7 +497,7 @@ test("local verification binds the build to fresh main before any artifact exist
     "fetch",
     "--no-tags",
     "--prune",
-    "origin",
+    "https://github.com/xrevoman-hu/skill-repo-tracker.git",
     "+refs/heads/main:refs/remotes/origin/main",
   ]);
   assert.doesNotThrow(() =>
@@ -565,10 +565,12 @@ test("release phases call the source and metadata validators at their acceptance
     source.indexOf("function localPhase(version)"),
     source.indexOf("function remotePhase(version, manifest)"),
   );
-  assert.equal(localPhase.match(/assertLocalReleaseSource\(version\)/g)?.length, 2);
-  assert.ok(localPhase.indexOf("assertLocalReleaseSource(version)") < localPhase.indexOf('run("npm", ["run", "verify"])'));
+  assert.equal(localPhase.match(/assertLocalReleaseSource\(version, run, ROOT\)/g)?.length, 2);
+  assert.ok(localPhase.indexOf("assertLocalReleaseSource(version, run, ROOT)") < localPhase.indexOf('run("npm", ["run", "verify"], baselineOptions)'));
+  assert.match(localPhase, /run\("npm", \["run", "coverage:check"\], baselineOptions\)/);
 
   const remotePhase = source.slice(source.indexOf("function remotePhase(version, manifest)"));
+  assert.ok(remotePhase.indexOf("requireSuccessfulMainHead({ root: ROOT })") < remotePhase.indexOf('"release",'));
   assert.equal(remotePhase.match(/validateFinalReleaseMetadata\(release, version,/g)?.length, 1);
   assert.ok(
     remotePhase.indexOf("validateFinalReleaseMetadata(release, version,") <
@@ -617,6 +619,10 @@ test("remote verification isolates the authoritative annotated tag and rejects r
 
     mkdirSync(verifier);
     runGit(verifier, ["init"]);
+    // Redirect only this isolated verifier's exact canonical URL to the local
+    // bare fixture; production fetch arguments remain authoritative and intact.
+    runGit(verifier, ["config", "--local", `url.${remote}.insteadOf`,
+      "https://github.com/xrevoman-hu/skill-repo-tracker.git"]);
     runGit(verifier, ["remote", "add", "origin", remote]);
     runGit(verifier, ["fetch", "--no-tags", "origin", "main"]);
     runGit(verifier, ["checkout", "-b", "main", "FETCH_HEAD"]);

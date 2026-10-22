@@ -71,12 +71,18 @@
     "newModuleMaxLines": 800,
     "maxLineBytes": 800,
     "newModuleMaxBytes": 65536,
-    "standalone": {},
+    "standalone": {
+      "scripts/pr-evidence.mjs": {
+        "kind": "cli",
+        "owner": "docs/rules/testing-release.md",
+        "retireWhen": "ADR0008 selector与历史PR解析证据由后续正式决策迁移后；不作为活动CI审批门禁。"
+      }
+    },
     "hotSpots": {
       "scripts/governance.mjs": {
         "status": "active",
-        "maxLines": 1356,
-        "maxBytes": 48293,
+        "maxLines": 1348,
+        "maxBytes": 48005,
         "targetLines": 1200,
         "adr": "docs/adr/0008-executable-governance-assets.md"
       }

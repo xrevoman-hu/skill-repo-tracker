@@ -1,4 +1,18 @@
+import { requireSuccessfulMainHead, mainBaselineEnvironment } from "./main-push-evidence.mjs";
+import { EXPECTED_GIT_URL } from "./main-push-github.mjs";
+
 const PRODUCT_NAME = "Skill Repo Tracker";
+
+export { requireSuccessfulMainHead };
+
+export function assertLocalReleaseSource(version, run, root) {
+  run("git", buildLocalMainFetchArguments());
+  const head = run("git", ["rev-parse", "HEAD"], { capture: true }).trim();
+  const remoteMain = run("git", ["rev-parse", "origin/main"], { capture: true }).trim();
+  const remoteTagOutput = run("git", ["ls-remote", "--tags", "--refs", EXPECTED_GIT_URL, `refs/tags/v${version}`], { capture: true });
+  validateLocalReleaseSource({ version, head, remoteMain, remoteTagOutput });
+  return { env: { ...process.env, ...mainBaselineEnvironment(requireSuccessfulMainHead({ root })) } };
+}
 
 function verifierRemoteTagRef(version) {
   return `refs/tags/_srt-release-remote/v${version}`;
@@ -9,7 +23,7 @@ export function buildRemoteFetchArguments(version) {
     "fetch",
     "--no-tags",
     "--prune",
-    "origin",
+    EXPECTED_GIT_URL,
     "+refs/heads/main:refs/remotes/origin/main",
     `refs/tags/v${version}:${verifierRemoteTagRef(version)}`,
   ];
@@ -24,7 +38,7 @@ export function buildLocalMainFetchArguments() {
     "fetch",
     "--no-tags",
     "--prune",
-    "origin",
+    EXPECTED_GIT_URL,
     "+refs/heads/main:refs/remotes/origin/main",
   ];
 }

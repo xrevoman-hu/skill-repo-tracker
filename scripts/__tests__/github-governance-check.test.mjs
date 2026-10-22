@@ -1,549 +1,147 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { evaluateGitHubGovernance, loadPaginatedCollection, securityUpdatesState } from "../github-governance-check.mjs";
+import { createGitHubReader } from "../main-push-github.mjs";
+import { catalogFixture } from "./main-push-fixtures.mjs";
 
-import {
-  evaluateGitHubGovernance,
-  loadPaginatedCollection,
-} from "../github-governance-check.mjs";
+function passingState(phase = "retiring") {
+  return {
+    catalog: catalogFixture(phase), defaultBranch: "main", branches: [{ name: "main" }],
+    rulesets: [{ target: "branch", enforcement: "active", bypass_actors: [],
+      conditions: { ref_name: { include: ["~ALL"], exclude: [] } },
+      rules: ["creation", "deletion", "non_fast_forward"].map((type) => ({ type })) }],
+    dependabotAlerts: "enabled", securityUpdates: "disabled", secretScanning: "enabled", pushProtection: "enabled",
+    workflows: [
+      ["CI", "ci"], ["Release gate", "release-gate"], ["Security audit", "security-audit"],
+      ["Weekly resilience", "weekly-resilience"], ...(phase === "retiring" ? [["Trusted policy", "trusted-policy"]] : []),
+    ].map(([name, file]) => ({ name, path: `.github/workflows/${file}.yml`, state: "active" })),
+    releaseEnvironment: { can_admins_bypass: false, protection_rules: [{ type: "required_reviewers",
+      reviewers: [{ type: "User", reviewer: { login: "xrevoman-hu" } }] }] },
+  };
+}
+const errors = (mutate, phase) => { const state = passingState(phase); mutate(state); return evaluateGitHubGovernance(state); };
 
 test("accepts an active main ruleset with every required protection", () => {
-  assert.deepEqual(
-    evaluateGitHubGovernance({
-      defaultBranch: "main",
-      rulesets: [
-        {
-          name: "protect-main",
-          target: "branch",
-          enforcement: "active",
-          conditions: { ref_name: { include: ["refs/heads/main"] } },
-          bypass_actors: [],
-          rules: [
-            {
-              type: "pull_request",
-              parameters: {
-                required_approving_review_count: 0,
-                require_extra_approval_for_unattributed_changes: false,
-              },
-            },
-            {
-              type: "required_status_checks",
-              parameters: {
-                strict_required_status_checks_policy: true,
-                required_status_checks: [
-                  { context: "verify", integration_id: 15368 },
-                  { context: "coverage", integration_id: 15368 },
-                  { context: "msrv", integration_id: 15368 },
-                  { context: "Trusted policy / guard", integration_id: 15368 },
-                ],
-              },
-            },
-            { type: "non_fast_forward" },
-            { type: "deletion" },
-          ],
-        },
-      ],
-      dependabotAlerts: true,
-      securityUpdates: true,
-      workflows: [
-        { name: "CI", path: ".github/workflows/ci.yml", state: "active" },
-        {
-          name: "Release gate",
-          path: ".github/workflows/release-gate.yml",
-          state: "active",
-        },
-        {
-          name: "Security audit",
-          path: ".github/workflows/security-audit.yml",
-          state: "active",
-        },
-        {
-          name: "Weekly resilience",
-          path: ".github/workflows/weekly-resilience.yml",
-          state: "active",
-        },
-        {
-          name: "Trusted policy",
-          path: ".github/workflows/trusted-policy.yml",
-          state: "active",
-        },
-      ],
-      releaseEnvironment: {
-        can_admins_bypass: false,
-        protection_rules: [{ type: "required_reviewers", reviewers: [{ type: "User", reviewer: { login: "xrevoman-hu" } }] }],
-      },
-    }),
-    [],
-  );
+  assert.deepEqual(evaluateGitHubGovernance(passingState()), []);
+  assert.deepEqual(evaluateGitHubGovernance(passingState("retired")), []);
 });
 
 test("reports every missing remote control", () => {
-  assert.deepEqual(
-    evaluateGitHubGovernance({
-      defaultBranch: "main",
-      rulesets: [],
-      dependabotAlerts: false,
-      securityUpdates: false,
-      workflows: [],
-      releaseEnvironment: undefined,
-    }),
-    [
-      "no active ruleset protects main",
-      "Dependabot alerts are not enabled or cannot be verified",
-      "Dependabot security updates are not enabled or cannot be verified",
-      "active CI workflow is missing",
-      "active Release gate workflow is missing",
-      "active Security audit workflow is missing",
-      "active Weekly resilience workflow is missing",
-      "active Trusted policy workflow is missing",
-      "release Environment required reviewer must be exactly xrevoman-hu",
-      "release Environment allows admin bypass or cannot be verified",
-    ],
-  );
+  const result = evaluateGitHubGovernance({ catalog: catalogFixture(), defaultBranch: "main", rulesets: [], workflows: [] });
+  for (const text of ["branches must be exactly main", "no active ruleset", "Dependabot alerts", "security updates",
+    "secret scanning must", "push protection", "active CI", "active Release gate", "active Security audit",
+    "active Weekly resilience", "active Trusted policy", "required reviewer", "admin bypass"]) {
+    assert.ok(result.some((value) => value.includes(text)), text);
+  }
 });
 
 test("does not accept a ruleset whose exclusions can remove main", () => {
-  const errors = evaluateGitHubGovernance({
-    defaultBranch: "main",
-    rulesets: [
-      {
-        target: "branch",
-        enforcement: "active",
-        bypass_actors: [],
-        conditions: {
-          ref_name: {
-            include: ["~DEFAULT_BRANCH"],
-            exclude: ["refs/heads/main"],
-          },
-        },
-        rules: [],
-      },
-    ],
-    dependabotAlerts: true,
-    securityUpdates: true,
-    workflows: [
-      { name: "CI", path: ".github/workflows/ci.yml", state: "active" },
-      { name: "Release gate", path: ".github/workflows/release-gate.yml", state: "active" },
-      {
-        name: "Security audit",
-        path: ".github/workflows/security-audit.yml",
-        state: "active",
-      },
-      {
-        name: "Weekly resilience",
-        path: ".github/workflows/weekly-resilience.yml",
-        state: "active",
-      },
-      {
-        name: "Trusted policy",
-        path: ".github/workflows/trusted-policy.yml",
-        state: "active",
-      },
-    ],
-    releaseEnvironment: {
-      can_admins_bypass: false,
-      protection_rules: [{ type: "required_reviewers", reviewers: [{ type: "User", reviewer: { login: "xrevoman-hu" } }] }],
-    },
-  });
-
-  assert.deepEqual(errors, ["no active ruleset protects main"]);
+  for (const include of [["refs/heads/main"], ["~DEFAULT_BRANCH"], ["~ALL", "refs/heads/main"]]) {
+    assert.ok(errors((state) => { state.rulesets[0].conditions.ref_name.include = include; }).length);
+  }
+  assert.ok(errors((state) => { state.rulesets[0].conditions.ref_name.exclude = ["refs/heads/main"]; }).length);
 });
 
-function passingState(overrides = {}) {
-  return {
-    defaultBranch: "main",
-    rulesets: [
-      {
-        target: "branch",
-        enforcement: "active",
-        conditions: { ref_name: { include: ["~DEFAULT_BRANCH"], exclude: [] } },
-        bypass_actors: [],
-        rules: [
-          {
-            type: "pull_request",
-            parameters: {
-              required_approving_review_count: 0,
-              require_extra_approval_for_unattributed_changes: false,
-            },
-          },
-          {
-            type: "required_status_checks",
-            parameters: {
-              strict_required_status_checks_policy: true,
-              required_status_checks: [
-                { context: "verify", integration_id: 15368 },
-                { context: "coverage", integration_id: 15368 },
-                { context: "msrv", integration_id: 15368 },
-                { context: "Trusted policy / guard", integration_id: 15368 },
-              ],
-            },
-          },
-          { type: "non_fast_forward" },
-          { type: "deletion" },
-        ],
-      },
-    ],
-    dependabotAlerts: true,
-    securityUpdates: true,
-    workflows: [
-      { name: "CI", path: ".github/workflows/ci.yml", state: "active" },
-      { name: "Release gate", path: ".github/workflows/release-gate.yml", state: "active" },
-      {
-        name: "Security audit",
-        path: ".github/workflows/security-audit.yml",
-        state: "active",
-      },
-      {
-        name: "Weekly resilience",
-        path: ".github/workflows/weekly-resilience.yml",
-        state: "active",
-      },
-      {
-        name: "Trusted policy",
-        path: ".github/workflows/trusted-policy.yml",
-        state: "active",
-      },
-    ],
-    releaseEnvironment: {
-      can_admins_bypass: false,
-      protection_rules: [{ type: "required_reviewers", reviewers: [{ type: "User", reviewer: { login: "xrevoman-hu" } }] }],
-    },
-    ...overrides,
-  };
-}
-
 test("the repository default branch must remain main for trusted policy", () => {
-  assert.deepEqual(evaluateGitHubGovernance(passingState()), []);
-  assert.deepEqual(evaluateGitHubGovernance(passingState({ defaultBranch: "trunk" })), [
-    "repository default branch must be exactly main",
-    "no active ruleset protects main",
-  ]);
-  assert.deepEqual(evaluateGitHubGovernance(passingState({ defaultBranch: undefined })), [
-    "repository default branch must be exactly main",
-    "no active ruleset protects main",
-  ]);
-
-  const explicitMain = passingState({ defaultBranch: "trunk" });
-  explicitMain.rulesets[0].conditions.ref_name.include = ["refs/heads/main"];
-  assert.deepEqual(evaluateGitHubGovernance(explicitMain), [
-    "repository default branch must be exactly main",
-  ]);
+  assert.ok(errors((state) => { state.defaultBranch = "trunk"; }).some((error) => error.includes("default branch")));
+  assert.ok(errors((state) => { state.branches.push({ name: "bot/update" }); }).some((error) => error.includes("exactly main")));
 });
 
 test("a second active branch ruleset cannot hide stacked main requirements", () => {
-  const state = passingState();
-  state.rulesets.push({
-    target: "branch",
-    enforcement: "active",
-    conditions: { ref_name: { include: ["refs/heads/main"], exclude: [] } },
-    bypass_actors: [],
-    rules: [
-      {
-        type: "required_status_checks",
-        parameters: {
-          strict_required_status_checks_policy: true,
-          required_status_checks: [
-            { context: "stale-never-produced", integration_id: 15368 },
-          ],
-        },
-      },
-    ],
-  });
-
-  assert.deepEqual(evaluateGitHubGovernance(state), [
-    "repository must have exactly one active branch ruleset; found 2",
-  ]);
+  assert.deepEqual(errors((state) => { state.rulesets.push(structuredClone(state.rulesets[0])); }),
+    ["repository must have exactly one active branch ruleset; found 2"]);
 });
 
 test("an explicit main condition does not make a tag ruleset a branch protection", () => {
-  const state = passingState();
-  state.rulesets[0].target = "tag";
-  state.rulesets[0].conditions.ref_name.include = ["refs/heads/main"];
-  assert.deepEqual(evaluateGitHubGovernance(state), ["no active ruleset protects main"]);
+  assert.ok(errors((state) => { state.rulesets[0].target = "tag"; }).some((error) => error.includes("no active ruleset")));
 });
 
 test("main ruleset bypass actors must be explicitly present and empty", () => {
-  const missing = passingState();
-  delete missing.rulesets[0].bypass_actors;
-  assert.deepEqual(evaluateGitHubGovernance(missing), [
-    "main ruleset bypass actors are missing or cannot be verified",
-  ]);
-
-  const configured = passingState();
-  configured.rulesets[0].bypass_actors = [{ actor_id: 1 }];
-  assert.deepEqual(evaluateGitHubGovernance(configured), [
-    "main ruleset has bypass actors; direct main changes are still possible",
-  ]);
-});
-
-test("required checks use Check Run contexts rather than workflow display labels", () => {
-  const state = passingState();
-  const statusRule = state.rulesets[0].rules.find(
-    (rule) => rule.type === "required_status_checks",
-  );
-  statusRule.parameters.required_status_checks = [
-    { context: "CI / verify", integration_id: 15368 },
-    { context: "CI / coverage", integration_id: 15368 },
-    { context: "CI / msrv", integration_id: 15368 },
-    { context: "Trusted policy / guard", integration_id: 15368 },
-  ];
-
-  assert.deepEqual(evaluateGitHubGovernance(state), [
-    "main ruleset is missing required check: CI / verify",
-    "main ruleset is missing required check: CI / coverage",
-    "main ruleset is missing required check: CI / msrv",
-    "main ruleset has unexpected required check: CI / verify",
-    "main ruleset has unexpected required check: CI / coverage",
-    "main ruleset has unexpected required check: CI / msrv",
-  ]);
+  assert.ok(errors((state) => { delete state.rulesets[0].bypass_actors; }).some((error) => error.includes("bypass")));
+  assert.ok(errors((state) => { state.rulesets[0].bypass_actors.push({ actor_id: 1 }); }).some((error) => error.includes("bypass")));
 });
 
 test("main remains mergeable for one maintainer and has no stale or duplicate required checks", () => {
-  const state = passingState();
-  const pullRequestRule = state.rulesets[0].rules.find(
-    (rule) => rule.type === "pull_request",
-  );
-  pullRequestRule.parameters.required_approving_review_count = 1;
-  const statusRule = state.rulesets[0].rules.find(
-    (rule) => rule.type === "required_status_checks",
-  );
-  statusRule.parameters.required_status_checks.push(
-    { context: "stale-never-produced", integration_id: 15368 },
-    { context: "verify", integration_id: 15368 },
-  );
-
-  assert.deepEqual(evaluateGitHubGovernance(state), [
-    "main ruleset pull request approvals must be exactly 0",
-    "main ruleset has unexpected required check: stale-never-produced",
-    "main ruleset has duplicate required check: verify",
-  ]);
+  for (const type of ["pull_request", "required_status_checks", "update", "required_signatures", "deletion"]) {
+    assert.ok(errors((state) => { state.rulesets[0].rules.push({ type }); }).some((error) => error.includes("must contain only")), type);
+  }
+  for (const type of ["creation", "deletion", "non_fast_forward"]) {
+    assert.ok(errors((state) => { state.rulesets[0].rules = state.rulesets[0].rules.filter((rule) => rule.type !== type); }).length, type);
+  }
 });
 
 test("main ruleset cannot re-enable unattributed-change approval drift", () => {
-  const missing = passingState();
-  const missingRule = missing.rulesets[0].rules.find(
-    (rule) => rule.type === "pull_request",
-  );
-  delete missingRule.parameters.require_extra_approval_for_unattributed_changes;
-  assert.deepEqual(evaluateGitHubGovernance(missing), [
-    "main ruleset must disable extra approval for unattributed changes",
-  ]);
-
-  const enabled = passingState();
-  const enabledRule = enabled.rulesets[0].rules.find(
-    (rule) => rule.type === "pull_request",
-  );
-  enabledRule.parameters.require_extra_approval_for_unattributed_changes = true;
-  assert.deepEqual(evaluateGitHubGovernance(enabled), [
-    "main ruleset must disable extra approval for unattributed changes",
-  ]);
+  for (const enabled of [false, true]) {
+    assert.ok(errors((state) => { state.rulesets[0].rules.push({ type: "pull_request",
+      parameters: { required_approving_review_count: 0, require_extra_approval_for_unattributed_changes: enabled } }); }).length);
+  }
 });
 
-test("trusted policy head check is required by its exact Check Run name", () => {
-  const state = passingState();
-  const statusRule = state.rulesets[0].rules.find(
-    (rule) => rule.type === "required_status_checks",
-  );
-  statusRule.parameters.required_status_checks =
-    statusRule.parameters.required_status_checks.filter(
-      (check) => check.context !== "Trusted policy / guard",
-    );
-
-  assert.deepEqual(evaluateGitHubGovernance(state), [
-    "main ruleset is missing required check: Trusted policy / guard",
-  ]);
+test("main-only phases cannot mix transitional and final workflows", () => {
+  assert.ok(errors((state) => { state.workflows.pop(); }).some((error) => error.includes("Trusted policy")));
+  assert.ok(errors((state) => { state.workflows.push({ name: "Trusted policy", path: ".github/workflows/trusted-policy.yml", state: "active" }); }, "retired").length);
+  assert.ok(errors((state) => { state.catalog.gates[0].status = "retired"; }).some((error) => error.includes("policy phase")));
 });
 
-test("required checks must be bound to an explicit GitHub integration", () => {
-  const state = passingState();
-  const statusRule = state.rulesets[0].rules.find(
-    (rule) => rule.type === "required_status_checks",
-  );
-  delete statusRule.parameters.required_status_checks[3].integration_id;
-
-  assert.deepEqual(evaluateGitHubGovernance(state), [
-    "main ruleset required check Trusted policy / guard must be bound to GitHub Actions integration 15368",
-  ]);
-});
-
-test("required checks reject a different positive integration id", () => {
-  const state = passingState();
-  const statusRule = state.rulesets[0].rules.find(
-    (rule) => rule.type === "required_status_checks",
-  );
-  statusRule.parameters.required_status_checks[0].integration_id = 1;
-  assert.deepEqual(evaluateGitHubGovernance(state), [
-    "main ruleset required check CI / verify must be bound to GitHub Actions integration 15368",
-  ]);
+test("security update disabled state never collapses API failure into success", () => {
+  for (const response of [{ status: 404 }, { status: 403 }, { status: 429 }, { status: 200, body: {} }]) {
+    assert.equal(securityUpdatesState(response), "unknown");
+  }
+  assert.equal(securityUpdatesState({ status: 200, body: { enabled: false } }), "disabled");
+  assert.equal(securityUpdatesState({ status: 200, body: { enabled: true } }), "enabled");
+  for (const state of ["enabled", "unknown", undefined]) {
+    assert.ok(errors((value) => { value.securityUpdates = state; }).length);
+  }
 });
 
 test("release Environment must explicitly disable admin bypass", () => {
-  const missing = passingState();
-  delete missing.releaseEnvironment.can_admins_bypass;
-  assert.deepEqual(evaluateGitHubGovernance(missing), [
-    "release Environment allows admin bypass or cannot be verified",
-  ]);
-
-  const enabled = passingState();
-  enabled.releaseEnvironment.can_admins_bypass = true;
-  assert.deepEqual(evaluateGitHubGovernance(enabled), [
-    "release Environment allows admin bypass or cannot be verified",
-  ]);
+  for (const state of [true, undefined]) assert.ok(errors((value) => { value.releaseEnvironment.can_admins_bypass = state; }).length);
 });
 
 test("release Environment cannot substitute another user or team reviewer", () => {
-  const wrongUser = passingState();
-  wrongUser.releaseEnvironment.protection_rules[0].reviewers = [
-    { type: "User", reviewer: { login: "someone-else" } },
-  ];
-  assert.deepEqual(evaluateGitHubGovernance(wrongUser), [
-    "release Environment required reviewer must be exactly xrevoman-hu",
-  ]);
-
-  const team = passingState();
-  team.releaseEnvironment.protection_rules[0].reviewers = [
-    { type: "Team", reviewer: { slug: "release-team" } },
-  ];
-  assert.deepEqual(evaluateGitHubGovernance(team), [
-    "release Environment required reviewer must be exactly xrevoman-hu",
-  ]);
+  assert.ok(errors((state) => { state.releaseEnvironment.protection_rules[0].reviewers[0].reviewer.login = "someone-else"; }).length);
+  assert.ok(errors((state) => { state.releaseEnvironment.protection_rules[0].reviewers[0].type = "Team"; }).length);
 });
 
 test("every required workflow must exist at its exact path and be active", () => {
-  const state = passingState();
-  state.workflows = state.workflows.filter((workflow) => workflow.name !== "Security audit");
-  assert.deepEqual(evaluateGitHubGovernance(state), [
-    "active Security audit workflow is missing",
-  ]);
+  assert.ok(errors((state) => { state.workflows[0].state = "disabled_manually"; }).some((error) => error.includes("active CI")));
+  assert.ok(errors((state) => { state.workflows.push({ ...state.workflows[0] }); }).some((error) => error.includes("duplicated")));
 });
 
 test("unregistered active workflows cannot publish releases or spoof required checks", () => {
-  const state = passingState();
-  state.workflows.push({
-    name: "Backdoor release",
-    path: ".github/workflows/backdoor.yml",
-    state: "active",
-  });
-  assert.deepEqual(evaluateGitHubGovernance(state), [
-    "unregistered active workflow can bypass governance: Backdoor release (.github/workflows/backdoor.yml)",
-  ]);
+  assert.deepEqual(errors((state) => { state.workflows.push({ name: "Backdoor release", path: ".github/workflows/backdoor.yml", state: "active" }); }),
+    ["unregistered active workflow can bypass governance: Backdoor release (.github/workflows/backdoor.yml)"]);
 });
 
 test("GitHub-managed Dependabot workflow is outside the repository workflow allowlist", () => {
-  const state = passingState();
-  state.workflows.push({
-    name: "Dependabot Updates",
-    path: "dynamic/dependabot/dependabot-updates",
-    state: "active",
-  });
-
-  assert.deepEqual(evaluateGitHubGovernance(state), []);
+  assert.deepEqual(errors((state) => { state.workflows.push({ name: "Dependabot Updates", path: "dynamic/dependabot/dependabot-updates", state: "active" }); }), []);
 });
 
 test("an unknown dynamic workflow cannot hide outside the repository workflow allowlist", () => {
-  const state = passingState();
-  state.workflows.push({
-    name: "Unknown managed workflow",
-    path: "dynamic/unknown/workflow",
-    state: "active",
-  });
-
-  assert.deepEqual(evaluateGitHubGovernance(state), [
-    "unregistered active workflow can bypass governance: Unknown managed workflow (dynamic/unknown/workflow)",
-  ]);
+  assert.ok(errors((state) => { state.workflows.push({ name: "Unknown managed workflow", path: "dynamic/unknown/workflow", state: "active" }); }).length);
 });
 
 test("an active workflow with an unverifiable path fails closed", () => {
-  const state = passingState();
-  state.workflows.push({
-    name: "Malformed workflow",
-    state: "active",
-  });
-
-  assert.deepEqual(evaluateGitHubGovernance(state), [
-    "unregistered active workflow can bypass governance: Malformed workflow (missing-path)",
-  ]);
+  assert.ok(errors((state) => { state.workflows.push({ name: "Malformed workflow", state: "active" }); }).some((error) => error.includes("missing-path")));
 });
 
 test("a workflow with a missing or unknown state fails closed", () => {
-  const missing = passingState();
-  missing.workflows.push({
-    name: "Missing state workflow",
-    path: "dynamic/unknown/missing-state",
-  });
-  assert.deepEqual(evaluateGitHubGovernance(missing), [
-    "workflow state cannot be verified: Missing state workflow (missing-state)",
-  ]);
-
-  const unknown = passingState();
-  unknown.workflows.push({
-    name: "Unknown state workflow",
-    path: "dynamic/unknown/future-state",
-    state: "disabled_future",
-  });
-  assert.deepEqual(evaluateGitHubGovernance(unknown), [
-    "workflow state cannot be verified: Unknown state workflow (disabled_future)",
-  ]);
+  for (const value of [undefined, "disabled_future"]) {
+    assert.ok(errors((state) => { state.workflows.push({ name: "Unknown", state: value }); }).some((error) => error.includes("state cannot be verified")));
+  }
 });
 
 test("known inactive workflows remain outside the active workflow allowlist", () => {
-  const state = passingState();
-  for (const inactiveState of [
-    "deleted",
-    "disabled_fork",
-    "disabled_inactivity",
-    "disabled_manually",
-  ]) {
-    state.workflows.push({
-      name: `Inactive ${inactiveState}`,
-      path: `.github/workflows/${inactiveState}.yml`,
-      state: inactiveState,
-    });
+  for (const value of ["deleted", "disabled_fork", "disabled_inactivity", "disabled_manually"]) {
+    assert.deepEqual(errors((state) => { state.workflows.push({ name: "Historical", path: "dynamic/old", state: value }); }), []);
   }
-
-  assert.deepEqual(evaluateGitHubGovernance(state), []);
 });
 
 test("remote rulesets and workflows are flattened across every GitHub API page", () => {
-  const calls = [];
-  const pagesByEndpoint = new Map([
-    [
-      "repos/example/project/rulesets?per_page=100",
-      [
-        Array.from({ length: 30 }, (_, index) => ({ id: index + 1 })),
-        [{ id: 31 }],
-      ],
-    ],
-    [
-      "repos/example/project/actions/workflows?per_page=100",
-      [
-        { workflows: Array.from({ length: 100 }, (_, index) => ({ id: index + 1 })) },
-        { workflows: [{ id: 101 }] },
-      ],
-    ],
-  ]);
-  const runGh = (args) => {
-    calls.push(args);
-    return JSON.stringify(pagesByEndpoint.get(args.at(-1)));
-  };
-
-  assert.equal(
-    loadPaginatedCollection("repos/example/project/rulesets", { runGh }).length,
-    31,
-  );
-  assert.equal(
-    loadPaginatedCollection("repos/example/project/actions/workflows", {
-      itemKey: "workflows",
-      runGh,
-    }).length,
-    101,
-  );
-  assert.deepEqual(calls, [
-    ["api", "--paginate", "--slurp", "repos/example/project/rulesets?per_page=100"],
-    [
-      "api",
-      "--paginate",
-      "--slurp",
-      "repos/example/project/actions/workflows?per_page=100",
-    ],
-  ]);
+  const endpoint = "repos/example/project/actions/workflows";
+  const request = (url) => url.endsWith("page=1") ? { status: 200,
+    headers: { link: `<https://api.github.com/${endpoint}?per_page=100&page=2>; rel="next"` },
+    body: { total_count: 101, workflows: Array.from({ length: 100 }, (_, id) => ({ id })) } }
+    : { status: 200, headers: {}, body: { total_count: 101, workflows: [{ id: 100 }] } };
+  assert.equal(loadPaginatedCollection(endpoint, { itemKey: "workflows", reader: createGitHubReader({ request }) }).length, 101);
 });

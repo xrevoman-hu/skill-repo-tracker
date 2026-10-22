@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 
 import { parse as parseYaml } from "yaml";
 import { TRACKED_DEPENDENCY_OVERRIDE_STEP } from "./workflow-policy-contracts.mjs";
+import { policyRemovalPhase } from "./governance-policy-removal.mjs";
 
 export {
   validateReleaseWorkflowPolicy,
@@ -137,26 +138,54 @@ const TOOLCHAIN_OVERRIDE_STEP = {
   run: 'set -euo pipefail\nfor path in .npmrc .cargo rust-toolchain; do\n  if [[ -e "$path" || -L "$path" ]]; then\n    echo "forbidden repository-local toolchain override: $path" >&2\n    exit 1\n  fi\ndone\n',
 };
 
+const MAIN_BASELINE_ENV = {
+  VERIFY_BASE_REF: "${{ needs.baseline.outputs.validated_base }}",
+  ARCHITECTURE_BASE_REF: "${{ needs.baseline.outputs.validated_base }}",
+  COVERAGE_BASE_REF: "${{ needs.baseline.outputs.validated_base }}",
+};
+const MAIN_BASELINE_STEP = {
+  name: "Validate the shared cumulative baseline",
+  run: 'set -euo pipefail\ntest "$GITHUB_EVENT_NAME" = push\ntest "$GITHUB_REF" = refs/heads/main\n'
+    + '[[ "$PUSH_BEFORE" =~ ^[0-9a-f]{40}$ ]]\ntest "$PUSH_BEFORE" != 0000000000000000000000000000000000000000\n'
+    + '[[ "$VERIFY_BASE_REF" =~ ^[0-9a-f]{40}$ ]]\ntest "$VERIFY_BASE_REF" != 0000000000000000000000000000000000000000\n'
+    + 'test "$VERIFY_BASE_REF" != "$GITHUB_SHA"\ntest "$VERIFY_BASE_REF" = "$ARCHITECTURE_BASE_REF"\n'
+    + 'test "$VERIFY_BASE_REF" = "$COVERAGE_BASE_REF"\ngit cat-file -e "${VERIFY_BASE_REF}^{commit}"\n'
+    + 'git merge-base --is-ancestor "$VERIFY_BASE_REF" "$PUSH_BEFORE"\ngit merge-base --is-ancestor "$PUSH_BEFORE" "$GITHUB_SHA"\n',
+};
+
 const EXPECTED_CI_WORKFLOW = {
   name: "CI",
   on: {
-    pull_request: { types: ["opened", "reopened", "synchronize", "edited"] },
     push: { branches: ["main"] },
   },
   permissions: { contents: "read" },
   concurrency: {
     group: "ci-${{ github.workflow }}-${{ github.ref }}",
-    "cancel-in-progress": true,
+    "cancel-in-progress": false,
   },
   env: {
     NODE_VERSION: "22.23.1",
-    VERIFY_BASE_REF: "${{ github.event.pull_request.base.sha }}",
-    ARCHITECTURE_BASE_REF: "${{ github.event.pull_request.base.sha }}",
-    COVERAGE_BASE_REF: "${{ github.event.pull_request.base.sha }}",
+    PUSH_BEFORE: "${{ github.event.before }}",
   },
   jobs: {
+    baseline: {
+      name: "baseline", "runs-on": "ubuntu-latest", "timeout-minutes": 10,
+      permissions: { contents: "read", actions: "read" },
+      outputs: { validated_base: "${{ steps.resolve.outputs.validated_base }}" },
+      steps: [
+        { name: "Checkout full history", uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          with: { "fetch-depth": 0, "persist-credentials": false } },
+        { name: "Set up pinned Node.js without package cache",
+          uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+          with: { "node-version": "${{ env.NODE_VERSION }}", "package-manager-cache": false } },
+        { name: "Resolve the cumulative successful main ancestor", id: "resolve",
+          env: { GH_TOKEN: "${{ github.token }}" }, run: "node scripts/main-push-evidence.mjs baseline" },
+      ],
+    },
     verify: {
       name: "verify",
+      needs: "baseline",
+      env: MAIN_BASELINE_ENV,
       "runs-on": "macos-15",
       "timeout-minutes": 45,
       steps: [
@@ -165,6 +194,7 @@ const EXPECTED_CI_WORKFLOW = {
           uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
           with: { "fetch-depth": 0, "persist-credentials": false },
         },
+        MAIN_BASELINE_STEP,
         TRACKED_DEPENDENCY_OVERRIDE_STEP,
         TOOLCHAIN_OVERRIDE_STEP,
         {
@@ -184,15 +214,6 @@ const EXPECTED_CI_WORKFLOW = {
           name: "Validate gate invocation before npm lifecycle execution",
           run: "node scripts/governance.mjs boundaries",
         },
-        {
-          name: "Enforce PR learning evidence",
-          if: "github.event_name == 'pull_request'",
-          env: {
-            PR_TITLE: "${{ github.event.pull_request.title }}",
-            PR_BODY: "${{ github.event.pull_request.body }}",
-          },
-          run: "node scripts/pr-evidence.mjs",
-        },
         { name: "Install pinned Chromium", run: "npx playwright install chromium" },
         { name: "Run the deterministic repository gate", run: "npm run verify" },
         {
@@ -203,6 +224,8 @@ const EXPECTED_CI_WORKFLOW = {
     },
     coverage: {
       name: "coverage",
+      needs: "baseline",
+      env: MAIN_BASELINE_ENV,
       "runs-on": "macos-15",
       "timeout-minutes": 60,
       steps: [
@@ -211,6 +234,7 @@ const EXPECTED_CI_WORKFLOW = {
           uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
           with: { "fetch-depth": 0, "persist-credentials": false },
         },
+        MAIN_BASELINE_STEP,
         TRACKED_DEPENDENCY_OVERRIDE_STEP,
         TOOLCHAIN_OVERRIDE_STEP,
         {
@@ -239,14 +263,17 @@ const EXPECTED_CI_WORKFLOW = {
     },
     msrv: {
       name: "msrv",
+      needs: "baseline",
+      env: MAIN_BASELINE_ENV,
       "runs-on": "macos-15",
       "timeout-minutes": 35,
       steps: [
         {
           name: "Checkout",
           uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
-          with: { "persist-credentials": false },
+          with: { "fetch-depth": 0, "persist-credentials": false },
         },
+        MAIN_BASELINE_STEP,
         TRACKED_DEPENDENCY_OVERRIDE_STEP,
         TOOLCHAIN_OVERRIDE_STEP,
         {
@@ -325,7 +352,7 @@ const EXPECTED_GITHUB_ACTIONS_DEPENDABOT_ENTRY = {
   "package-ecosystem": "github-actions",
   directory: "/",
   schedule: { interval: "weekly", day: "monday" },
-  "open-pull-requests-limit": 2,
+  "open-pull-requests-limit": 0,
   labels: ["dependencies", "ci"],
   groups: {
     "minor-and-patch": {
@@ -499,15 +526,18 @@ export function validateTauriBuildScriptPolicy(contents) {
     : ["src-tauri/build.rs must remain the exact reviewed native/Tauri build contract"];
 }
 
-export function validateRepositoryAutomationPolicy({ workflowPaths, dependabotContents }) {
+export function validateRepositoryAutomationPolicy({ workflowPaths, dependabotContents, catalog }) {
   const errors = [];
+  let phase;
+  try { phase = policyRemovalPhase(catalog); }
+  catch { return ["automation requires a valid main-only policy phase"]; }
   const requiredAutomationPaths = [
     ".github/workflows/ci.yml",
     ".github/workflows/release-gate.yml",
     ".github/workflows/security-audit.yml",
-    ".github/workflows/trusted-policy.yml",
     ".github/workflows/weekly-resilience.yml",
   ];
+  if (phase === "retiring") requiredAutomationPaths.push(".github/workflows/trusted-policy.yml");
   for (const path of requiredAutomationPaths) {
     if (!workflowPaths.includes(path)) errors.push(`required automation file is missing: ${path}`);
   }
@@ -533,18 +563,20 @@ export function validateRepositoryAutomationPolicy({ workflowPaths, dependabotCo
     errors.push("Dependabot config version must be exactly 2");
   }
   const updates = Array.isArray(dependabot?.updates) ? dependabot.updates : [];
-  for (const [ecosystem, directory, label] of [
-    ["npm", "/", "npm / weekly"],
-    ["cargo", "/src-tauri", "cargo /src-tauri weekly"],
-  ]) {
-    const configured = updates.some(
-      (entry) =>
-        entry?.["package-ecosystem"] === ecosystem &&
-        entry?.directory === directory &&
-        entry?.schedule?.interval === "weekly",
-    );
-    if (!configured) errors.push(`Dependabot is missing ${label} updates`);
+  if (!isDeepStrictEqual(Object.keys(dependabot ?? {}).sort(), ["updates", "version"])) {
+    errors.push("Dependabot config has unsupported top-level fields");
   }
+  for (const [ecosystem, directory, label, dependencyLabel] of [
+    ["npm", "/", "npm / weekly", "javascript"],
+    ["cargo", "/src-tauri", "cargo /src-tauri weekly", "rust"],
+  ]) {
+    const expected = { "package-ecosystem": ecosystem, directory,
+      schedule: { interval: "weekly", day: "monday" }, "open-pull-requests-limit": 0,
+      labels: ["dependencies", dependencyLabel] };
+    const matches = updates.filter((entry) => isDeepStrictEqual(entry, expected));
+    if (matches.length !== 1) errors.push(`Dependabot is missing ${label} updates with zero PR limit`);
+  }
+  if (updates.length !== 3) errors.push("Dependabot must contain exactly three registered ecosystems");
   const githubActionsEntries = updates.filter(
     (entry) => entry?.["package-ecosystem"] === "github-actions",
   );
