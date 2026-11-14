@@ -544,7 +544,7 @@ export function validateCiWorkflowPolicy(contents) {
 // ADR 0010: this build-only native source can fetch and execute compiler tools.
 // Keep the complete reviewed implementation pinned, alongside explicit negative tests.
 export function validateCredentialNativeSourcePolicy(contents) {
-  const expected = "e12a71c26392fecb1d8c97d556c802a2c1ff56dd355da2e359462fa8b89402f7";
+  const expected = "79ed1da2fd14aa12fe6b4ade1023bc716400c6550ca0b77a3f2763f80fa0c67d";
   return createHash("sha256").update(contents).digest("hex") === expected
     ? [] : ["native preparation must remain the exact reviewed pinned-source contract"];
 }

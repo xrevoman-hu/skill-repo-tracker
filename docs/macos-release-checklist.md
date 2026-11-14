@@ -3,10 +3,10 @@
 本清单是人工验收视图，不是第二套发布脚本。唯一可执行合同、local/remote phase 和 manifest
 交接命令只维护在 [testing-release Rule](rules/testing-release.md)；这里不得复制命令。
 
-本清单适用于 [v1.4.1](releases/v1.4.1.md)：应用版本 `1.4.1`，凭据 GUI 候选验收仍绑定 `v1.4.0-rc.4`。
-本版修复发布预检与说明，产品功能未改变；既有候选验收不替代本版独立构建和发布验收。
-正式资产为 `Skill.Repo.Tracker_1.4.1_aarch64.dmg`，下载与发布状态以对应
-[Release 页面](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.1)为准。
+本清单适用于 [v1.4.2](releases/v1.4.2.md)：应用版本 `1.4.2`，任务诊断候选为 `v1.4.2-rc.1`；凭据 GUI 历史验收仍绑定 `v1.4.0-rc.4`。
+本版修复任务失败诊断、备份文件名冲突及依赖审计发现的问题；候选验收不替代本版独立构建和发布验收。
+正式资产为 `Skill.Repo.Tracker_1.4.2_aarch64.dmg`，下载与发布状态以对应
+[Release 页面](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.2)为准。
 以下条目是验收要求，不代表已通过；每层结果以对应执行记录为准。
 
 ## 1. 授权与来源

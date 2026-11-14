@@ -127,7 +127,9 @@ npm run release:verify -- --lane adhoc --version X.Y.Z --phase local
 随后从固定的官方 GitHub Git URL 以隔离、精确 refspec 获取最新 `origin/main`，确认 `HEAD` 与其完全一致且
 远端尚不存在本次版本 tag；在生成 manifest 前还要重新执行同一检查，防止验证期间远端
 状态漂移；同时重新核对最新 CI。remote phase 开始也复核阶段与同提交 CI。
-三个 BASE_REF 都绑定同一成功祖先 V，不能以 HEAD 充当基线。随后跑全部门禁和性能测试，再构建 `.app`/DMG。ad-hoc 顺序固定为：完整
+三个 BASE_REF 都绑定同一成功祖先 V，不能以 HEAD 充当基线。随后跑全部门禁和性能测试，再构建 `.app`/DMG。
+签名前附带 `LICENSE.sqlcipher`；挂载纯读核验固定摘要并拒绝软链。
+ad-hoc 顺序固定为：完整
 签名 `.app` -> 把该 App 单独复制到临时 staging -> 从 staging 重新封装 DMG -> 签名 DMG
 -> 只读挂载复验。staging 顶层只能有正式 App；挂载顶层只允许正式 App、指向
 `/Applications` 的精确软链和 Finder 的 `.DS_Store`，出现其他文件即失败。local phase 在

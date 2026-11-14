@@ -1,10 +1,102 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
+import * as credentialNative from "../credential-native-build.mjs";
 import { nativeCommandArguments } from "../native-command.mjs";
 import { nativeLinkEnvironment } from "../credential-native-environment.mjs";
 import { validateCredentialNativeSourcePolicy, validateTauriBuildScriptPolicy } from "../core-policy-contracts.mjs";
+
+// SQLCipher v4.20.0 README's complete license section, including its final blank line.
+const SQLCIPHER_LICENSE = `## Community Edition Open Source License
+
+Copyright (c) 2025, ZETETIC LLC
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the ZETETIC LLC nor the
+      names of its contributors may be used to endorse or promote products
+      derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY ZETETIC LLC ''AS IS'' AND ANY
+EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL ZETETIC LLC BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+`;
+
+function withNativeLicenseFixture(operation) {
+  const root = mkdtempSync(join(tmpdir(), "srt-native-license-"));
+  const app = join(root, "Fixture.app");
+  const native = join(root, "native");
+  const lib = join(native, "lib");
+  const source = join(native, "LICENSE.sqlcipher");
+  const resources = join(app, "Contents", "Resources");
+  mkdirSync(join(app, "Contents"), { recursive: true });
+  mkdirSync(lib, { recursive: true });
+  writeFileSync(source, SQLCIPHER_LICENSE);
+  try { operation({ root, app, native, lib, source, resources }); }
+  finally { rmSync(root, { recursive: true, force: true }); }
+}
+
+test("native license installation includes complete reviewed text in a fresh app", () => {
+  withNativeLicenseFixture(({ app, native, lib, source, resources }) => {
+    credentialNative.installCredentialNativeLicense(app, lib);
+    assert.equal(readFileSync(join(resources, "LICENSE.sqlcipher"), "utf8"), SQLCIPHER_LICENSE);
+    assert.equal(readFileSync(source, "utf8"), SQLCIPHER_LICENSE);
+    credentialNative.installCredentialNativeLicense(app, lib);
+    rmSync(native, { recursive: true });
+    assert.doesNotThrow(() => credentialNative.verifyCredentialNativeLicense(app));
+  });
+});
+
+test("native license verification rejects absent altered and symlinked bundle resources", () => {
+  withNativeLicenseFixture(({ app, lib, source, resources }) => {
+    assert.throws(() => credentialNative.verifyCredentialNativeLicense(app), /SQLCipher license/);
+    credentialNative.installCredentialNativeLicense(app, lib);
+    const license = join(resources, "LICENSE.sqlcipher");
+    writeFileSync(license, "incomplete license");
+    assert.throws(() => credentialNative.verifyCredentialNativeLicense(app), /SQLCipher license/);
+    rmSync(license);
+    symlinkSync(source, license);
+    assert.throws(() => credentialNative.verifyCredentialNativeLicense(app), /SQLCipher license/);
+    assert.throws(() => credentialNative.installCredentialNativeLicense(app, lib), /SQLCipher license/);
+    assert.equal(readFileSync(source, "utf8"), SQLCIPHER_LICENSE);
+  });
+});
+
+test("native license installation rejects unreviewed source and redirected app directories", () => {
+  withNativeLicenseFixture(({ app, lib, source }) => {
+    writeFileSync(source, "unreviewed source license");
+    assert.throws(() => credentialNative.installCredentialNativeLicense(app, lib), /SQLCipher license/);
+  });
+  for (const segment of ["", "Contents", "Contents/Resources"]) {
+    withNativeLicenseFixture(({ root, app, lib, source }) => {
+      const outside = join(root, "outside");
+      mkdirSync(outside);
+      const redirected = join(app, segment);
+      rmSync(redirected, { recursive: true, force: true });
+      symlinkSync(outside, redirected);
+      assert.throws(() => credentialNative.installCredentialNativeLicense(app, lib), /SQLCipher license/);
+      assert.throws(() => credentialNative.verifyCredentialNativeLicense(app), /SQLCipher license/);
+      assert.equal(readFileSync(source, "utf8"), SQLCIPHER_LICENSE);
+    });
+  }
+});
 
 test("native command wrapper preserves exact MSRV, test and performance scopes", () => {
   assert.deepEqual(nativeCommandArguments("check-msrv"), {
@@ -33,7 +125,10 @@ test("native wrapper rejects arbitrary processes and altered fixed Rust lanes", 
 test("native preparation is shared by verification, coverage and release without replacing their gates", () => {
   for (const name of ["verify", "rust-coverage", "release-verify", "native-command"]) {
     const source = readFileSync(new URL(`../${name}.mjs`, import.meta.url), "utf8");
-    assert.match(source, /import \{ prepareCredentialNative \} from "\.\/credential-native-build\.mjs"/);
+    const imports = name === "release-verify"
+      ? "installCredentialNativeLicense, prepareCredentialNative, verifyCredentialNativeLicense"
+      : "prepareCredentialNative";
+    assert.ok(source.includes(`import { ${imports} } from "./credential-native-build.mjs"`));
     assert.match(source, /prepareCredentialNative\(ROOT\)/);
     assert.match(source, /import \{ nativeLinkEnvironment \} from "\.\/credential-native-environment\.mjs"/);
     if (name === "verify") assert.match(source, /Object\.assign\(env, nativeLinkEnvironment\(prepareCredentialNative\(ROOT\)\)\)/);

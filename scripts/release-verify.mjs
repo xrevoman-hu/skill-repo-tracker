@@ -36,7 +36,7 @@ import {
   validateLocalReleaseSource,
   requireSuccessfulMainHead,
 } from "./release-source-policy.mjs";
-import { prepareCredentialNative } from "./credential-native-build.mjs";
+import { installCredentialNativeLicense, prepareCredentialNative, verifyCredentialNativeLicense } from "./credential-native-build.mjs";
 import { nativeLinkEnvironment } from "./credential-native-environment.mjs";
 import { EXPECTED_REPOSITORY } from "./main-push-github.mjs";
 
@@ -562,6 +562,7 @@ function verifyMountedDmg(dmgPath, version) {
     ]);
     mounted = true;
     validateMountedDmgLayout(mountRoot);
+    verifyCredentialNativeLicense(mountedApp);
     run("codesign", ["--verify", "--deep", "--strict", "--verbose=4", mountedApp]);
     const mountedVersion = run(
       "/usr/libexec/PlistBuddy",
@@ -631,6 +632,7 @@ function localPhase(version) {
   assertDirectory(appPath, "built app");
   assertFile(bundler, "Tauri DMG bundler");
   assertFile(entitlements, "macOS entitlements");
+  installCredentialNativeLicense(appPath, nativeOptions.env.SQLCIPHER_LIB_DIR);
 
   run("codesign", buildAppCodesignArguments(appPath, entitlements));
   run("codesign", ["--verify", "--deep", "--strict", "--verbose=4", appPath]);

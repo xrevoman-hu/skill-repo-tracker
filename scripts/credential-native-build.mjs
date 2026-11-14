@@ -28,6 +28,8 @@ const DEFINES = Object.freeze([
 ]);
 const BUILD_ENV = Object.freeze({ PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LC_ALL: "C" });
 const OUTPUT_FILES = Object.freeze(["lib/libsqlcipher.a", "include/sqlite3.h", "LICENSE.sqlcipher"]);
+// Complete license section from the pinned SQLCipher README, including its final blank line.
+const LICENSE_SHA256 = "048cf3c6169d25e96a6ba8b3a747f02130e6f940fb6c6d119ef678e097b282bf";
 
 function digest(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -35,6 +37,39 @@ function digest(bytes) {
 
 function ordinaryFile(path) {
   return existsSync(path) && lstatSync(path).isFile() && !lstatSync(path).isSymbolicLink();
+}
+
+function reviewedLicense(path) {
+  if (!ordinaryFile(path)) throw new Error("SQLCipher license must be an ordinary file");
+  const bytes = readFileSync(path);
+  if (digest(bytes) !== LICENSE_SHA256) throw new Error("SQLCipher license does not match the reviewed source");
+  return bytes;
+}
+
+function appLicensePath(appPath, createResources = false) {
+  const contents = join(appPath, "Contents");
+  const resources = join(contents, "Resources");
+  for (const directory of [appPath, contents, resources]) {
+    const entry = lstatSync(directory, { throwIfNoEntry: false });
+    if (!entry && directory === resources && createResources) mkdirSync(resources, { mode: 0o755 });
+    else if (!entry?.isDirectory()) throw new Error("SQLCipher license requires ordinary app directories");
+  }
+  return join(resources, "LICENSE.sqlcipher");
+}
+
+/** Pure artifact readback: remote verification does not need the native build cache. */
+export function verifyCredentialNativeLicense(appPath) {
+  reviewedLicense(appLicensePath(appPath));
+}
+
+/** Install before signing; never overwrite an existing resource or follow a redirected bundle path. */
+export function installCredentialNativeLicense(appPath, nativeLibraryDirectory) {
+  const bytes = reviewedLicense(join(dirname(nativeLibraryDirectory), "LICENSE.sqlcipher"));
+  const destination = appLicensePath(appPath, true);
+  if (!lstatSync(destination, { throwIfNoEntry: false })) {
+    writeFileSync(destination, bytes, { flag: "wx", mode: 0o644 });
+  }
+  verifyCredentialNativeLicense(appPath);
 }
 
 function rejectSymlinkAncestors(path) {

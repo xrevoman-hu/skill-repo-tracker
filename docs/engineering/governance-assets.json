@@ -1773,6 +1773,7 @@
       "protectedPaths": [
         "scripts/release-verify.mjs",
         "scripts/release-source-policy.mjs",
+        "scripts/credential-native-build.mjs",
         ".github/workflows/release-gate.yml",
         "docs/rules/testing-release.md",
         "docs/macos-release-checklist.md"
@@ -1789,6 +1790,18 @@
         {
           "path": "scripts/__tests__/release-verify.test.mjs",
           "selector": "current application version notes satisfy the publication disclosure contract"
+        },
+        {
+          "path": "scripts/__tests__/release-verify.test.mjs",
+          "selector": "release installs SQLCipher license before signing and verifies it in every mounted artifact"
+        },
+        {
+          "path": "scripts/__tests__/credential-native-policy.test.mjs",
+          "selector": "native license installation includes complete reviewed text in a fresh app"
+        },
+        {
+          "path": "scripts/__tests__/credential-native-policy.test.mjs",
+          "selector": "native license verification rejects absent altered and symlinked bundle resources"
         }
       ],
       "gates": ["verify", "release", "ci"],

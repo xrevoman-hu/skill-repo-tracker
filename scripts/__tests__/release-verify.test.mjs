@@ -612,6 +612,20 @@ test("release phases call the source and metadata validators at their acceptance
   );
 });
 
+test("release installs SQLCipher license before signing and verifies it in every mounted artifact", () => {
+  const source = readFileSync(new URL("../release-verify.mjs", import.meta.url), "utf8");
+  const local = source.slice(source.indexOf("function localPhase(version)"), source.indexOf("function remotePhase("));
+  const install = local.indexOf("installCredentialNativeLicense(appPath, nativeOptions.env.SQLCIPHER_LIB_DIR)");
+  assert.ok(install > local.indexOf('assertDirectory(appPath, "built app")'));
+  assert.ok(install < local.indexOf('run("codesign", buildAppCodesignArguments(appPath, entitlements))'));
+  const mounted = source.slice(source.indexOf("function verifyMountedDmg("), source.indexOf("function localPhase("));
+  assert.match(mounted, /verifyCredentialNativeLicense\(mountedApp\)/);
+  assert.doesNotMatch(mounted, /prepareCredentialNative|installCredentialNativeLicense/);
+  const remote = source.slice(source.indexOf("function remotePhase("));
+  assert.match(remote, /verifyMountedDmg\(downloaded, version\)/);
+  assert.doesNotMatch(remote, /prepareCredentialNative|installCredentialNativeLicense/);
+});
+
 test("remote verification isolates the authoritative annotated tag and rejects rewrites", (t) => {
   withTemporaryDirectory((directory) => {
     const remote = join(directory, "remote.git");
