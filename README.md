@@ -142,7 +142,7 @@ macOS `rc.4` 凭据 GUI 已完成本轮候选验收；Agent 的读取、文件�
 - macOS 12+
 - Node.js 22.23.1（Node 22）
 - npm 10.9.8
-- Rust / Cargo 1.95.0（声明并由 CI 验证的 MSRV 为 1.88.0）
+- Rust / Cargo 1.95.0（声明并由 CI 验证的 MSRV 为 1.89.0）
 
 安装依赖：
 

@@ -1,5 +1,7 @@
 # 数据与安全 Rules
 
+- 当前原生引擎按 ADR 0016 固定为 SQLCipher 4.20.0 / SQLite 3.54.1；保留 ADR 0010 的
+  CommonCrypto 静态链接、来源与产物摘要校验和唯一 FFI provider，不能只更新 wrapper 而继续链接旧库。
 - 原 GitHub token 只进 Keychain；禁止写入普通 SQLite、日志、文档、fixture、ZIP 或迁移包。
 - ADR 0010 的凭据 E0 使用独立 SQLCipher 库保存虚构秘密与附件；不改普通 SQLite/导出包边界。
   主密码不持久保存；独立 Agent 码只进固定凭据 Keychain namespace，不能作为库解密密钥。

@@ -141,9 +141,9 @@ fn e0_sqlcipher_reports_actual_algorithms_without_weakening_defaults() {
         .parse()
         .expect("numeric page size");
     let use_hmac = query("cipher_use_hmac");
-    assert!(cipher_version.starts_with("4.19.0 "));
+    assert!(cipher_version.starts_with("4.20.0 "));
     assert!(cipher_version.contains("community"));
-    assert_eq!(rusqlite::version(), "3.53.4");
+    assert_eq!(rusqlite::version(), "3.54.1");
     assert_eq!(provider, "commoncrypto");
     assert_eq!(kdf, "PBKDF2_HMAC_SHA512");
     assert_eq!(hmac, "HMAC_SHA512");

@@ -1072,6 +1072,38 @@
       }
     },
     {
+      "id": "adr-0016-patched-sqlcipher-and-msrv",
+      "kind": "decision",
+      "path": "docs/adr/0016-patched-sqlcipher-and-msrv.md",
+      "status": "active",
+      "checksum": "sha256:c3d6eaedf15d6d1cbe6f5bf619444ded2950ef826553589dc40c7c9e8f4523dd",
+      "principles": [1, 2, 4, 5, 7],
+      "reviewOnChange": [
+        "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/build.rs",
+        "scripts/credential-native-build.mjs", "scripts/native-command.mjs",
+        "scripts/core-policy-contracts.mjs", "scripts/workflow-policy-contracts.mjs",
+        "scripts/release-verify.mjs", ".github/workflows/ci.yml", ".github/workflows/release-gate.yml"
+      ],
+      "enforcement": {
+        "mode": "mixed",
+        "gates": ["verify", "ci"],
+        "evidence": [
+          {
+            "path": "scripts/__tests__/credential-native-policy.test.mjs",
+            "selector": "native preparation rejects source, environment, cache and compiler bypasses"
+          },
+          {
+            "path": "scripts/__tests__/credential-native-policy.test.mjs",
+            "selector": "native build contract rejects removed integrity checks, alternate libraries and Tauri overrides"
+          },
+          {
+            "path": "src-tauri/src/credential_vault_e0_tests.rs",
+            "selector": "e0_sqlcipher_reports_actual_algorithms_without_weakening_defaults"
+          }
+        ]
+      }
+    },
+    {
       "id": "adr-0011-credential-keychain-interaction",
       "kind": "decision",
       "path": "docs/adr/0011-credential-keychain-interaction.md",

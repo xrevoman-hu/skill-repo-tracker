@@ -92,7 +92,7 @@ test/suite callback 禁止 generator/async-generator，第三参数只允许 num
   不能截断累计 diff。bootstrap S、schema 2 精确退休与两次真实推送按 ADR 0014。
   A 保留旧 PR/Trusted 执行证据且禁止发布；B 才退休。Accepted ADR 原文和仍引用的历史测试
   不改写。服务器移除 PR/check 前置拦截后，失败代码可能先进入 main；不声称保护等价。
-- MSRV：CI 用 Rust 1.88.0 `cargo check --locked`。
+- MSRV：CI 用 Rust 1.89.0 `cargo check --locked`，与修复后的 rusqlite 0.41 最低要求一致（ADR 0016）。
 - 性能：weekly 与 Release 跑 10,000 prompts / 100 MiB ignored test。
 - Test waiver：`npm run verify` 与 weekly 都执行 tracked ledger checker；active selector 必须指向
   仓库中真实测试文本，过期、幽灵 selector、主 lane waiver 或 tombstone 改写都会失败。

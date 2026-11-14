@@ -9,7 +9,7 @@ import { validateCredentialNativeSourcePolicy, validateTauriBuildScriptPolicy } 
 test("native command wrapper preserves exact MSRV, test and performance scopes", () => {
   assert.deepEqual(nativeCommandArguments("check-msrv"), {
     kind: "cargo",
-    args: ["+1.88.0", "check", "--locked", "--all-targets", "--all-features", "--manifest-path", "src-tauri/Cargo.toml"],
+    args: ["+1.89.0", "check", "--locked", "--all-targets", "--all-features", "--manifest-path", "src-tauri/Cargo.toml"],
   });
   assert.deepEqual(nativeCommandArguments("rust-tests").args,
     ["test", "--locked", "--all-features", "--manifest-path", "src-tauri/Cargo.toml"]);
@@ -72,9 +72,9 @@ test("native build contract rejects removed integrity checks, alternate librarie
     baseline.replace("SQLCIPHER_STATIC", "UNREVIEWED_STATIC"),
     baseline.replace("SQLCIPHER_NO_PKG_CONFIG", "UNREVIEWED_NO_PKG_CONFIG"),
     baseline.replace("LIBSQLITE3_SYS_USE_PKG_CONFIG", "UNREVIEWED_USE_PKG_CONFIG"),
-    baseline.replace("4.19.0", "4.5.7"),
-    baseline.replace("3.53.4", "3.45.3"),
-    baseline.replace("target/credential-native/4.19.0", "/unreviewed/library"),
+    baseline.replace("4.20.0", "4.5.7"),
+    baseline.replace("3.54.1", "3.45.3"),
+    baseline.replace("target/credential-native/4.20.0", "/unreviewed/library"),
     baseline.replace("Sha256::digest(&bytes)", "Sha256::digest(b\"unchecked\")"),
     baseline.replace("framework=Security", "dylib=unreviewed"),
     baseline.replace("tauri_build::build();", 'println!("cargo:rustc-env=TAURI_CONFIG=unsafe"); tauri_build::build();'),
@@ -89,8 +89,8 @@ test("native preparation rejects source, environment, cache and compiler bypasse
   const baseline = readFileSync(new URL("../credential-native-build.mjs", import.meta.url), "utf8");
   assert.deepEqual(validateCredentialNativeSourcePolicy(baseline), []);
   for (const mutation of [
-    baseline.replace("https://codeload.github.com/sqlcipher/sqlcipher/tar.gz/refs/tags/v4.19.0", "https://unreviewed.invalid/source"),
-    baseline.replace('sourceSha256: "7075f96cbabe45b4ecfc2e6b1745a625f856f695b0827a5506ce9ed85b906aa0"', 'sourceSha256: process.env.SOURCE_SHA'),
+    baseline.replace("https://codeload.github.com/sqlcipher/sqlcipher/tar.gz/refs/tags/v4.20.0", "https://unreviewed.invalid/source"),
+    baseline.replace('sourceSha256: "38705f51b61ac0636a5fd064f9a77fafabc7227b2aa2513f1b14c8bb1102affc"', 'sourceSha256: process.env.SOURCE_SHA'),
     baseline.replace('env: BUILD_ENV', 'env: process.env'),
     baseline.replace('resolve(root, "src-tauri/target/credential-native")', 'process.env.NATIVE_ROOT'),
     baseline.replace('rejectSymlinkAncestors(destination);', ''),

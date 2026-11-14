@@ -283,7 +283,7 @@ const EXPECTED_CI_WORKFLOW = {
         },
         {
           name: "Install the declared minimum Rust version",
-          run: "rustup toolchain install 1.88.0 --profile minimal",
+          run: "rustup toolchain install 1.89.0 --profile minimal",
         },
         {
           name: "Compile every target at MSRV",
@@ -465,8 +465,8 @@ export function isAlternateTauriConfigPath(path) {
 }
 
 export function validateTauriBuildScriptPolicy(contents) {
-  // ADR 0010: exact native integrity checks followed by the existing Tauri build.
-  const reviewed = "fd51a39260793bd4c4c13cdc6e803b67d65bfa6103eb7dbebd51a1d967f5fd55";
+  // ADR 0016 updates the fixed source; ADR 0010 integrity/linking boundaries remain.
+  const reviewed = "135ddd2b34ea951d04d285e931044b928e2b31c0203fc2fbf0c26efec61e9def";
   return createHash("sha256").update(contents).digest("hex") === reviewed
     ? []
     : ["src-tauri/build.rs must remain the exact reviewed native/Tauri build contract"];
@@ -544,7 +544,7 @@ export function validateCiWorkflowPolicy(contents) {
 // ADR 0010: this build-only native source can fetch and execute compiler tools.
 // Keep the complete reviewed implementation pinned, alongside explicit negative tests.
 export function validateCredentialNativeSourcePolicy(contents) {
-  const expected = "d0dbdb76770f5ee044478fc72294cee44364290e3cce7c23b816d2e416d9fe34";
+  const expected = "e12a71c26392fecb1d8c97d556c802a2c1ff56dd355da2e359462fa8b89402f7";
   return createHash("sha256").update(contents).digest("hex") === expected
     ? [] : ["native preparation must remain the exact reviewed pinned-source contract"];
 }

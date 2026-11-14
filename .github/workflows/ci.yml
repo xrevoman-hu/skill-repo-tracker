@@ -236,6 +236,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
       - name: Install the declared minimum Rust version
-        run: rustup toolchain install 1.88.0 --profile minimal
+        run: rustup toolchain install 1.89.0 --profile minimal
       - name: Compile every target at MSRV
         run: node scripts/native-command.mjs check-msrv

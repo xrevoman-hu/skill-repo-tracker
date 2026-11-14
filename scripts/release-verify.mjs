@@ -600,7 +600,7 @@ function localPhase(version) {
   run("npm", ["run", "test:e2e"]);
   const nativeOptions = { env: { ...process.env, ...nativeLinkEnvironment(prepareCredentialNative(ROOT)) } };
   run(cargoExecutable(), [
-    "+1.88.0",
+    "+1.89.0",
     "check",
     "--locked",
     "--all-targets",

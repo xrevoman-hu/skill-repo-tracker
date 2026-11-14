@@ -231,7 +231,7 @@ npm run --silent release:verify -- --lane adhoc --version "$RELEASE_VERSION" --p
           },
           {
             name: "Set up pinned Rust",
-            run: "rustup toolchain install 1.95.0 --profile minimal --component clippy,rustfmt\nrustup toolchain install 1.88.0 --profile minimal\nrustup toolchain install nightly-2026-08-01 --profile minimal --component llvm-tools-preview\nrustup default 1.95.0\n",
+            run: "rustup toolchain install 1.95.0 --profile minimal --component clippy,rustfmt\nrustup toolchain install 1.89.0 --profile minimal\nrustup toolchain install nightly-2026-08-01 --profile minimal --component llvm-tools-preview\nrustup default 1.95.0\n",
           },
           {
             name: "Install npm dependencies",

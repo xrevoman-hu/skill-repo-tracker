@@ -1157,8 +1157,8 @@ export function checkBoundaries(root = REPOSITORY_ROOT) {
     errors.push("rust-toolchain.toml must pin Rust 1.95.0");
   }
   const cargoToml = readFileSync(join(root, "src-tauri/Cargo.toml"), "utf8");
-  if (!/^rust-version = "1\.88\.0"$/m.test(cargoToml)) {
-    errors.push("src-tauri/Cargo.toml rust-version must declare MSRV 1.88.0");
+  if (!/^rust-version = "1\.89\.0"$/m.test(cargoToml)) {
+    errors.push("src-tauri/Cargo.toml rust-version must declare MSRV 1.89.0");
   }
   errors.push(...validateCargoTestDiscoveryPolicy(cargoToml));
   const hasRepositoryCargoOverride = trackedFiles.some(

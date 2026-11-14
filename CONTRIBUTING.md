@@ -11,7 +11,7 @@ npm run verify
 ```
 
 不要在文档或 PR 中复制一套可分叉的子命令。`CI / verify` 在确定性入口后追加 E2E；
-MSRV 1.88.0、coverage、网络审计、性能与 Release 是独立 CI lane，见
+MSRV 1.89.0、coverage、网络审计、性能与 Release 是独立 CI lane，见
 `docs/rules/testing-release.md`。默认 Rust 是 1.95.0；
 固定 nightly 只用于 LLVM branch coverage，不参与产品构建。
 

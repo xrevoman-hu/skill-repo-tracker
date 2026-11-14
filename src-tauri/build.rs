@@ -2,7 +2,7 @@ use std::{env, fs, path::Path};
 
 use sha2::{Digest, Sha256};
 
-const SOURCE_SHA256: &str = "7075f96cbabe45b4ecfc2e6b1745a625f856f695b0827a5506ce9ed85b906aa0";
+const SOURCE_SHA256: &str = "38705f51b61ac0636a5fd064f9a77fafabc7227b2aa2513f1b14c8bb1102affc";
 
 fn required_environment(name: &str) -> String {
     println!("cargo:rerun-if-env-changed={name}");
@@ -23,7 +23,7 @@ fn verify_native_dependency() {
     );
     let manifest = required_environment("CARGO_MANIFEST_DIR");
     let native = Path::new(&manifest)
-        .join("target/credential-native/4.19.0")
+        .join("target/credential-native/4.20.0")
         .join(&target);
     assert_eq!(
         Path::new(&required_environment("SQLCIPHER_LIB_DIR")),
@@ -48,8 +48,8 @@ fn verify_native_dependency() {
     .expect("SQLCipher build receipt must be valid JSON");
     assert_eq!(receipt["sourceSha256"], SOURCE_SHA256);
     assert_eq!(receipt["target"], target);
-    assert_eq!(receipt["sqlcipher"], "4.19.0");
-    assert_eq!(receipt["sqlite"], "3.53.4");
+    assert_eq!(receipt["sqlcipher"], "4.20.0");
+    assert_eq!(receipt["sqlite"], "3.54.1");
     assert_eq!(receipt["provider"], "commoncrypto");
     assert_eq!(receipt["deploymentTarget"], "12.0");
     for relative in [
@@ -71,7 +71,7 @@ fn verify_native_dependency() {
     }
     let header = fs::read_to_string(native.join("include/sqlite3.h"))
         .expect("SQLCipher header must be readable");
-    assert!(header.contains("#define SQLITE_VERSION        \"3.53.4\""));
+    assert!(header.contains("#define SQLITE_VERSION        \"3.54.1\""));
     println!("cargo:rustc-link-lib=framework=Security");
     println!("cargo:rustc-link-lib=framework=CoreFoundation");
 }

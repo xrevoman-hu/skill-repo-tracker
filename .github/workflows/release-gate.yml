@@ -62,7 +62,7 @@ jobs:
       - name: Set up pinned Rust
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component clippy,rustfmt
-          rustup toolchain install 1.88.0 --profile minimal
+          rustup toolchain install 1.89.0 --profile minimal
           rustup toolchain install nightly-2026-08-01 --profile minimal --component llvm-tools-preview
           rustup default 1.95.0
       - name: Install npm dependencies

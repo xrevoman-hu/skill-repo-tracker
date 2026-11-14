@@ -8,11 +8,11 @@ import { dirname, join, resolve } from "node:path";
 
 // Official tagged source; changing this manifest requires a dependency review.
 export const CREDENTIAL_NATIVE_MANIFEST = Object.freeze({
-  sqlcipher: "4.19.0",
-  sqlite: "3.53.4",
+  sqlcipher: "4.20.0",
+  sqlite: "3.54.1",
   provider: "commoncrypto",
-  sourceUrl: "https://codeload.github.com/sqlcipher/sqlcipher/tar.gz/refs/tags/v4.19.0",
-  sourceSha256: "7075f96cbabe45b4ecfc2e6b1745a625f856f695b0827a5506ce9ed85b906aa0",
+  sourceUrl: "https://codeload.github.com/sqlcipher/sqlcipher/tar.gz/refs/tags/v4.20.0",
+  sourceSha256: "38705f51b61ac0636a5fd064f9a77fafabc7227b2aa2513f1b14c8bb1102affc",
   deploymentTarget: "12.0",
 });
 
@@ -70,7 +70,7 @@ function output(command, args) {
 function sourceArchive(cache) {
   const downloads = join(cache, "downloads");
   privateDirectory(downloads);
-  const archive = join(downloads, "sqlcipher-v4.19.0.tar.gz");
+  const archive = join(downloads, "sqlcipher-v4.20.0.tar.gz");
   if (existsSync(archive)) {
     if (!ordinaryFile(archive) || digest(readFileSync(archive)) !== CREDENTIAL_NATIVE_MANIFEST.sourceSha256) {
       throw new Error("SQLCipher source cache integrity failure; remove the invalid build cache explicitly");

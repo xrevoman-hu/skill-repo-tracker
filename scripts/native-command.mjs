@@ -14,7 +14,7 @@ const MANIFEST = ["--manifest-path", "src-tauri/Cargo.toml"];
 
 export function nativeCommandArguments(mode, trailing = []) {
   const cargo = {
-    "check-msrv": ["+1.88.0", "check", "--locked", "--all-targets", "--all-features", ...MANIFEST],
+    "check-msrv": ["+1.89.0", "check", "--locked", "--all-targets", "--all-features", ...MANIFEST],
     "rust-tests": ["test", "--locked", "--all-features", ...MANIFEST],
     "build-debug": ["build", "--locked", ...MANIFEST],
     "build-release": ["build", "--release", "--locked", ...MANIFEST],

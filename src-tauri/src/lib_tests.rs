@@ -4373,6 +4373,141 @@ fn checking_only_failing_repositories_records_failed_task_with_original_error() 
 }
 
 #[test]
+fn mixed_repository_check_keeps_success_and_failure_in_a_partial_task() {
+    struct MixedCheckGithub(Arc<dyn adapters::GithubHttpAdapter>);
+
+    impl adapters::GithubHttpAdapter for MixedCheckGithub {
+        fn execute(&self, request: reqwest::Request) -> adapters::GithubHttpFuture<'_> {
+            if request.url().path() == "/repos/example-org/failing-check" {
+                return Box::pin(async {
+                    Ok(adapters::GithubHttpResponse {
+                        status: 502,
+                        headers: HeaderMap::new(),
+                        body: Ok(Vec::new()),
+                    })
+                });
+            }
+            self.0.execute(request)
+        }
+    }
+
+    let mut fixture = LegacyHashFixture::new(LegacyHashScenario::HandledCustomization);
+    let mut state = fixture.take_state();
+    state.adapters.github = Arc::new(MixedCheckGithub(state.adapters.github.clone()));
+    let failing_id = save_repository_with_account(
+        &state.db.lock().unwrap(),
+        &RemoteInfo {
+            owner: "example-org".into(),
+            repo: "failing-check".into(),
+            full_name: "example-org/failing-check".into(),
+            default_branch: "main".into(),
+            resolved_ref: "main".into(),
+            sha: "previous-sha".into(),
+        },
+        &[],
+        None,
+        "",
+    )
+    .unwrap();
+    let app = tauri::test::mock_builder()
+        .manage(state)
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let response = tauri::async_runtime::block_on(check_repositories(
+        CheckRepositoriesRequest {
+            repo_ids: Some(vec![fixture.repository_id.clone(), failing_id]),
+        },
+        app.state(),
+    ))
+    .unwrap();
+    assert!(response.ok);
+    let tasks = list_tasks(app.state()).data.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].status, "partial-success");
+    assert_eq!(tasks[0].summary, "1 success, 1 failed, 0 skipped");
+    let log = tasks[0].log.join("\n");
+    assert!(
+        log.contains("example-org/legacy-compatible-skill remote_head_sha"),
+        "{log}"
+    );
+    assert!(log.contains("example-org/failing-check failed:"), "{log}");
+    assert!(log.contains("[github_error] details: 502"), "{log}");
+}
+
+#[test]
+fn installing_a_missing_skill_keeps_its_identity_in_one_failed_task() {
+    let mut fixture = LegacyHashFixture::new(LegacyHashScenario::CompatibleUpdate);
+    let original_hash = hash_directory(&fixture.destination).unwrap();
+    let app = tauri::test::mock_builder()
+        .manage(fixture.take_state())
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let response = tauri::async_runtime::block_on(install_skill(
+        SkillActionRequest {
+            skill_id: "missing-skill".into(),
+        },
+        app.state(),
+    ))
+    .unwrap();
+    assert!(!response.ok);
+    let error = response.error.unwrap();
+    assert_eq!(error.code, "skill_not_found");
+    let tasks = list_tasks(app.state()).data.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].kind, "Install Skill");
+    assert_eq!(tasks[0].target, "missing-skill");
+    assert_eq!(tasks[0].status, "failed");
+    assert_eq!(tasks[0].summary, error.message);
+    let log = tasks[0].log.join("\n");
+    assert!(log.contains("Skill ID: missing-skill"), "{log}");
+    assert!(log.contains("[skill_not_found]"), "{log}");
+    assert!(
+        !log.contains("target path"),
+        "no destination is known: {log}"
+    );
+    assert_eq!(hash_directory(&fixture.destination).unwrap(), original_hash);
+}
+
+#[test]
+fn copying_a_historical_task_explains_missing_logs_without_fabricating_details() {
+    let mut fixture = LegacyHashFixture::new(LegacyHashScenario::CompatibleUpdate);
+    let state = fixture.take_state();
+    insert_task(
+        &state.db.lock().unwrap(),
+        TaskWrite {
+            id: "historical-empty-log",
+            kind: "Backup repositories",
+            target: "example/old-repository",
+            progress: "0 / 1",
+            status: "failed",
+            summary: "download failed",
+            backup_dir: None,
+            log: &[],
+        },
+    )
+    .unwrap();
+    let app = tauri::test::mock_builder()
+        .manage(state)
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let response = copy_task_summary(
+        TaskRequest {
+            task_id: "historical-empty-log".into(),
+        },
+        app.state(),
+    );
+    assert!(response.ok);
+    let report = response.data.unwrap();
+    assert!(report.contains("Task ID: historical-empty-log"));
+    assert!(report.contains("Target: example/old-repository"));
+    assert!(report.contains("Summary: download failed"));
+    assert!(report.contains("No detailed log was saved for this task."));
+    assert!(!report.contains("Retry reason:"));
+    assert!(!report.contains("[github_error]"));
+    assert!(list_tasks(app.state()).data.unwrap()[0].log.is_empty());
+}
+
+#[test]
 fn copied_task_report_contains_complete_diagnostics_and_rejects_missing_tasks() {
     let mut fixture = LegacyHashFixture::new(LegacyHashScenario::CompatibleUpdate);
     let state = fixture.take_state();

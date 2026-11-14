@@ -274,7 +274,7 @@ test("CI workflow keeps every required gate fail-closed and exact", () => {
     ],
     [
       "bypass native preparation and the locked MSRV scope",
-      valid.replace("node scripts/native-command.mjs check-msrv", "cargo +1.88.0 check"),
+      valid.replace("node scripts/native-command.mjs check-msrv", "cargo +1.89.0 check"),
     ],
   ]) {
     assert.ok(
