@@ -48,6 +48,7 @@ mod skill_hash;
 #[cfg(test)]
 #[path = "startup_guard_tests.rs"]
 mod startup_guard_tests;
+mod task_diagnostics;
 mod temp_artifacts;
 
 use adapters::{api_err, AppAdapters};
@@ -68,6 +69,7 @@ use settings_directories::{
     cleanup_created_settings_directories, create_settings_directory_tree, CreatedSettingsDirectory,
 };
 use skill_hash::{hash_directory, skill_hashes_from_zip};
+use task_diagnostics::{format_error_for_log, load_ui_tasks};
 use temp_artifacts::{
     classify_sync_destination, cleanup_stale_temp_artifacts, unique_operation_id,
     validate_skill_directory_name, CleanupReport, CleanupRequest, FilesystemMutationLock,
@@ -2347,16 +2349,6 @@ fn installed_root_repo_id(path: &Path) -> String {
     format!("local:installed:{}", &digest[..12])
 }
 
-fn format_error_for_log(context: &str, error: &AppError) -> String {
-    match &error.details {
-        Some(details) => format!(
-            "{context} failed: {} [{}] details: {}",
-            error.message, error.code, details
-        ),
-        None => format!("{context} failed: {} [{}]", error.message, error.code),
-    }
-}
-
 fn validate_directory_path(kind: &str, raw_path: &str) -> DirectoryValidation {
     let expanded = expand_tilde(raw_path);
     let exists = expanded.exists();
@@ -2897,56 +2889,6 @@ fn plugin_linked_skills(
         skills.push(row?);
     }
     Ok(skills)
-}
-
-fn load_ui_tasks(conn: &Connection) -> Result<Vec<UiTask>, AppError> {
-    let mut stmt = conn.prepare(
-        "SELECT id, kind, target, progress, status, summary, retryable, retry_reason
-         FROM backup_jobs
-         ORDER BY created_at DESC
-         LIMIT 100",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, String>(5)?,
-            row.get::<_, i64>(6)?,
-            row.get::<_, Option<String>>(7)?,
-        ))
-    })?;
-
-    let mut tasks = Vec::new();
-    for row in rows {
-        let (id, kind, target, progress, status, summary, retryable, retry_reason) = row?;
-        let log = load_task_log(conn, &id)?;
-        tasks.push(UiTask {
-            id,
-            kind,
-            target,
-            progress,
-            status,
-            summary,
-            retryable: retryable == 1,
-            retry_reason,
-            log,
-        });
-    }
-    Ok(tasks)
-}
-
-fn load_task_log(conn: &Connection, task_id: &str) -> Result<Vec<String>, AppError> {
-    let mut stmt =
-        conn.prepare("SELECT line FROM task_logs WHERE task_id = ?1 ORDER BY line_no ASC")?;
-    let rows = stmt.query_map(params![task_id], |row| row.get(0))?;
-    let mut log = Vec::new();
-    for row in rows {
-        log.push(row?);
-    }
-    Ok(log)
 }
 
 struct TaskWrite<'a> {
@@ -6272,10 +6214,12 @@ async fn check_repositories(
                     success + failed + skipped,
                     success + failed + skipped
                 ),
-                status: if failed > 0 {
-                    "partial-success"
-                } else {
+                status: if failed == 0 {
                     "success"
+                } else if success == 0 {
+                    "failed"
+                } else {
+                    "partial-success"
                 },
                 summary: &format!("{success} success, {failed} failed, {skipped} skipped"),
                 backup_dir: None,
@@ -6307,7 +6251,7 @@ async fn install_skill(
     request: SkillActionRequest,
     state: State<'_, AppState>,
 ) -> CommandResult<SkillActionOutcome> {
-    update_skill_inner(request.skill_id, SkillActionMode::Install, state).await
+    task_diagnostics::run_skill_action(request.skill_id, SkillActionMode::Install, state).await
 }
 
 #[tauri::command]
@@ -6315,7 +6259,7 @@ async fn update_skill(
     request: SkillActionRequest,
     state: State<'_, AppState>,
 ) -> CommandResult<SkillActionOutcome> {
-    update_skill_inner(request.skill_id, SkillActionMode::Update, state).await
+    task_diagnostics::run_skill_action(request.skill_id, SkillActionMode::Update, state).await
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6329,7 +6273,7 @@ async fn update_skill_inner(
     mode: SkillActionMode,
     state: State<'_, AppState>,
 ) -> CommandResult<SkillActionOutcome> {
-    let (skill, repo, dest) = {
+    let (skill, repo) = {
         let _filesystem_guard = match state.filesystem_lock.acquire() {
             Ok(guard) => guard,
             Err(error) => return Ok(api_err(AppError::from(error))),
@@ -6387,7 +6331,7 @@ async fn update_skill_inner(
                 SkillUpdatePreflight::Proceed => {}
             }
         }
-        (skill, repo, dest)
+        (skill, repo)
     };
 
     let auth = state.github_auth_for_repo(&repo);
@@ -6554,17 +6498,7 @@ async fn update_skill_inner(
     })();
     Ok(match result {
         Ok(outcome) => ApiResponse::ok(outcome),
-        Err(error) => {
-            insert_failed_task(
-                &db,
-                "skill",
-                "Update Skill",
-                &skill.name,
-                &error,
-                vec![format!("target path {}", path_string(&dest))],
-            );
-            api_err(error)
-        }
+        Err(error) => api_err(error),
     })
 }
 
@@ -8211,16 +8145,7 @@ fn cancel_task(request: TaskRequest, state: State<'_, AppState>) -> ApiResponse<
 #[tauri::command]
 fn copy_task_summary(request: TaskRequest, state: State<'_, AppState>) -> ApiResponse<String> {
     let db = state.db.lock().expect("db mutex poisoned");
-    let result: Result<String, AppError> = db
-        .query_row(
-            "SELECT kind || ': ' || summary FROM backup_jobs WHERE id = ?1",
-            params![request.task_id],
-            |row| row.get(0),
-        )
-        .optional()
-        .map(|value| value.unwrap_or_else(|| "Task not found".into()))
-        .map_err(AppError::from);
-    match result {
+    match task_diagnostics::copy_task_report(&db, &request.task_id) {
         Ok(value) => ApiResponse::ok(value),
         Err(error) => api_err(error),
     }

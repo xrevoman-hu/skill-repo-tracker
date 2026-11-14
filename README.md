@@ -6,6 +6,10 @@
 
 **[v1.4.1 · 下载与发布状态 / Downloads and release status](https://github.com/xrevoman-hu/skill-repo-tracker/releases/tag/v1.4.1)** · [版本说明 / Release notes](docs/releases/v1.4.1.md) · [贡献指南 / Contributing](CONTRIBUTING.md)
 
+当前源码候选为 `1.4.2`，修复任务失败诊断与同名远端备份冲突，尚未正式发布。
+The current source candidate is `1.4.2`, with task diagnostics and backup filename fixes; it is not yet a formal release.
+见 [1.4.2 候选说明 / candidate notes](docs/releases/v1.4.2.md)。
+
 `1.4.0` 新增本地凭据库，`1.4.1` 修复发布说明预检；下载资产以对应 Release 页为准。Version `1.4.0` adds a local credential vault; `1.4.1` fixes release-note preflight. Download assets are listed on its Release page. [凭据库使用指南 / Credential vault guide](docs/credential-vault.md) · [候选验收与限制 / Candidate acceptance and limitations](docs/credential-vault.md#验收状态)
 
 macOS 12+ · Apple Silicon（arm64）。安装包为 **ad-hoc 签名测试分发，不是 Developer ID 签名，未经过 Apple notarization**；首次打开方式见下文。The installer is ad-hoc signed, not Developer ID signed, and not Apple notarized; first-launch instructions are below.

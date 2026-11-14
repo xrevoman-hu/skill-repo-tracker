@@ -158,7 +158,10 @@
         "docs/adr/0004-foreground-scheduling.md",
         "docs/adr/0007-staged-modularization.md"
       ],
-      "paths": ["src/App.tsx", "src/AppSidebar.tsx", "src/RepositorySelectAll.tsx", "src/styles.css"]
+      "paths": [
+        "src/App.tsx", "src/AppSidebar.tsx", "src/RepositorySelectAll.tsx", "src/styles.css",
+        "src/TasksView.tsx", "src/taskDiagnostics.ts", "src/tasks.css"
+      ]
     },
     {
       "id": "frontend-github-view",
@@ -309,7 +312,7 @@
       "layer": "rust-composition",
       "ownerRule": "docs/rules/testing-release.md",
       "decisions": ["docs/adr/0007-staged-modularization.md"],
-      "paths": ["src-tauri/src/lib.rs"]
+      "paths": ["src-tauri/src/lib.rs", "src-tauri/src/task_diagnostics.rs"]
     },
     {
       "id": "rust-network-adapters",

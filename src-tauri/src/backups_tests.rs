@@ -63,16 +63,19 @@ fn duplicate_zip_name_never_deletes_the_first_published_file() {
 #[test]
 fn zip_names_are_collision_resistant_and_fit_macos_component_limits() {
     let slash = super::safe_zip_name(
+        "repository-id",
         "example/repository",
         "feature/a",
         "0123456789abcdef0123456789abcdef01234567",
     );
     let underscore = super::safe_zip_name(
+        "repository-id",
         "example/repository",
         "feature_a",
         "0123456789abcdef0123456789abcdef01234567",
     );
     let long = super::safe_zip_name(
+        "repository-id",
         &"虚构仓库".repeat(100),
         &"功能分支".repeat(100),
         "fedcba9876543210fedcba9876543210fedcba98",
@@ -95,6 +98,7 @@ fn zip_names_are_collision_resistant_and_fit_macos_component_limits() {
 #[test]
 fn zip_name_truncation_never_splits_a_multibyte_character() {
     let name = super::safe_zip_name(
+        "repository-id",
         &"🦀".repeat(100),
         &"分支".repeat(100),
         "0123456789abcdef0123456789abcdef01234567",
@@ -105,6 +109,7 @@ fn zip_name_truncation_never_splits_a_multibyte_character() {
     assert!(name.ends_with(".zip"));
 
     let sanitized = super::safe_zip_name(
+        "repository-id",
         "repository\nname",
         "feature:branch",
         "0123456789abcdef0123456789abcdef01234567",

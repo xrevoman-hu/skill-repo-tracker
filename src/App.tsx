@@ -31,7 +31,7 @@ import type {
 } from "./api";
 import { DemoAppService, TauriAppService } from "./appService";
 import type { AppService } from "./appService";
-import { Button, Modal, Tag, statusLabel } from "./UiPrimitives";
+import { Button, EmptyState, Modal, Tag, statusLabel } from "./UiPrimitives";
 export { Button } from "./UiPrimitives";
 import { openGithub } from "./externalNavigation";
 import { GitHubWorkbench } from "./GitHubWorkbench";
@@ -61,7 +61,11 @@ import {
   createTaskCoordinator,
   settleCoordinatedTask,
 } from "./taskCoordinator";
+import type { CoordinatedTaskResult } from "./taskCoordinator";
 import { createWorkspaceController } from "./workspaceController";
+import { TasksView } from "./TasksView";
+import { canRetryTask, failedTaskDiagnostic, formatTaskDiagnostic, taskText, visibleTaskDiagnostics } from "./taskDiagnostics";
+export { TasksView } from "./TasksView";
 type RepositorySort = {
   key: "name" | "addedAt";
   direction: "asc" | "desc";
@@ -244,17 +248,6 @@ type SkillInspectorProps = {
   t: (key: string) => string;
 };
 
-type TasksViewProps = {
-  tasks: UiTask[];
-  taskFilter: string;
-  setTaskFilter: (filter: string) => void;
-  retryTask: (task: UiTask) => void | Promise<void>;
-  copyTaskSummary: (task: UiTask) => void | Promise<void>;
-  hasTasks: boolean;
-  isPending: (key: string) => boolean;
-  language: string;
-  t: (key: string) => string;
-};
 
 type RunningTaskProps = {
   tasks: UiTask[];
@@ -687,7 +680,13 @@ const COPY = {
     waitingUserTask: "等待你处理的任务",
     retryAdded: "已重新执行任务。",
     retryRejected: "此任务不可重试。",
-    taskCopied: "任务摘要已复制。",
+    taskCopied: "任务详情和日志已复制。",
+    taskCopyFailed: "复制失败，请重试或手动选中日志复制。",
+    taskFailed: "任务执行失败，请查看详情。",
+    taskSessionOnly: "此失败详情仅保存在本次会话；请复制留存，并从来源页面重新执行。",
+    taskId: "任务 ID",
+    taskFailures: "失败详情",
+    taskLogUnavailable: "此历史任务未保存详细日志。请从来源页面重新执行以获取新的诊断信息。",
     rootSaved: "备份根目录已保存。",
     settingsSaved: "设置已保存。",
     saveSettings: "保存设置",
@@ -1138,7 +1137,13 @@ const COPY = {
     waitingUserTask: "Tasks waiting for you",
     retryAdded: "Task retried.",
     retryRejected: "This task cannot be retried.",
-    taskCopied: "Task summary copied.",
+    taskCopied: "Task details and logs copied.",
+    taskCopyFailed: "Copy failed. Retry or select and copy the log manually.",
+    taskFailed: "The task failed. See its details.",
+    taskSessionOnly: "These failure details are only kept in this session. Copy them and run the action again from its source page.",
+    taskId: "Task ID",
+    taskFailures: "Failure details",
+    taskLogUnavailable: "No detailed log was saved for this historical task. Run the action again from its source page to collect diagnostics.",
     rootSaved: "Backup root saved.",
     settingsSaved: "Settings saved.",
     saveSettings: "Save Settings",
@@ -1195,7 +1200,7 @@ function formatCopy(template: string, values: Record<string, string | number>) {
 }
 
 function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.message ? error.message : fallback;
+  return localizedApiErrorMessage(error, "zh", fallback);
 }
 
 function errorCode(error: unknown) {
@@ -1211,87 +1216,12 @@ const SKILL_DESCRIPTION_ZH = {
   broken: "来源仓库当前不可访问。",
 };
 
-const TASK_TEXT_ZH = {
-  "Backup repositories": "备份仓库",
-  "Check remote state": "检测远端状态",
-  "Update Skill": "更新 Skill",
-  "Scan repository": "扫描仓库",
-  "Scan local Skills": "扫描本地 Skills",
-  "Scan local repository": "扫描本地仓库",
-  "Delete Skill": "删除 Skill",
-  "Restore Skill": "恢复 Skill",
-  "Retry task": "重试任务",
-  "Install Skill": "安装 Skill",
-  "Updated repositories": "有更新仓库",
-  "All repositories": "全部仓库",
-  "Selected repositories": "选中仓库",
-  "Previous session": "上次会话",
-  "7 success, 1 failed, 4 queued": "7 个成功、1 个失败、4 个排队",
-  "15 success, 2 failed": "15 个成功、2 个失败",
-  "blocked by local modifications": "被本地修改阻止",
-  "app closed during ZIP download": "ZIP 下载时应用关闭",
-  "retry completed": "重试已完成",
-  "remote check started": "已开始检测远端状态",
-  "local Skills scan started": "已开始扫描本地 Skills",
-  "local repository scan started": "已开始扫描本地仓库",
-  "repository scan started": "已开始扫描仓库",
-  "backup started": "已开始备份",
-  "Skill update started": "已开始更新 Skill",
-  "Skill install started": "已开始安装 Skill",
-  "delete Skill started": "已开始删除 Skill",
-  "restore Skill started": "已开始恢复 Skill",
-  "retry task started": "已开始重试任务",
-  "local Skill updated": "本地 Skill 已更新",
-  "1 Skill recognized": "识别到 1 个 Skill",
-  "generic repo, 0 Skills": "普通仓库，0 个 Skill",
-  "refresh remote state for 17 repositories": "刷新 17 个仓库的远端状态",
-  "skip example-org/missing-skill because check failed": "跳过 example-org/missing-skill，因为检测失败",
-  "download example-org__content-skill-kit__main__a1b2c3d.zip": "下载 example-org__content-skill-kit__main__a1b2c3d.zip",
-  "compute sha256: 19a6...4de1": "计算 sha256：19a6...4de1",
-  "write manifest.json": "写入 manifest.json",
-  "update last_backup_sha for successful items": "更新成功项的 last_backup_sha",
-  "resolve default refs": "解析默认 ref",
-  "record remote_head_sha for public repositories": "记录公开仓库的 remote_head_sha",
-  "keep previous SHA for failed repositories": "检测失败仓库保留上次 SHA",
-  "calculate installed_skill_hash": "计算 installed_skill_hash",
-  "local content differs from installation record": "本地内容不同于安装记录",
-  "task interrupted before manifest write": "manifest 写入前任务中断",
-  "last_backup_sha not updated": "last_backup_sha 未更新",
-  "refresh all remote refs": "刷新全部远端 ref",
-  "preserve failed repository SHA": "保留失败仓库 SHA",
-  "recalculate backup states": "重新计算备份状态",
-  "fetch remote HEAD SHA": "获取远端 HEAD SHA",
-  "found SKILL.md": "发现 SKILL.md",
-  "no SKILL.md found; keep as generic repo": "未发现 SKILL.md，保留为普通仓库",
-  "refresh remote state before backup": "备份前刷新远端状态",
-  "download ZIP files to .partial paths": "将 ZIP 下载到 .partial 路径",
-  "compute sha256 for successful ZIP files": "为成功 ZIP 计算 sha256",
-  "update last_backup_sha for successful repositories": "更新成功仓库的 last_backup_sha",
-  "download remote Skill directory": "下载远端 Skill 目录",
-  "replace local files": "替换本地文件",
-  "record installed_skill_hash": "记录 installed_skill_hash",
-  "local hash differs from installed_skill_hash": "本地 hash 不同于 installed_skill_hash",
-  "record new installed_skill_hash": "记录新的 installed_skill_hash",
-  "retry failed item": "重试失败项",
-  "complete without changing unrelated state": "完成且不改变无关状态",
-};
 
 function skillDescription(skill: Pick<UiSkill, "id" | "description">, language: string) {
   const descriptions = SKILL_DESCRIPTION_ZH as Record<string, string>;
   return language === "zh" ? descriptions[skill.id] || skill.description : skill.description;
 }
 
-function taskText(text: string, language: string): string {
-  if (language !== "zh" || !text) return text;
-  const successSkipped = text.match(/^(\d+) success, (\d+) skipped$/);
-  if (successSkipped) return `${successSkipped[1]} 个成功、${successSkipped[2]} 个跳过`;
-  const successFailed = text.match(/^(\d+) success, (\d+) failed$/);
-  if (successFailed) return `${successFailed[1]} 个成功、${successFailed[2]} 个失败`;
-  if (text.endsWith(" retry")) return `${taskText(text.slice(0, -6), language)}重试`;
-  if (text.startsWith("create ")) return text.replace(/^create /, "创建 ");
-  if (text.startsWith("normalize ")) return text.replace(/^normalize /, "规范化 ");
-  return (TASK_TEXT_ZH as Record<string, string>)[text] || text;
-}
 
 function displayValue(value: unknown, language: string): string {
   if (typeof value !== "string") return value == null ? "" : String(value);
@@ -1573,7 +1503,10 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
   const [repositories, setRepositories] = useState<UiRepository[]>([]);
   const [skills, setSkills] = useState<UiSkill[]>([]);
   const [plugins, setPlugins] = useState<UiPlugin[]>([]);
-  const [tasks, setTasks] = useState<UiTask[]>([]);
+  const [persistedTasks, setTasks] = useState<UiTask[]>([]);
+  const [sessionFailures, setSessionFailures] = useState<UiTask[]>([]);
+  const pendingTaskDiagnostics = useRef(new Map<string, UiTask>());
+  const tasks = useMemo(() => visibleTaskDiagnostics(persistedTasks, sessionFailures), [persistedTasks, sessionFailures]);
   const [selectedRepoId, setSelectedRepoId] = useState("");
   const [inspectorRepoId, setInspectorRepoId] = useState(() => initialFreeParam("inspectorRepo"));
   const [selectedSkillId, setSelectedSkillId] = useState(() => initialFreeParam("selectedSkill"));
@@ -1650,7 +1583,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     () => createWorkspaceController({
       service: appService,
       coordinator: taskCoordinatorRef.current,
-      initial: { repositories, skills, plugins, tasks },
+      initial: { repositories, skills, plugins, tasks: persistedTasks },
       publish: (next) => {
         setRepositories(next.repositories);
         setSkills(next.skills);
@@ -1661,7 +1594,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
     [appService],
   );
   backupRootRef.current = backupRoot;
-  workspaceController.replaceSnapshot({ repositories, skills, plugins, tasks });
+  workspaceController.replaceSnapshot({ repositories, skills, plugins, tasks: persistedTasks });
   const lastRepositoryCheck = useMemo(
     () => latestRepositoryCheck(repositories),
     [repositories],
@@ -1768,6 +1701,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
   }
 
   function setActionPending(key: string, pending: boolean) {
+    if (!pending) pendingTaskDiagnostics.current.delete(key);
     setPendingActions((items) => {
       if (pending) return { ...items, [key]: true };
       return Object.fromEntries(Object.entries(items).filter(([entryKey]) => entryKey !== key));
@@ -1785,19 +1719,39 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       status: "running",
       summary: task.summary || "task started",
       retryable: false,
-      log: task.log || ["task started"],
+      log: task.log || [task.summary || "task started"],
       optimistic: true,
     };
+    pendingTaskDiagnostics.current.set(actionKey, optimisticTask);
     setTasks((items) => [optimisticTask, ...items.filter((item) => item.id !== id)]);
     showToast(t("taskStarted"));
     return id;
   }
 
-  function finishOptimisticTask(actionKey: string, taskId?: string) {
+  function finishOptimisticTask(actionKey: string, taskId?: string, failure?: { error: unknown }) {
+    const pending = pendingTaskDiagnostics.current.get(actionKey);
     setActionPending(actionKey, false);
     if (taskId) {
       setTasks((items) => items.filter((item) => item.id !== taskId));
     }
+    if (failure && pending) {
+      setSessionFailures((items) => [failedTaskDiagnostic(pending, failure.error, t("taskFailed"), t("taskSessionOnly")), ...items]);
+    }
+  }
+
+  function finishWorkspaceTask<T>(
+    actionKey: string, taskId: string, result: CoordinatedTaskResult<T>, onCompleted: () => void,
+  ) {
+    settleCoordinatedTask(result, {
+      cleanup: () => finishOptimisticTask(actionKey, taskId, result.status === "failed" ? { error: result.error } : undefined),
+      onCompleted,
+      onFailed: (error) => showToast(errorMessage(error, t("taskFailed"))),
+    });
+  }
+
+  function failOptimisticTask(actionKey: string, taskId: string | undefined, error: unknown, fallback: string) {
+    finishOptimisticTask(actionKey, taskId, { error });
+    showToast(errorMessage(error, t(fallback)));
   }
 
   function applySettings(settings: AppSettings | null | undefined) {
@@ -1816,6 +1770,8 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
   }
 
   function clearBootstrapState() {
+    setSessionFailures([]);
+    pendingTaskDiagnostics.current.clear();
     setRepositories([]);
     setSkills([]);
     setPlugins([]);
@@ -2109,14 +2065,9 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       kind: "Check remote state",
       target: "All repositories",
       summary: "remote check started",
-      log: ["remote check started"],
     });
     const result = await workspaceController.checkRepositories();
-    settleCoordinatedTask(result, {
-      cleanup: () => finishOptimisticTask(actionKey, optimisticTaskId),
-      onCompleted: () => showToast(t("remoteRefreshed")),
-      onFailed: (error) => showToast(errorMessage(error, t("sourceUnavailableToast"))),
-    });
+    finishWorkspaceTask(actionKey, optimisticTaskId, result, () => showToast(t("remoteRefreshed")));
   }
 
   function addTask(task: DemoTaskInput) {
@@ -2184,8 +2135,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         setTasks(nextTasks);
         showToast(t("localSkillsScanned"));
       } catch (error: unknown) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(errorMessage(error, t("directoryInvalid")));
+        failOptimisticTask(actionKey, optimisticTaskId, error, "directoryInvalid");
         return;
       }
       setActionPending(actionKey, false);
@@ -2212,8 +2162,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         setTasks(nextTasks);
         showToast(t("installedSkillsSynced"));
       } catch (error: unknown) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(errorMessage(error, t("directoryInvalid")));
+        failOptimisticTask(actionKey, optimisticTaskId, error, "directoryInvalid");
         return;
       }
       setActionPending(actionKey, false);
@@ -2466,8 +2415,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       showToast(t("localRepositoryAdded"));
       setActionPending(actionKey, false);
     } catch (error: unknown) {
-      finishOptimisticTask(actionKey, optimisticTaskId);
-      showToast(errorMessage(error, t("directoryInvalid")));
+      failOptimisticTask(actionKey, optimisticTaskId, error, "directoryInvalid");
     }
   }
 
@@ -2481,7 +2429,6 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       kind: "Delete Skill",
       target: skill?.name || skillId,
       summary: "delete Skill started",
-      log: ["delete Skill started"],
     });
     if (desktopRuntime) {
       try {
@@ -2492,8 +2439,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         setModal(null);
         showToast(t("skillDeleted"));
       } catch (error: unknown) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(errorMessage(error, t("directoryInvalid")));
+        failOptimisticTask(actionKey, optimisticTaskId, error, "directoryInvalid");
         return;
       }
       setActionPending(actionKey, false);
@@ -2513,7 +2459,6 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       kind: "Restore Skill",
       target: skill?.name || skillId,
       summary: "restore Skill started",
-      log: ["restore Skill started"],
     });
     if (desktopRuntime) {
       try {
@@ -2523,8 +2468,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
         setTasks(nextTasks);
         showToast(t("restoredSkill"));
       } catch (error: unknown) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(errorMessage(error, t("directoryInvalid")));
+        failOptimisticTask(actionKey, optimisticTaskId, error, "directoryInvalid");
         return;
       }
       setActionPending(actionKey, false);
@@ -2780,7 +2724,6 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       kind: "Scan repository",
       target: parseRepoName(newRepo.url),
       summary: "repository scan started",
-      log: ["repository scan started"],
     });
     try {
       const result = await appService.addRepository({
@@ -2806,8 +2749,7 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       }
     } catch (error: unknown) {
       if (addRepoRequestRef.current === requestId) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
-        showToast(errorMessage(error, t("repoExists")));
+        failOptimisticTask(actionKey, optimisticTaskId, error, "repoExists");
         setIsAddingRepo(false);
       }
       return;
@@ -2826,20 +2768,15 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       kind: "Backup repositories",
       target: mode === "selected" ? "Selected repositories" : "Updated repositories",
       summary: "backup started",
-      log: ["backup started"],
     });
     const result = await workspaceController.backupRepositories({
       mode,
       repositoryIds: targetIds,
       backupRoot: backupRootRef.current,
     });
-    settleCoordinatedTask(result, {
-      cleanup: () => finishOptimisticTask(actionKey, optimisticTaskId),
-      onCompleted: () => {
-        setModal(null);
-        showToast(t("backupCreated"));
-      },
-      onFailed: (error) => showToast(errorMessage(error, t("backupCreated"))),
+    finishWorkspaceTask(actionKey, optimisticTaskId, result, () => {
+      setModal(null);
+      showToast(t("backupCreated"));
     });
   }
 
@@ -2917,7 +2854,6 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       kind: skill.installed ? "Update Skill" : "Install Skill",
       target: skill.name,
       summary: skill.installed ? "Skill update started" : "Skill install started",
-      log: [skill.installed ? "Skill update started" : "Skill install started"],
     });
     if (desktopRuntime) {
       try {
@@ -2936,11 +2872,11 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
           showToast(skill.installed ? `${skill.name} ${t("skillUpdated")}` : `${skill.name} ${t("installedSkill")}`);
         }
       } catch (error: unknown) {
-        finishOptimisticTask(actionKey, optimisticTaskId);
         if (errorCode(error) === "local_skill_modified") {
+          finishOptimisticTask(actionKey, optimisticTaskId);
           await openSkillConflict(skill);
         } else {
-          showToast(errorMessage(error, t("sourceUnavailableToast")));
+          failOptimisticTask(actionKey, optimisticTaskId, error, "sourceUnavailableToast");
         }
         return;
       }
@@ -3197,31 +3133,20 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
       kind: "Retry task",
       target: task.target,
       summary: "retry task started",
-      log: ["retry task started"],
     });
     const result = await workspaceController.retryTask(task.id);
-    settleCoordinatedTask(result, {
-      cleanup: () => finishOptimisticTask(actionKey, optimisticTaskId),
-      onCompleted: () => showToast(t("retryAdded")),
-      onFailed: (error) => showToast(errorMessage(error, t("retryAdded"))),
-    });
+    finishWorkspaceTask(actionKey, optimisticTaskId, result, () => showToast(t("retryAdded")));
   }
 
   async function copyTaskSummary(task: UiTask) {
-    const summary = `${taskText(task.kind, language)}: ${taskText(task.summary, language)}`;
-    if (desktopRuntime) {
-      try {
-        const backendSummary = await api.copyTaskSummary(task.id);
-        await navigator.clipboard?.writeText(backendSummary);
-        showToast(t("taskCopied"));
-        return;
-      } catch (error: unknown) {
-        showToast(errorMessage(error, t("taskCopied")));
-        return;
-      }
+    try {
+      const report = desktopRuntime && !task.optimistic
+        ? await api.copyTaskSummary(task.id) : formatTaskDiagnostic(task);
+      await copyPromptText(report);
+      showToast(t("taskCopied"));
+    } catch (error: unknown) {
+      showToast(`${t("taskCopyFailed")} ${errorMessage(error, "")}`.trim());
     }
-    await navigator.clipboard?.writeText(summary);
-    showToast(t("taskCopied"));
   }
 
   async function openBackupFolder(repositoryId?: string) {
@@ -3824,25 +3749,6 @@ export function App({ appService: injectedAppService }: AppProps = {}) {
   );
 }
 
-function EmptyState({ title, body, actionLabel, onAction }: {
-  title: ReactNode;
-  body: ReactNode;
-  actionLabel?: ReactNode;
-  onAction?: () => void;
-}) {
-  return (
-    <div className="empty-state">
-      <div className="empty-state-icon" aria-hidden="true">+</div>
-      <h2>{title}</h2>
-      <p>{body}</p>
-      {actionLabel && onAction && (
-        <Button variant="primary" onClick={onAction}>
-          {actionLabel}
-        </Button>
-      )}
-    </div>
-  );
-}
 
 type ToolbarProps = {
   activeTab: string;
@@ -5064,201 +4970,6 @@ export function SkillConflictNotice({ skill, onOpen, onOpenFolder, onRecheck, t 
   );
 }
 
-function isRetryStatus(status: string) {
-  return ["failed", "interrupted", "partial-success"].includes(status);
-}
-
-function canRetryTask(task: UiTask) {
-  return Boolean(task?.retryable) && isRetryStatus(task.status);
-}
-
-function retryTaskTitle(task: UiTask, language: string, t: (key: string) => string) {
-  if (!isRetryStatus(task.status)) {
-    return t("retryOnlyFailed");
-  }
-  if (!task.retryable) {
-    return taskText(task.retryReason || t("retryUnavailable"), language);
-  }
-  return `${t("retry")}: ${taskText(task.target, language)}`;
-}
-
-export function TasksView({
-  tasks,
-  taskFilter,
-  setTaskFilter,
-  retryTask,
-  copyTaskSummary,
-  hasTasks,
-  isPending,
-  language,
-  t,
-}: TasksViewProps) {
-  const filters = [
-    ["all", t("all")],
-    ["waiting-user", t("waitingUser")],
-    ["success", t("success")],
-    ["partial-success", t("partial")],
-    ["failed", t("failed")],
-    ["interrupted", t("interrupted")],
-  ];
-  const [expanded, setExpanded] = useState<string | undefined>(tasks[0]?.id);
-  const expandedTask = tasks.find((task) => task.id === expanded) || tasks[0];
-
-  useEffect(() => {
-    if (!tasks.length) {
-      setExpanded(undefined);
-    } else if (!tasks.some((task) => task.id === expanded)) {
-      setExpanded(tasks[0].id);
-    }
-  }, [tasks, expanded]);
-
-  return (
-    <section className="main-pane single">
-      <div className="pane-header">
-        <div>
-          <h1>{t("tasksTitle")}</h1>
-          <p>{t("tasksSubtitle")}</p>
-        </div>
-        <div className="segmented" role="group" aria-label={t("tasksTitle")}>
-          {filters.map(([id, label]) => (
-            <button
-              aria-pressed={taskFilter === id}
-              className={taskFilter === id ? "selected" : ""}
-              key={id}
-              onClick={() => setTaskFilter(id)}
-              type="button"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="task-layout">
-        <div className="table-frame">
-          {tasks.length ? (
-            <table className="data-table task-table">
-              <thead>
-                <tr>
-                  <th>{t("type")}</th>
-                  <th>{t("target")}</th>
-                  <th>{t("progress")}</th>
-                  <th>{t("status")}</th>
-                  <th>{t("taskSummary")}</th>
-                  <th>{t("actions")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tasks.map((task) => (
-                  <tr
-                    className={expanded === task.id ? "active-row" : ""}
-                    key={task.id}
-                    onClick={() => setExpanded(task.id)}
-                  >
-                    <td>{taskText(task.kind, language)}</td>
-                    <td title={taskText(task.target, language)}>{taskText(task.target, language)}</td>
-                    <td>{task.progress}</td>
-                    <td>
-                      <Tag value={task.status} language={language} />
-                    </td>
-                    <td className="task-summary-cell" title={taskText(task.summary, language)}>
-                      {taskText(task.summary, language)}
-                    </td>
-                    <td onClick={(event) => event.stopPropagation()}>
-                      <div className="row-actions">
-                        <button
-                          aria-label={`${t("retry")}: ${taskText(task.target, language)}`}
-                          disabled={
-                            !canRetryTask(task) ||
-                            isPending(`retryTask:${task.id}`)
-                          }
-                          onClick={() => retryTask(task)}
-                          title={retryTaskTitle(task, language, t)}
-                          type="button"
-                        >
-                          {isPending(`retryTask:${task.id}`) ? t("retrying") : t("retry")}
-                        </button>
-                        <button
-                          aria-label={`${t("copy")}: ${taskText(task.target, language)}`}
-                          onClick={() => copyTaskSummary(task)}
-                          title={`${t("copy")}: ${taskText(task.target, language)}`}
-                          type="button"
-                        >
-                          {t("copy")}
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <EmptyState
-              title={hasTasks ? t("noFilteredTasksTitle") : t("firstTaskTitle")}
-              body={hasTasks ? t("noFilteredTasksText") : t("firstTaskText")}
-            />
-          )}
-        </div>
-
-        {expandedTask ? (
-          <aside className="log-panel">
-            <div className="task-detail-card">
-              <div>
-                <span>{t("taskDetails")}</span>
-                <strong>{taskText(expandedTask.kind, language)}</strong>
-              </div>
-              <Tag value={expandedTask.status} language={language} />
-              <Detail label={t("target")} value={taskText(expandedTask.target, language)} />
-              <Detail label={t("progress")} value={expandedTask.progress} />
-              <Detail label={t("taskSummary")} value={taskText(expandedTask.summary, language)} />
-              {!canRetryTask(expandedTask) && isRetryStatus(expandedTask.status) && (
-                <Detail
-                  label={t("retry")}
-                  value={taskText(expandedTask.retryReason || t("retryUnavailable"), language)}
-                />
-              )}
-            </div>
-            <div className="log-actions">
-              <h2>{t("taskLog")}</h2>
-              <div className="row-actions">
-                <button
-                  aria-label={`${t("retry")}: ${taskText(expandedTask.target, language)}`}
-                  disabled={
-                    !canRetryTask(expandedTask) ||
-                    isPending(`retryTask:${expandedTask.id}`)
-                  }
-                  onClick={() => retryTask(expandedTask)}
-                  title={retryTaskTitle(expandedTask, language, t)}
-                  type="button"
-                >
-                  {isPending(`retryTask:${expandedTask.id}`) ? t("retrying") : t("retry")}
-                </button>
-                <button
-                  aria-label={`${t("copy")}: ${taskText(expandedTask.target, language)}`}
-                  onClick={() => copyTaskSummary(expandedTask)}
-                  title={`${t("copy")}: ${taskText(expandedTask.target, language)}`}
-                  type="button"
-                >
-                  {t("copy")}
-                </button>
-              </div>
-            </div>
-            <pre>
-              {expandedTask.log
-                .map((line, index) => `${String(index + 1).padStart(2, "0")}  ${taskText(line, language)}`)
-                .join("\n")}
-            </pre>
-          </aside>
-        ) : (
-          <aside className="log-panel empty-log">
-            <h2>{t("taskLog")}</h2>
-            <p>{t("firstTaskText")}</p>
-          </aside>
-        )}
-      </div>
-    </section>
-  );
-}
 
 function SettingsView(props: PreferencesProps) {
   const { t, persistSettings, isPending } = props;

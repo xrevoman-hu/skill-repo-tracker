@@ -60,6 +60,46 @@ async function blockExternalRequests(page: Page) {
   return () => expect(externalRequests).toEqual([]);
 }
 
+test("失败任务可用键盘打开并复制完整诊断，复制失败不会报成功", async ({ page, context }, testInfo) => {
+  const expectNoExternalRequests = await blockExternalRequests(page);
+  const consoleErrors: string[] = [];
+  page.on("pageerror", error => consoleErrors.push(error.message));
+  page.on("console", message => { if (message.type() === "error") consoleErrors.push(message.text()); });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.setViewportSize({ width: 1440, height: 1024 });
+  await page.goto("/?lang=zh&tab=tasks&demo=retry-race");
+  await expect(page).toHaveTitle("Skill Repo Tracker");
+  await expect(page.getByRole("heading", { level: 1, name: "任务" })).toBeVisible();
+  await page.getByRole("button", { name: "失败", exact: true }).click();
+  const details = page.getByRole("button", { name: "任务详情: example-org/content-skill-kit" });
+  await details.focus();
+  await page.keyboard.press("Enter");
+  await expect(details).toHaveAttribute("aria-pressed", "true");
+  const panel = page.locator("aside.log-panel");
+  await expect(panel).toContainText("example-org/content-skill-kit");
+  await expect(panel.locator('pre[aria-label="任务日志"]')).toHaveCSS("white-space", "pre-wrap");
+  await panel.getByRole("button", { name: "复制: example-org/content-skill-kit" }).click();
+  await expect(page.getByRole("status")).toContainText("任务详情和日志已复制");
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  for (const text of ["demo-retry-failed", "example-org/content-skill-kit", "failed", "last_backup_sha unchanged"]) {
+    expect(copied).toContain(text);
+  }
+  await page.screenshot({ path: testInfo.outputPath("task-failure-details.png"), fullPage: true });
+  await page.setViewportSize({ width: 1120, height: 720 });
+  await expect(panel).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("task-failure-details-minimum-window.png"), fullPage: true });
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: {
+      writeText: () => Promise.reject(new Error("clipboard denied")),
+    } });
+  });
+  await panel.getByRole("button", { name: "复制: example-org/content-skill-kit" }).click();
+  await expect(page.getByRole("status")).toContainText("clipboard denied");
+  await expect(page.getByRole("status")).not.toContainText("已复制");
+  expect(consoleErrors).toEqual([]);
+  expectNoExternalRequests();
+});
+
 test("DemoAppService 支撑设置与仓库只读关键流且不访问外部服务", async ({ page }) => {
   const expectNoExternalRequests = await blockExternalRequests(page);
   await page.goto("/?lang=zh&tab=settings");

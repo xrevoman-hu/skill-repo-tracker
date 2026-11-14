@@ -104,6 +104,26 @@ export function Tag({ value, tone, language = "zh" }: {
   return <span className={`tag ${tone || value}`}>{statusLabel(value, language)}</span>;
 }
 
+export function EmptyState({ title, body, actionLabel, onAction }: {
+  title: ReactNode;
+  body: ReactNode;
+  actionLabel?: ReactNode;
+  onAction?: () => void;
+}) {
+  return (
+    <div className="empty-state">
+      <div className="empty-state-icon" aria-hidden="true">+</div>
+      <h2>{title}</h2>
+      <p>{body}</p>
+      {actionLabel && onAction && (
+        <Button variant="primary" onClick={onAction}>
+          {actionLabel}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 type ModalProps = {
   title: string;
   children: ReactNode;

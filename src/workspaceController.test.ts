@@ -386,4 +386,50 @@ describe("workspace controller", () => {
     expect(controller.isBusy()).toBe(false);
   });
 
+  it("reads persisted failure diagnostics before returning the original operation error", async () => {
+    const error = new Error("download failed");
+    const failure: WorkspaceSnapshot = { ...empty, tasks: [{
+      id: "failed-check", kind: "Check remote state", target: "All repositories",
+      progress: "0 / 1", status: "failed", summary: error.message, retryable: true,
+      log: ["example/repo failed [github_timeout] details: status=504"],
+    }] };
+    const publish = vi.fn();
+    const refreshWorkspace = vi.fn().mockResolvedValue(failure);
+    const controller = createWorkspaceController({
+      service: { checkRepositories: vi.fn().mockRejectedValue(error), backupRepositories: vi.fn(), retryTask: vi.fn(), refreshWorkspace },
+      coordinator: createTaskCoordinator(), initial: empty, publish,
+    });
+    await expect(controller.checkRepositories()).resolves.toEqual({ status: "failed", error });
+    expect(publish).toHaveBeenCalledWith(failure);
+    expect(controller.snapshot().tasks[0].log[0]).toContain("status=504");
+  });
+
+  it("keeps the operation error when reading its persisted diagnostics also fails", async () => {
+    const error = new Error("original network failure");
+    const refreshWorkspace = vi.fn().mockRejectedValue(new Error("database unavailable"));
+    const controller = createWorkspaceController({
+      service: { checkRepositories: vi.fn().mockRejectedValue(error), backupRepositories: vi.fn(), retryTask: vi.fn(), refreshWorkspace },
+      coordinator: createTaskCoordinator(), initial: empty, publish: vi.fn(),
+    });
+    await expect(controller.checkRepositories()).resolves.toEqual({ status: "failed", error });
+    expect(refreshWorkspace).toHaveBeenCalledOnce();
+    expect(controller.isBusy()).toBe(false);
+  });
+
+  it("discards a pending failure refresh after lifecycle invalidation", async () => {
+    const pendingRead = deferred<WorkspaceSnapshot>();
+    const refreshWorkspace = vi.fn(() => pendingRead.promise);
+    const publish = vi.fn();
+    const controller = createWorkspaceController({
+      service: { checkRepositories: vi.fn().mockRejectedValue(new Error("network failure")), backupRepositories: vi.fn(), retryTask: vi.fn(), refreshWorkspace },
+      coordinator: createTaskCoordinator(), initial: empty, publish,
+    });
+    const running = controller.checkRepositories();
+    await vi.waitFor(() => expect(refreshWorkspace).toHaveBeenCalledOnce());
+    controller.invalidate();
+    pendingRead.resolve(empty);
+    await expect(running).resolves.toEqual({ status: "superseded" });
+    expect(publish).not.toHaveBeenCalled();
+  });
+
 });

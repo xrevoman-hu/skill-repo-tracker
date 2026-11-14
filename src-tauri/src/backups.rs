@@ -31,7 +31,7 @@ where
     Ok(operation.await)
 }
 
-pub(super) fn safe_zip_name(repo_name: &str, ref_name: &str, sha: &str) -> String {
+pub(super) fn safe_zip_name(repo_id: &str, repo_name: &str, ref_name: &str, sha: &str) -> String {
     const MAX_COMPONENT_BYTES: usize = 255;
     const PARTIAL_SUFFIX_BYTES: usize = ".partial".len();
     let sanitize = |value: &str| {
@@ -47,6 +47,8 @@ pub(super) fn safe_zip_name(repo_name: &str, ref_name: &str, sha: &str) -> Strin
             .collect::<String>()
     };
     let mut digest = Sha256::new();
+    digest.update(repo_id.as_bytes());
+    digest.update([0]);
     digest.update(repo_name.as_bytes());
     digest.update([0]);
     digest.update(ref_name.as_bytes());

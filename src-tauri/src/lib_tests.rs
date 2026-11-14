@@ -4286,11 +4286,155 @@ fn update_skill_rejects_an_unrelated_stored_hash_without_changing_metadata_or_fi
 
     let tasks_response = list_tasks(app.state());
     assert!(tasks_response.ok);
-    assert!(!tasks_response.data.unwrap().into_iter().any(|task| {
-        task.kind == "Update Skill"
-            && task.target == "legacy-compatible"
-            && task.status == "success"
-    }));
+    let tasks = tasks_response.data.unwrap();
+    assert_eq!(tasks.len(), 1, "a rejected update must remain diagnosable");
+    assert_eq!(tasks[0].kind, "Update Skill");
+    assert_eq!(tasks[0].target, "legacy-compatible");
+    assert_eq!(tasks[0].status, "failed");
+    let log = tasks[0].log.join("\n");
+    assert!(log.contains("[skill_remote_hash_mismatch]"), "{log}");
+    assert!(log.contains(UNRELATED_HASH_REMOTE), "{log}");
+}
+
+#[test]
+fn skill_download_failure_remains_in_task_history_without_changing_local_files() {
+    let mut fixture = LegacyHashFixture::new(LegacyHashScenario::CompatibleUpdate);
+    let skill_id_value = fixture.skill_id.clone();
+    let before_hash = hash_directory(&fixture.destination).unwrap();
+    let mut state = fixture.take_state();
+    state.adapters.github = Arc::new(LegacyHashGithub {
+        responses: Mutex::new(std::collections::VecDeque::from([
+            adapters::GithubHttpResponse {
+                status: 502,
+                headers: HeaderMap::new(),
+                body: Ok(Vec::new()),
+            },
+        ])),
+    });
+    let app = tauri::test::mock_builder()
+        .manage(state)
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let response = tauri::async_runtime::block_on(update_skill(
+        SkillActionRequest {
+            skill_id: skill_id_value.clone(),
+        },
+        app.state(),
+    ))
+    .unwrap();
+    assert!(!response.ok);
+    let error = response.error.unwrap();
+    assert_eq!(error.code, "github_error");
+    let tasks = list_tasks(app.state()).data.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].target, "legacy-compatible");
+    assert_eq!(tasks[0].status, "failed");
+    assert_eq!(tasks[0].summary, error.message);
+    let log = tasks[0].log.join("\n");
+    assert!(log.contains("[github_error]"), "{log}");
+    assert!(log.contains("details: 502"), "{log}");
+    assert_eq!(hash_directory(&fixture.destination).unwrap(), before_hash);
+    let state: State<'_, AppState> = app.state();
+    let db = state.db.lock().unwrap();
+    let skill = load_skill_record(&db, &skill_id_value).unwrap().unwrap();
+    assert_eq!(skill.installed_hash.as_deref(), Some(before_hash.as_str()));
+}
+
+#[test]
+fn checking_only_failing_repositories_records_failed_task_with_original_error() {
+    let mut fixture = LegacyHashFixture::new(LegacyHashScenario::HandledCustomization);
+    let mut state = fixture.take_state();
+    state.adapters.github = Arc::new(LegacyHashGithub {
+        responses: Mutex::new(std::collections::VecDeque::from([
+            adapters::GithubHttpResponse {
+                status: 502,
+                headers: HeaderMap::new(),
+                body: Ok(Vec::new()),
+            },
+        ])),
+    });
+    let app = tauri::test::mock_builder()
+        .manage(state)
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let response = tauri::async_runtime::block_on(check_repositories(
+        CheckRepositoriesRequest {
+            repo_ids: Some(vec![fixture.repository_id.clone()]),
+        },
+        app.state(),
+    ))
+    .unwrap();
+    assert!(response.ok);
+    let tasks = list_tasks(app.state()).data.unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].status, "failed");
+    assert_eq!(tasks[0].summary, "0 success, 1 failed, 0 skipped");
+    assert!(tasks[0].log.join("\n").contains("details: 502"));
+}
+
+#[test]
+fn copied_task_report_contains_complete_diagnostics_and_rejects_missing_tasks() {
+    let mut fixture = LegacyHashFixture::new(LegacyHashScenario::CompatibleUpdate);
+    let state = fixture.take_state();
+    insert_task(
+        &state.db.lock().unwrap(),
+        TaskWrite {
+            id: "diagnostic-task",
+            kind: "Update Skill",
+            target: "example-skill",
+            progress: "0 / 1",
+            status: "failed",
+            summary: "Source unavailable",
+            backup_dir: None,
+            log: &[
+                "download started".into(),
+                "download failed [github_error] details: 502".into(),
+            ],
+        },
+    )
+    .unwrap();
+    state
+        .db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE backup_jobs SET retry_reason = 'Run from Skills' WHERE id = 'diagnostic-task'",
+            [],
+        )
+        .unwrap();
+    let app = tauri::test::mock_builder()
+        .manage(state)
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let copied = copy_task_summary(
+        TaskRequest {
+            task_id: "diagnostic-task".into(),
+        },
+        app.state(),
+    );
+    assert!(copied.ok);
+    let report = copied.data.unwrap();
+    for expected in [
+        "diagnostic-task",
+        "Update Skill",
+        "example-skill",
+        "0 / 1",
+        "failed",
+        "Source unavailable",
+        "Run from Skills",
+        "download started",
+        "details: 502",
+    ] {
+        assert!(report.contains(expected), "missing {expected}: {report}");
+    }
+    let missing = copy_task_summary(
+        TaskRequest {
+            task_id: "missing".into(),
+        },
+        app.state(),
+    );
+    assert!(!missing.ok);
+    assert_eq!(missing.error.unwrap().code, "task_not_found");
 }
 
 #[test]

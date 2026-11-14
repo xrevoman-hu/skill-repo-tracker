@@ -179,6 +179,7 @@ pub(super) async fn backup_repositories_inner(
                     }
                     let sha256 = sha256_hex(&bytes);
                     let file_name = backups::safe_zip_name(
+                        &repo.id,
                         &remote.full_name,
                         &remote.resolved_ref,
                         &remote.sha,
@@ -227,7 +228,10 @@ pub(super) async fn backup_repositories_inner(
                         "repo": repo.name,
                         "error": error.message
                     }));
-                    log.push(format!("{} download failed", repo.name));
+                    log.push(format_error_for_log(
+                        &format!("{} download", repo.name),
+                        &error,
+                    ));
                 }
             },
             Err(error) => {
@@ -236,7 +240,10 @@ pub(super) async fn backup_repositories_inner(
                     "repo": repo.name,
                     "error": error.message
                 }));
-                log.push(format!("{} refresh failed", repo.name));
+                log.push(format_error_for_log(
+                    &format!("{} refresh", repo.name),
+                    &error,
+                ));
             }
         }
     }

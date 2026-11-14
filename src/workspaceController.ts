@@ -48,14 +48,16 @@ export function createWorkspaceController(options: {
 
   async function run<T>(operation: () => Promise<T>, publish: (result: T) => Promise<void>): Promise<CoordinatedTaskResult<T>> {
     const result = await options.coordinator.run(operation, publish);
-    if (result.status !== "superseded" || !refreshNeeded) return result;
-    // The old response is discarded. Read the committed state in a fresh
-    // generation, and repeat only if another persisted mutation invalidates it.
+    if (result.status !== "failed" && (result.status !== "superseded" || !refreshNeeded)) return result;
+    // Failed commands may already have saved diagnostics. Read committed state
+    // in a fresh generation, preserving the original failure if this read fails.
     let refresh: CoordinatedTaskResult<WorkspaceSnapshot>;
     do {
       refreshNeeded = false;
       refresh = await options.coordinator.run(() => options.service.refreshWorkspace(current), publishSnapshot);
     } while (refresh.status === "superseded" && refreshNeeded);
+    if (refresh.status === "superseded") return refresh;
+    if (result.status === "failed") return result;
     return refresh.status === "failed" ? refresh : result;
   }
 

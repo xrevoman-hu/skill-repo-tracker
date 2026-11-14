@@ -27,12 +27,23 @@ impl CredentialStore for EmptyCredentials {
 struct BackupGithub {
     requests: Mutex<Vec<String>>,
     disable_on_archive: Mutex<Option<PathBuf>>,
+    fail_path: Option<&'static str>,
+    canonical_name: Option<&'static str>,
 }
 
 impl GithubHttpAdapter for BackupGithub {
     fn execute(&self, request: reqwest::Request) -> GithubHttpFuture<'_> {
         let path = request.url().path().to_string();
         self.requests.lock().unwrap().push(path.clone());
+        if self.fail_path.is_some_and(|failure| path.contains(failure)) {
+            return Box::pin(async {
+                Ok(GithubHttpResponse {
+                    status: 502,
+                    headers: reqwest::header::HeaderMap::new(),
+                    body: Ok(Vec::new()),
+                })
+            });
+        }
         let body = if path.contains("/zipball/") {
             if let Some(database_path) = self.disable_on_archive.lock().unwrap().take() {
                 let connection = Connection::open(database_path).unwrap();
@@ -44,7 +55,9 @@ impl GithubHttpAdapter for BackupGithub {
         } else if path.contains("/commits/") {
             br#"{"sha":"new-sha"}"#.to_vec()
         } else {
-            let full_name = path.strip_prefix("/repos/").unwrap();
+            let full_name = self
+                .canonical_name
+                .unwrap_or_else(|| path.strip_prefix("/repos/").unwrap());
             serde_json::to_vec(&serde_json::json!({
                 "full_name": full_name, "default_branch": "main"
             }))
@@ -101,6 +114,111 @@ fn state_for_backup(root: &std::path::Path, github: Arc<BackupGithub>) -> AppSta
     )
     .unwrap();
     state
+}
+
+#[test]
+fn failed_backup_preserves_network_diagnostics_and_previous_snapshot() {
+    for (fail_path, phase) in [
+        ("/zipball/", "download"),
+        ("/repos/example/failing", "refresh"),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let old_path = root.path().join("previous.zip");
+        std::fs::write(&old_path, b"previous backup").unwrap();
+        let github = Arc::new(BackupGithub {
+            fail_path: Some(fail_path),
+            ..BackupGithub::default()
+        });
+        let state = state_for_backup(root.path(), github);
+        let id = {
+            let db = state.db.lock().unwrap();
+            let id = save_repo(&db, "failing", true);
+            db.execute(
+                "UPDATE repositories SET last_backup_sha = 'previous-sha', backup_path = ?2 WHERE id = ?1",
+                params![id, path_string(&old_path)],
+            )
+            .unwrap();
+            id
+        };
+        let response = tauri::async_runtime::block_on(backup_repositories_inner(
+            BackupRepositoriesRequest {
+                mode: "selected".into(),
+                repo_ids: Some(vec![id.clone()]),
+            },
+            &state,
+        ))
+        .unwrap();
+        assert!(response.ok, "{:?}", response.error);
+        let db = state.db.lock().unwrap();
+        let tasks = crate::load_ui_tasks(&db).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].status, "failed");
+        let log = tasks[0].log.join("\n");
+        assert!(log.contains("example/failing"), "{log}");
+        assert!(log.contains(phase), "{log}");
+        assert!(log.contains("[github_error]"), "{log}");
+        assert!(log.contains("details: 502"), "{log}");
+        let repo = load_repository(&db, &id).unwrap().unwrap();
+        assert_eq!(repo.last_backup_sha.as_deref(), Some("previous-sha"));
+        assert_eq!(std::fs::read(&old_path).unwrap(), b"previous backup");
+    }
+}
+
+#[test]
+fn repositories_resolving_to_the_same_remote_keep_distinct_backup_files() {
+    let root = tempfile::tempdir().unwrap();
+    let github = Arc::new(BackupGithub {
+        canonical_name: Some("example/renamed"),
+        ..BackupGithub::default()
+    });
+    let state = state_for_backup(root.path(), github);
+    let ids = {
+        let db = state.db.lock().unwrap();
+        vec![
+            save_repo(&db, "old-name", true),
+            save_repo(&db, "renamed", true),
+        ]
+    };
+    let response = tauri::async_runtime::block_on(backup_repositories_inner(
+        BackupRepositoriesRequest {
+            mode: "selected".into(),
+            repo_ids: Some(ids.clone()),
+        },
+        &state,
+    ))
+    .unwrap();
+    assert!(response.ok, "{:?}", response.error);
+    let tasks = response.data.unwrap();
+    assert_eq!(tasks[0].status, "success", "{:?}", tasks[0].log);
+    assert_eq!(tasks[0].summary, "2 success, 0 failed");
+    let db = state.db.lock().unwrap();
+    let paths = ids
+        .iter()
+        .map(|id| {
+            let repo = load_repository(&db, id).unwrap().unwrap();
+            assert_eq!(repo.last_backup_sha.as_deref(), Some("new-sha"));
+            repo.backup_path.unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(paths[0], paths[1]);
+    for path in paths {
+        assert_eq!(
+            std::fs::read(path).unwrap(),
+            b"PK\x03\x04fictional repository archive"
+        );
+    }
+    let manifest_path: String = db
+        .query_row("SELECT manifest_path FROM backup_manifests", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
+    let items = manifest["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2);
+    assert_ne!(items[0]["repo_id"], items[1]["repo_id"]);
+    assert_eq!(items[0]["repo"], "example/renamed");
+    assert_eq!(items[1]["repo"], "example/renamed");
 }
 
 #[test]
